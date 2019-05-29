@@ -1,0 +1,15 @@
+[package]
+name = "foxbot"
+version = "0.1.0"
+authors = ["Syfaro <syfaro@huefox.com>"]
+edition = "2018"
+
+[dependencies]
+reqwest = "0.9.17"
+
+log = "*"
+pretty_env_logger = "*"
+
+serde = "*"
+serde_json = "*"
+serde_derive = "*"
