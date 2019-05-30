@@ -101,18 +101,9 @@ pub trait TelegramRequest: serde::Serialize {
         serde_json::to_value(&self).unwrap()
     }
 
-    /// If this request requires uploading a file. When uploading files, it
-    /// uses multipart to send the data. Otherwise, it is sent as a JSON body
-    /// in a post request. By default it returns false, as most methods will
-    /// not need to upload files.
-    fn needs_file_upload(&self) -> bool {
-        false
-    }
-
-    /// Files that are sent with the request. Note that this method should only
-    /// be called when there is an implementation, as the default is to panic.
-    fn files(&self) -> Vec<(String, reqwest::multipart::Part)> {
-        unimplemented!();
+    /// Files that are sent with the request.
+    fn files(&self) -> Option<Vec<(String, reqwest::multipart::Part)>> {
+        None
     }
 }
 
@@ -262,12 +253,12 @@ impl TelegramRequest for SendPhoto {
         "sendPhoto"
     }
 
-    fn needs_file_upload(&self) -> bool {
-        self.photo.needs_upload()
-    }
-
-    fn files(&self) -> Vec<(String, reqwest::multipart::Part)> {
-        vec![("photo".to_owned(), self.photo.file())]
+    fn files(&self) -> Option<Vec<(String, reqwest::multipart::Part)>> {
+        if self.photo.needs_upload() {
+            Some(vec![("photo".to_owned(), self.photo.file())])
+        } else {
+            None
+        }
     }
 }
 
@@ -355,13 +346,13 @@ impl TelegramRequest for SendMediaGroup {
         "sendMediaGroup"
     }
 
-    fn needs_file_upload(&self) -> bool {
-        self.media.iter().any(|item| {
+    fn files(&self) -> Option<Vec<(String, reqwest::multipart::Part)>> {
+        if !self.media.iter().any(|item| {
             item.get_file().needs_upload()
-        })
-    }
+        }) {
+            return None
+        }
 
-    fn files(&self) -> Vec<(String, reqwest::multipart::Part)> {
         let mut items = Vec::new();
 
         for item in &self.media {
@@ -380,14 +371,14 @@ impl TelegramRequest for SendMediaGroup {
             items.push(part);
         }
 
-        items
+        Some(items)
     }
 }
 
 #[derive(Serialize)]
 pub struct AnswerInlineQuery {
     pub inline_query_id: String,
-    // pub results: Vec<InlineQueryResult>,
+    pub results: Vec<InlineQueryResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_time: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -398,6 +389,62 @@ pub struct AnswerInlineQuery {
     pub switch_pm_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub switch_pm_parameter: Option<String>,
+}
+
+impl TelegramRequest for AnswerInlineQuery {
+    type Response = bool;
+
+    fn endpoint(&self) -> &str {
+        "answerInlineQuery"
+    }
+}
+
+#[derive(Serialize, Debug)]
+pub struct InlineKeyboardButton {
+    pub text: String,
+    pub url: Option<String>,
+    pub callback_data: Option<String>,
+}
+
+#[derive(Serialize, Debug)]
+pub struct InlineKeyboardMarkup {
+    pub inline_keyboard: Vec<Vec<InlineKeyboardButton>>,
+}
+
+#[derive(Serialize, Debug)]
+pub struct InlineQueryResult {
+    #[serde(rename = "type")]
+    pub result_type: String,
+    pub id: String,
+    pub reply_markup: Option<InlineKeyboardMarkup>,
+    #[serde(flatten)]
+    pub content: InlineQueryType,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(untagged)]
+pub enum InlineQueryType {
+    Photo(InlineQueryResultPhoto),
+}
+
+#[derive(Serialize, Debug)]
+pub struct InlineQueryResultPhoto {
+    pub photo_url: String,
+    pub thumb_url: String,
+}
+
+impl InlineQueryResultPhoto {
+    pub fn new(id: String, photo_url: String, thumb_url: String) -> InlineQueryResult {
+        InlineQueryResult {
+            result_type: "photo".into(),
+            id,
+            reply_markup: None,
+            content: InlineQueryType::Photo(InlineQueryResultPhoto{
+                photo_url,
+                thumb_url,
+            }),
+        }
+    }
 }
 
 pub struct Telegram {
@@ -426,7 +473,7 @@ impl Telegram {
 
         log::debug!("Making request to {} with data {:?}", endpoint, values);
 
-        let resp: Response<T::Response> = if request.needs_file_upload() {
+        let resp: Response<T::Response> = if let Some(files) = request.files() {
             // If our request has a file that needs to be uploaded, use
             // a multipart upload. Works by converting each JSON value into
             // a string and putting it into a field with the same name as the
@@ -438,7 +485,7 @@ impl Telegram {
                 form.text(name.to_owned(), serde_json::to_string(value).unwrap())
             });
 
-            let form = request.files().into_iter().fold(form, |form, (name, part)| {
+            let form = files.into_iter().fold(form, |form, (name, part)| {
                 form.part(name, part)
             });
 
