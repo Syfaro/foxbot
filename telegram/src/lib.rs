@@ -532,6 +532,7 @@ impl Telegram {
                 if let Ok(value) = serde_json::to_string(value) {
                     form.text(name.to_owned(), value)
                 } else {
+                    log::warn!("Skipping field {} due to invalid data: {:?}", name, value);
                     form
                 }
             });

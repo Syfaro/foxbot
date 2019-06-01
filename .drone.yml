@@ -1,0 +1,16 @@
+---
+kind: pipeline
+name: default
+
+platform:
+  os: linux
+  arch: amd64
+
+steps:
+- name: build
+  image: rustlang/rust:nightly
+  commands:
+  - rustup component add clippy
+  - cargo clippy
+
+...
