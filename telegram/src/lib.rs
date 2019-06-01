@@ -1,7 +1,34 @@
+#![feature(bind_by_move_pattern_guards)]
+
 use serde_derive::{Deserialize, Serialize};
 
+#[derive(Debug)]
+pub enum Error {
+    Telegram(TelegramError),
+    JSON(serde_json::Error),
+    Request(reqwest::Error),
+}
+
+impl From<reqwest::Error> for Error {
+    fn from(item: reqwest::Error) -> Error {
+        Error::Request(item)
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(item: serde_json::Error) -> Error {
+        Error::JSON(item)
+    }
+}
+
+impl From<TelegramError> for Error {
+    fn from(item: TelegramError) -> Error {
+        Error::Telegram(item)
+    }
+}
+
 #[derive(Debug, Deserialize)]
-pub struct Error {
+pub struct TelegramError {
     /// A HTTP-style error code.
     pub error_code: Option<i32>,
     /// A human readable error description.
@@ -16,10 +43,29 @@ pub struct Response<T> {
     /// If false, error contains information about what happened.
     pub ok: bool,
     #[serde(flatten)]
-    pub error: Error,
+    pub error: TelegramError,
 
     /// The response data.
     pub result: Option<T>,
+}
+
+/// Allow for turning a Response into a more usable Result type.
+impl<T> Into<Result<T, TelegramError>> for Response<T> {
+    fn into(self) -> Result<T, TelegramError> {
+        match self.result {
+            Some(result) if self.ok => Ok(result),
+            _ => Err(self.error),
+        }
+    }
+}
+
+impl <T> Into<Result<T, Error>> for Response<T> {
+    fn into(self) -> Result<T, Error> {
+        match self.result {
+            Some(result) if self.ok => Ok(result),
+            _ => Err(Error::Telegram(self.error)),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -97,8 +143,8 @@ pub trait TelegramRequest: serde::Serialize {
 
     /// A JSON-compatible serialization of the data to send with the request.
     /// The default works for most methods.
-    fn values(&self) -> serde_json::Value {
-        serde_json::to_value(&self).unwrap()
+    fn values(&self) -> Result<serde_json::Value, serde_json::Error> {
+        serde_json::to_value(&self)
     }
 
     /// Files that are sent with the request.
@@ -433,8 +479,8 @@ pub struct InlineQueryResultPhoto {
     pub thumb_url: String,
 }
 
-impl InlineQueryResultPhoto {
-    pub fn new(id: String, photo_url: String, thumb_url: String) -> InlineQueryResult {
+impl InlineQueryResult {
+    pub fn photo(id: String, photo_url: String, thumb_url: String) -> InlineQueryResult {
         InlineQueryResult {
             result_type: "photo".into(),
             id,
@@ -469,7 +515,7 @@ impl Telegram {
         let endpoint = request.endpoint();
 
         let url = format!("https://api.telegram.org/bot{}/{}", self.api_key, endpoint);
-        let values = request.values();
+        let values = request.values()?;
 
         log::debug!("Making request to {} with data {:?}", endpoint, values);
 
@@ -479,10 +525,15 @@ impl Telegram {
             // a string and putting it into a field with the same name as the
             // original object.
 
-            let values = values.as_object().unwrap().clone();
+            let mut form_values = serde_json::Map::new();
+            form_values = values.as_object().unwrap_or_else(|| &form_values).clone();
 
-            let form = values.iter().fold(reqwest::multipart::Form::new(), |form, (name, value)| {
-                form.text(name.to_owned(), serde_json::to_string(value).unwrap())
+            let form = form_values.iter().fold(reqwest::multipart::Form::new(), |form, (name, value)| {
+                if let Ok(value) = serde_json::to_string(value) {
+                    form.text(name.to_owned(), value)
+                } else {
+                    form
+                }
             });
 
             let form = files.into_iter().fold(form, |form, (name, part)| {
@@ -493,14 +544,12 @@ impl Telegram {
                 .client
                 .post(&url)
                 .multipart(form)
-                .send()
-                .unwrap();
+                .send()?;
 
             log::trace!("Got response from {} with data {:?}", endpoint, resp);
 
             resp
-                .json()
-                .unwrap()
+                .json()?
         } else {
             // No files to upload, use a JSON body in a POST request to the
             // requested endpoint.
@@ -509,18 +558,12 @@ impl Telegram {
                 .client
                 .post(&url)
                 .json(&values)
-                .send()
-                .unwrap()
-                .json()
-                .unwrap()
+                .send()?
+                .json()?
         };
 
         log::debug!("Got response from {} with data {:?}", endpoint, resp);
 
-        if resp.ok {
-            Ok(resp.result.unwrap())
-        } else {
-            Err(resp.error)
-        }
+        resp.into()
     }
 }
