@@ -7,13 +7,6 @@ platform:
   arch: amd64
 
 steps:
-- name: test
-  image: rustlang/rust:nightly
-  commands:
-  - rustup component add clippy
-  - cargo clippy
-  - cd fautil && cargo test
-
 - name: docker
   image: plugins/docker
   settings:

@@ -107,7 +107,9 @@ fn main() {
                     switch_pm_parameter: None,
                 };
 
-                bot.make_request(&answer_inline).unwrap();
+                if let Err(e) = bot.make_request(&answer_inline) {
+                    log::error!("Unable to respond to inline: {:?}", e);
+                }
             } else if let Some(message) = update.message {
                 if message.photo.is_some() {
                     process_photo(&bot, &fapi, message);
@@ -219,5 +221,7 @@ fn process_photo(bot: &Telegram, fapi: &fautil::FAUtil, message: Message) {
         text: format!("I found this: https://www.furaffinity.net/view/{}/", first.id),
     };
 
-    bot.make_request(&message).unwrap();
+    if let Err(e) = bot.make_request(&message) {
+        log::error!("Unable to respond to photo: {:?}", e);
+    }
 }

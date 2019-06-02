@@ -49,14 +49,14 @@ impl FAUtil {
         let mut params = std::collections::HashMap::new();
         params.insert("url", url);
 
-        self.make_request("url".into(), &params)
+        self.make_request("url", &params)
     }
 
     pub fn lookup_filename(&self, filename: &str) -> reqwest::Result<Vec<Lookup>> {
         let mut params = std::collections::HashMap::new();
         params.insert("file", filename);
 
-        self.make_request("file".into(), &params)
+        self.make_request("file", &params)
     }
 
     pub fn image_search(&self, data: Vec<u8>) -> reqwest::Result<Vec<ImageLookup>> {
