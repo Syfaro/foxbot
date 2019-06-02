@@ -7,6 +7,8 @@ edition = "2018"
 [dependencies]
 reqwest = "0.9.17"
 linkify = "*"
+rand = "*"
+regex = "*"
 
 log = "*"
 pretty_env_logger = "*"

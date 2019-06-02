@@ -1,12 +1,15 @@
+use serde::Deserialize;
+use std::collections::HashMap;
+
 #[derive(Debug)]
 pub struct PostInfo {
-    file_type: String,
-    url: String,
-    thumb: String,
-    caption: String,
+    pub file_type: String,
+    pub url: String,
+    pub thumb: String,
+    pub caption: String,
 
-    full_url: Option<String>,
-    message: Option<String>,
+    pub full_url: Option<String>,
+    pub message: Option<String>,
 }
 
 fn get_file_ext(name: &str) -> Option<&str> {
@@ -16,10 +19,28 @@ fn get_file_ext(name: &str) -> Option<&str> {
 #[derive(Debug, Clone)]
 pub struct SiteError;
 
+impl From<reqwest::Error> for SiteError {
+    fn from(_: reqwest::Error) -> SiteError {
+        SiteError {}
+    }
+}
+
+impl From<serde_json::Error> for SiteError {
+    fn from(_: serde_json::Error) -> SiteError {
+        SiteError {}
+    }
+}
+
+impl From<std::option::NoneError> for SiteError {
+    fn from(_: std::option::NoneError) -> SiteError {
+        SiteError {}
+    }
+}
+
 pub trait Site {
     fn name(&self) -> &'static str;
-    fn is_supported(&self, url: &str) -> bool;
-    fn get_images(&self, url: &str) -> Result<Vec<PostInfo>, SiteError>;
+    fn is_supported(&mut self, url: &str) -> bool;
+    fn get_images(&mut self, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError>;
 }
 
 pub struct Direct;
@@ -27,6 +48,10 @@ pub struct Direct;
 impl Direct {
     const EXTENSIONS: &'static [&'static str] = &["png", "jpg", "jpeg", "gif"];
     const TYPES: &'static [&'static str] = &["image/png", "image/jpeg", "image/gif"];
+
+    pub fn new() -> Self {
+        Self {}
+    }
 }
 
 impl Site for Direct {
@@ -34,7 +59,7 @@ impl Site for Direct {
         "direct links"
     }
 
-    fn is_supported(&self, url: &str) -> bool {
+    fn is_supported(&mut self, url: &str) -> bool {
         // If the URL extension isn't one in our list, ignore.
         if !Direct::EXTENSIONS.iter().any(|ext| url.ends_with(ext)) {
             return false;
@@ -61,26 +86,26 @@ impl Site for Direct {
         Direct::TYPES.iter().any(|t| content_type == t)
     }
 
-    fn get_images(&self, url: &str) -> Result<Vec<PostInfo>, SiteError> {
+    fn get_images(&mut self, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError> {
         let u = url.to_string();
 
-        Ok(vec![PostInfo {
+        Ok(Some(vec![PostInfo {
             file_type: get_file_ext(url).unwrap().to_string(),
             url: u.clone(),
             thumb: u.clone(),
             caption: u,
             full_url: None,
             message: None,
-        }])
+        }]))
     }
 }
 
 pub struct FurAffinity {
-    cookies: Option<(String, String)>,
+    cookies: (String, String),
 }
 
 impl FurAffinity {
-    pub fn new(cookies: Option<(String, String)>) -> Self {
+    pub fn new(cookies: (String, String)) -> Self {
         Self { cookies }
     }
 
@@ -98,13 +123,196 @@ impl Site for FurAffinity {
         "FurAffinity"
     }
 
-    fn is_supported(&self, url: &str) -> bool {
+    fn is_supported(&mut self, url: &str) -> bool {
         url.contains("furaffinity.net/view/")
             || url.contains("furaffinity.net/full/")
             || url.contains("facdn.net/art/")
     }
 
-    fn get_images(&self, url: &str) -> Result<Vec<PostInfo>, SiteError> {
+    fn get_images(&mut self, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError> {
         unimplemented!();
+    }
+}
+
+pub struct Mastodon {
+    instance_cache: HashMap<String, bool>,
+    matcher: regex::Regex,
+}
+
+#[derive(Deserialize)]
+struct MastodonStatus {
+    url: String,
+    media_attachments: Vec<MastodonMediaAttachments>,
+}
+
+#[derive(Deserialize)]
+struct MastodonMediaAttachments {
+    url: String,
+    preview_url: String,
+}
+
+impl Mastodon {
+    pub fn new() -> Self {
+        Self {
+            instance_cache: HashMap::new(),
+            matcher: regex::Regex::new(
+                r#"(?P<host>https?://(?:\S+))/(?:notice|users/\w+/statuses|@\w+)/(?P<id>\d+)"#,
+            )
+            .unwrap(),
+        }
+    }
+}
+
+impl Site for Mastodon {
+    fn name(&self) -> &'static str {
+        "Mastodon"
+    }
+
+    fn is_supported(&mut self, url: &str) -> bool {
+        let captures = match self.matcher.captures(url) {
+            Some(captures) => captures,
+            None => return false,
+        };
+
+        let base = captures["host"].to_owned();
+
+        if let Some(is_masto) = self.instance_cache.get(&base) {
+            if !is_masto {
+                return false;
+            }
+        }
+
+        let resp = match reqwest::Client::new()
+            .head(&format!("{}/api/v1/instance", base))
+            .send()
+        {
+            Ok(resp) => resp,
+            Err(_) => {
+                self.instance_cache.insert(base, false);
+                return false;
+            }
+        };
+
+        if !resp.status().is_success() {
+            self.instance_cache.insert(base, false);
+            return false;
+        }
+
+        true
+    }
+
+    fn get_images(&mut self, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError> {
+        let captures = self.matcher.captures(url).unwrap();
+
+        let base = captures["host"].to_owned();
+        let status_id = captures["id"].to_owned();
+
+        let resp = reqwest::Client::new()
+            .get(&format!("{}/api/v1/statuses/{}", base, status_id))
+            .send();
+
+        let mut resp = match resp {
+            Ok(resp) => resp,
+            Err(_) => return Err(SiteError {}),
+        };
+
+        let json: MastodonStatus = match resp.json() {
+            Ok(json) => json,
+            Err(_) => return Err(SiteError {}),
+        };
+
+        if json.media_attachments.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(
+            json.media_attachments
+                .iter()
+                .map(|media| PostInfo {
+                    file_type: get_file_ext(&media.url).unwrap().to_owned(),
+                    url: media.url.clone(),
+                    thumb: media.preview_url.clone(),
+                    caption: json.url.clone(),
+                    full_url: None,
+                    message: None,
+                })
+                .collect(),
+        ))
+    }
+}
+
+pub struct Weasyl {
+    api_key: String,
+    matcher: regex::Regex,
+}
+
+impl Weasyl {
+    pub fn new(api_key: String) -> Self {
+        Self {
+            api_key,
+            matcher: regex::Regex::new(r#"https?://www\.weasyl\.com/(?:(?:~|%7)(?:\w+)/submissions|submission)/(?P<id>\d+)(?:/\S+)"#).unwrap(),
+        }
+    }
+}
+
+impl Site for Weasyl {
+    fn name(&self) -> &'static str {
+        "Weasyl"
+    }
+
+    fn is_supported(&mut self, url: &str) -> bool {
+        self.matcher.is_match(url)
+    }
+
+    fn get_images(&mut self, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError> {
+        let captures = self.matcher.captures(url).unwrap();
+        let sub_id = captures["id"].to_owned();
+
+        let resp: serde_json::Value = reqwest::Client::new()
+            .get(&format!(
+                "https://www.weasyl.com/api/submissions/{}/view",
+                sub_id
+            ))
+            .header("X-Weasyl-API-Key", self.api_key.as_bytes())
+            .send()?
+            .json()?;
+
+        let submissions = resp
+            .as_object()?
+            .get("media")?
+            .as_object()?
+            .get("submission")?
+            .as_array()?;
+
+        if submissions.is_empty() {
+            return Ok(None);
+        }
+
+        let thumbs = resp
+            .as_object()?
+            .get("media")?
+            .as_object()?
+            .get("thumbnail")?
+            .as_array()?;
+
+        Ok(Some(
+            submissions
+                .iter()
+                .zip(thumbs)
+                .map(|(sub, thumb)| {
+                    let sub_url = sub.get("url").unwrap().as_str().unwrap().to_owned();
+                    let thumb_url = thumb.get("url").unwrap().as_str().unwrap().to_owned();
+
+                    PostInfo {
+                        file_type: get_file_ext(&sub_url).unwrap().to_owned(),
+                        url: sub_url.clone(),
+                        thumb: thumb_url.clone(),
+                        caption: url.to_string(),
+                        full_url: None,
+                        message: None,
+                    }
+                })
+                .collect(),
+        ))
     }
 }

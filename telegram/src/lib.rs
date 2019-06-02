@@ -445,41 +445,70 @@ impl TelegramRequest for AnswerInlineQuery {
     }
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 pub struct InlineKeyboardButton {
     pub text: String,
     pub url: Option<String>,
     pub callback_data: Option<String>,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 pub struct InlineKeyboardMarkup {
     pub inline_keyboard: Vec<Vec<InlineKeyboardButton>>,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 pub struct InlineQueryResult {
     #[serde(rename = "type")]
     pub result_type: String,
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reply_markup: Option<InlineKeyboardMarkup>,
     #[serde(flatten)]
     pub content: InlineQueryType,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum InlineQueryType {
+    Article(InlineQueryResultArticle),
     Photo(InlineQueryResultPhoto),
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
+pub struct InlineQueryResultArticle {
+    pub title: String,
+    #[serde(flatten)]
+    pub input_message_content: InputMessageType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Serialize, Debug, Clone)]
 pub struct InlineQueryResultPhoto {
     pub photo_url: String,
     pub thumb_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
 }
 
 impl InlineQueryResult {
+    pub fn article(id: String, title: String, text: String) -> InlineQueryResult {
+        InlineQueryResult {
+            result_type: "article".into(),
+            id,
+            reply_markup: None,
+            content: InlineQueryType::Article(InlineQueryResultArticle{
+                title,
+                description: None,
+                input_message_content: InputMessageType::Text(InputMessageText{
+                    message_text: text,
+                    parse_mode: None,
+                })
+            })
+        }
+    }
+
     pub fn photo(id: String, photo_url: String, thumb_url: String) -> InlineQueryResult {
         InlineQueryResult {
             result_type: "photo".into(),
@@ -488,9 +517,23 @@ impl InlineQueryResult {
             content: InlineQueryType::Photo(InlineQueryResultPhoto{
                 photo_url,
                 thumb_url,
+                caption: None,
             }),
         }
     }
+}
+
+#[derive(Serialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum InputMessageType {
+    Text(InputMessageText),
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct InputMessageText {
+    pub message_text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parse_mode: Option<String>,
 }
 
 pub struct Telegram {
