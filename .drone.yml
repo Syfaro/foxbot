@@ -7,10 +7,36 @@ platform:
   arch: amd64
 
 steps:
-- name: build
+- name: test
   image: rustlang/rust:nightly
   commands:
   - rustup component add clippy
   - cargo clippy
+  - cd fautil && cargo test
+
+- name: docker
+  image: plugins/docker
+  settings:
+    auto_tag: true
+    registry: registry.huefox.com
+    repo: registry.huefox.com/foxbot
+    username:
+      from_secret: docker_username
+    password:
+      from_secret: docker_password
+
+---
+kind: secret
+name: docker_username
+get:
+  path: drone/docker
+  name: username
+
+---
+kind: secret
+name: docker_password
+get:
+  path: drone/docker
+  name: password
 
 ...

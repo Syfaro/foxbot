@@ -59,7 +59,7 @@ impl<T> Into<Result<T, TelegramError>> for Response<T> {
     }
 }
 
-impl <T> Into<Result<T, Error>> for Response<T> {
+impl<T> Into<Result<T, Error>> for Response<T> {
     fn into(self) -> Result<T, Error> {
         match self.result {
             Some(result) if self.ok => Ok(result),
@@ -256,7 +256,9 @@ impl std::fmt::Debug for FileType {
             FileType::URL(url) => write!(f, "FileType URL: {}", url),
             FileType::FileID(file_id) => write!(f, "FileType FileID: {}", file_id),
             FileType::Attach(attach) => write!(f, "FileType Attach: {}", attach),
-            FileType::Bytes(name, bytes) => write!(f, "FileType Bytes: {} with len {}", name, bytes.len()),
+            FileType::Bytes(name, bytes) => {
+                write!(f, "FileType Bytes: {} with len {}", name, bytes.len())
+            }
         }
     }
 }
@@ -275,9 +277,9 @@ impl FileType {
     /// Note that this panics if called for a type that does not need uploading.
     pub fn file(&self) -> reqwest::multipart::Part {
         match self {
-            FileType::Bytes(file_name, bytes) =>
-                reqwest::multipart::Part::bytes(bytes.clone())
-                    .file_name(file_name.clone()),
+            FileType::Bytes(file_name, bytes) => {
+                reqwest::multipart::Part::bytes(bytes.clone()).file_name(file_name.clone())
+            }
             _ => unimplemented!(),
         }
     }
@@ -305,6 +307,26 @@ impl TelegramRequest for SendPhoto {
         } else {
             None
         }
+    }
+}
+
+#[derive(Serialize)]
+pub struct GetFile {
+    pub file_id: String,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct File {
+    pub file_id: String,
+    pub file_size: usize,
+    pub file_path: String,
+}
+
+impl TelegramRequest for GetFile {
+    type Response = File;
+
+    fn endpoint(&self) -> &str {
+        "getFile"
     }
 }
 
@@ -352,7 +374,10 @@ pub struct SendMediaGroup {
 
 /// Attempt to remove body for types that are getting uploaded.
 /// It also converts files into attachments with names based on filenames.
-fn clean_input_media<S>(input_media: &[InputMedia], s: S) -> Result<S::Ok, S::Error> where S: serde::Serializer {
+fn clean_input_media<S>(input_media: &[InputMedia], s: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
     use serde::ser::SerializeSeq;
 
     let mut seq = s.serialize_seq(Some(input_media.len()))?;
@@ -361,16 +386,18 @@ fn clean_input_media<S>(input_media: &[InputMedia], s: S) -> Result<S::Ok, S::Er
         let file = elem.get_file();
         if file.needs_upload() {
             let new_file = match file {
-                FileType::Bytes(file_name, _) => FileType::Attach(format!("attach://{}", file_name)),
+                FileType::Bytes(file_name, _) => {
+                    FileType::Attach(format!("attach://{}", file_name))
+                }
                 _ => unimplemented!(),
             };
 
             let new_elem = match elem {
-                InputMedia::Photo(photo) => InputMedia::Photo(InputMediaPhoto{
+                InputMedia::Photo(photo) => InputMedia::Photo(InputMediaPhoto {
                     media: new_file,
                     ..photo.clone()
                 }),
-                InputMedia::Video(video) => InputMedia::Video(InputMediaVideo{
+                InputMedia::Video(video) => InputMedia::Video(InputMediaVideo {
                     media: new_file,
                     ..video.clone()
                 }),
@@ -393,10 +420,8 @@ impl TelegramRequest for SendMediaGroup {
     }
 
     fn files(&self) -> Option<Vec<(String, reqwest::multipart::Part)>> {
-        if !self.media.iter().any(|item| {
-            item.get_file().needs_upload()
-        }) {
-            return None
+        if !self.media.iter().any(|item| item.get_file().needs_upload()) {
+            return None;
         }
 
         let mut items = Vec::new();
@@ -406,11 +431,11 @@ impl TelegramRequest for SendMediaGroup {
 
             let part = match file {
                 FileType::Bytes(file_name, bytes) => {
-                    let file = reqwest::multipart::Part::bytes(bytes.clone())
-                        .file_name(file_name.clone());
+                    let file =
+                        reqwest::multipart::Part::bytes(bytes.clone()).file_name(file_name.clone());
 
                     (file_name.to_owned(), file)
-                },
+                }
                 _ => continue,
             };
 
@@ -498,14 +523,14 @@ impl InlineQueryResult {
             result_type: "article".into(),
             id,
             reply_markup: None,
-            content: InlineQueryType::Article(InlineQueryResultArticle{
+            content: InlineQueryType::Article(InlineQueryResultArticle {
                 title,
                 description: None,
-                input_message_content: InputMessageType::Text(InputMessageText{
+                input_message_content: InputMessageType::Text(InputMessageText {
                     message_text: text,
                     parse_mode: None,
-                })
-            })
+                }),
+            }),
         }
     }
 
@@ -514,7 +539,7 @@ impl InlineQueryResult {
             result_type: "photo".into(),
             id,
             reply_markup: None,
-            content: InlineQueryType::Photo(InlineQueryResultPhoto{
+            content: InlineQueryType::Photo(InlineQueryResultPhoto {
                 photo_url,
                 thumb_url,
                 caption: None,
@@ -571,43 +596,49 @@ impl Telegram {
             let mut form_values = serde_json::Map::new();
             form_values = values.as_object().unwrap_or_else(|| &form_values).clone();
 
-            let form = form_values.iter().fold(reqwest::multipart::Form::new(), |form, (name, value)| {
-                if let Ok(value) = serde_json::to_string(value) {
-                    form.text(name.to_owned(), value)
-                } else {
-                    log::warn!("Skipping field {} due to invalid data: {:?}", name, value);
-                    form
-                }
-            });
+            let form =
+                form_values
+                    .iter()
+                    .fold(reqwest::multipart::Form::new(), |form, (name, value)| {
+                        if let Ok(value) = serde_json::to_string(value) {
+                            form.text(name.to_owned(), value)
+                        } else {
+                            log::warn!("Skipping field {} due to invalid data: {:?}", name, value);
+                            form
+                        }
+                    });
 
-            let form = files.into_iter().fold(form, |form, (name, part)| {
-                form.part(name, part)
-            });
+            let form = files
+                .into_iter()
+                .fold(form, |form, (name, part)| form.part(name, part));
 
-            let mut resp = self
-                .client
-                .post(&url)
-                .multipart(form)
-                .send()?;
+            let mut resp = self.client.post(&url).multipart(form).send()?;
 
             log::trace!("Got response from {} with data {:?}", endpoint, resp);
 
-            resp
-                .json()?
+            resp.json()?
         } else {
             // No files to upload, use a JSON body in a POST request to the
             // requested endpoint.
 
-            self
-                .client
-                .post(&url)
-                .json(&values)
-                .send()?
-                .json()?
+            self.client.post(&url).json(&values).send()?.json()?
         };
 
         log::debug!("Got response from {} with data {:?}", endpoint, resp);
 
         resp.into()
+    }
+
+    pub fn download_file(&self, file_path: String) -> Result<Vec<u8>, Error> {
+        let url = format!("https://api.telegram.org/file/bot{}/{}", self.api_key, file_path);
+
+        let mut buf: Vec<u8> = Vec::new();
+
+        self.client
+            .get(&url)
+            .send()?
+            .copy_to(&mut buf)?;
+
+        Ok(buf)
     }
 }

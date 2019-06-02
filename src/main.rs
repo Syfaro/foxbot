@@ -1,4 +1,4 @@
-#![feature(try_trait)]
+#![feature(try_trait, bind_by_move_pattern_guards)]
 
 use sites::{PostInfo, Site};
 use telegram::*;
@@ -17,13 +17,25 @@ fn generate_id() -> String {
 fn main() {
     pretty_env_logger::init();
 
+    let (fa_a, fa_b) = (
+        std::env::var("FA_A").expect("Missing FA token a"),
+        std::env::var("FA_B").expect("Missing FA token b"),
+    );
+
+    let fa_util_api = std::env::var("FAUTIL_TOKEN").expect("Missing FA Utility API token");
+    let fapi = fautil::FAUtil::new(fa_util_api.clone());
+
     let mut sites: Vec<Box<dyn Site>> = vec![
-        Box::new(sites::Weasyl::new(std::env::var("WEASYL_APITOKEN").expect("Missing Weasyl API token"))),
+        Box::new(sites::FurAffinity::new((fa_a, fa_b), fa_util_api)),
+        Box::new(sites::Weasyl::new(
+            std::env::var("WEASYL_APITOKEN").expect("Missing Weasyl API token"),
+        )),
         Box::new(sites::Mastodon::new()),
         Box::new(sites::Direct::new()),
     ];
 
-    let bot = Telegram::new(std::env::var("TELEGRAM_APITOKEN").expect("Missing Telegram API token"));
+    let bot =
+        Telegram::new(std::env::var("TELEGRAM_APITOKEN").expect("Missing Telegram API token"));
 
     let mut update_req = GetUpdates::default();
     update_req.timeout = Some(30);
@@ -96,6 +108,10 @@ fn main() {
                 };
 
                 bot.make_request(&answer_inline).unwrap();
+            } else if let Some(message) = update.message {
+                if message.photo.is_some() {
+                    process_photo(&bot, &fapi, message);
+                }
             }
 
             update_req.offset = Some(update.update_id + 1);
@@ -165,4 +181,43 @@ fn process_result(result: &PostInfo) -> Option<Vec<InlineQueryResult>> {
         }
         _ => None,
     }
+}
+
+fn process_photo(bot: &Telegram, fapi: &fautil::FAUtil, message: Message) {
+    let photos = message.photo.unwrap();
+
+    let mut most_pixels = 0;
+    let mut file_id = String::default();
+    for photo in photos {
+        let pixels = photo.height * photo.width;
+        if pixels > most_pixels {
+            most_pixels = pixels;
+            file_id = photo.file_id.clone();
+        }
+    }
+
+    let get_file = GetFile { file_id };
+    let file = match bot.make_request(&get_file) {
+        Ok(file) => file,
+        _ => return,
+    };
+
+    let photo = match bot.download_file(file.file_path) {
+        Ok(photo) => photo,
+        _ => return,
+    };
+
+    let matches = match fapi.image_search(photo) {
+        Ok(matches) if !matches.is_empty() => matches,
+        _ => return,
+    };
+
+    let first = matches.get(0).unwrap();
+
+    let message = SendMessage {
+        chat_id: message.chat.id.into(),
+        text: format!("I found this: https://www.furaffinity.net/view/{}/", first.id),
+    };
+
+    bot.make_request(&message).unwrap();
 }

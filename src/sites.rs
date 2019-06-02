@@ -102,19 +102,84 @@ impl Site for Direct {
 
 pub struct FurAffinity {
     cookies: (String, String),
+    fapi: fautil::FAUtil,
+    submission: scraper::Selector,
+    client: reqwest::Client,
 }
 
 impl FurAffinity {
-    pub fn new(cookies: (String, String)) -> Self {
-        Self { cookies }
+    pub fn new(cookies: (String, String), util_api: String) -> Self {
+        Self {
+            cookies,
+            fapi: fautil::FAUtil::new(util_api),
+            submission: scraper::Selector::parse("#submissionImg").unwrap(),
+            client: reqwest::Client::new(),
+        }
     }
 
-    fn load_direct_url() -> Option<PostInfo> {
-        unimplemented!();
+    fn load_direct_url(&self, url: &str) -> Result<Option<PostInfo>, SiteError> {
+        let url = if url.starts_with("http://") {
+            url.replace("http://", "https://")
+        } else {
+            url.to_string()
+        };
+
+        let sub: fautil::Lookup = match self.fapi.lookup_url(&url) {
+            Ok(mut results) if !results.is_empty() => {
+                results.remove(0)
+            },
+            _ => {
+                return Ok(Some(
+                    PostInfo{
+                        file_type: get_file_ext(&url).unwrap().to_string(),
+                        url: url.clone(),
+                        thumb: url.clone(),
+                        caption: url,
+                        full_url: None,
+                        message: None,
+                    }
+                ));
+            },
+        };
+
+        Ok(Some(PostInfo {
+            file_type: get_file_ext(&sub.filename).unwrap().to_string(),
+            url: sub.url.clone(),
+            thumb: sub.url.clone(),
+            caption: format!("https://www.furaffinity.net/view/{}/", sub.id),
+            full_url: None,
+            message: None,
+        }))
     }
 
-    fn load_submission() -> Option<PostInfo> {
-        unimplemented!();
+    fn load_submission(&self, url: &str) -> Result<Option<PostInfo>, SiteError> {
+        let cookies = vec![
+            format!("a={}", self.cookies.0),
+            format!("b={}", self.cookies.1),
+        ].join("; ");
+
+        let resp = self.client
+            .get(url)
+            .header(reqwest::header::COOKIE, cookies)
+            .send()?
+            .text()?;
+
+        let body = scraper::Html::parse_document(&resp);
+        let img = match body.select(&self.submission).next() {
+            Some(img) => img,
+            None => return Ok(None),
+        };
+
+        let image_url = format!("https:{}", img.value().attr("src")?);
+
+        Ok(Some(PostInfo {
+            file_type: get_file_ext(&image_url).unwrap().to_string(),
+            url: image_url.clone(),
+            thumb: image_url.clone(),
+            caption: url.to_string(),
+            full_url: None,
+            message: None,
+        }))
     }
 }
 
@@ -130,7 +195,13 @@ impl Site for FurAffinity {
     }
 
     fn get_images(&mut self, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError> {
-        unimplemented!();
+        let image = if url.contains("facdn.net/art/") {
+            self.load_direct_url(url)
+        } else {
+            self.load_submission(url)
+        };
+
+        image.map(|sub| sub.map(|post| vec![post]))
     }
 }
 

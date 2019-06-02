@@ -9,6 +9,7 @@ reqwest = "0.9.17"
 linkify = "*"
 rand = "*"
 regex = "*"
+scraper = "*"
 
 log = "*"
 pretty_env_logger = "*"
@@ -18,3 +19,4 @@ serde_json = "*"
 serde_derive = "*"
 
 telegram = { path = "./telegram" }
+fautil = { path = "./fautil" }
