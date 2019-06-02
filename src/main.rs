@@ -186,6 +186,12 @@ fn process_result(result: &PostInfo) -> Option<Vec<InlineQueryResult>> {
 }
 
 fn process_photo(bot: &Telegram, fapi: &fautil::FAUtil, message: Message) {
+    let chat_action = SendChatAction {
+        chat_id: message.chat.id.into(),
+        action: ChatAction::Typing,
+    };
+    let _ = bot.make_request(&chat_action);
+
     let photos = message.photo.unwrap();
 
     let mut most_pixels = 0;
@@ -218,7 +224,10 @@ fn process_photo(bot: &Telegram, fapi: &fautil::FAUtil, message: Message) {
 
     let message = SendMessage {
         chat_id: message.chat.id.into(),
-        text: format!("I found this: https://www.furaffinity.net/view/{}/", first.id),
+        text: format!(
+            "I found this: https://www.furaffinity.net/view/{}/",
+            first.id
+        ),
     };
 
     if let Err(e) = bot.make_request(&message) {

@@ -154,7 +154,7 @@ pub trait TelegramRequest: serde::Serialize {
 }
 
 /// ChatID represents a possible type of value for requests.
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 #[serde(untagged)]
 pub enum ChatID {
     /// A chat's numeric ID.
@@ -188,7 +188,7 @@ impl Default for ChatID {
 }
 
 /// GetMe is a request that returns a User about the current bot.
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct GetMe;
 
 impl TelegramRequest for GetMe {
@@ -200,7 +200,7 @@ impl TelegramRequest for GetMe {
 }
 
 /// GetUpdates is a request that returns any available Updates.
-#[derive(Serialize, Default)]
+#[derive(Serialize, Default, Debug)]
 pub struct GetUpdates {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offset: Option<i32>,
@@ -221,7 +221,7 @@ impl TelegramRequest for GetUpdates {
 }
 
 /// SendMessage, well, sends a message.
-#[derive(Serialize, Default)]
+#[derive(Serialize, Default, Debug)]
 pub struct SendMessage {
     pub chat_id: ChatID,
     pub text: String,
@@ -285,7 +285,7 @@ impl FileType {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct SendPhoto {
     pub chat_id: ChatID,
     #[serde(skip_serializing_if = "FileType::needs_upload")]
@@ -310,7 +310,7 @@ impl TelegramRequest for SendPhoto {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct GetFile {
     pub file_id: String,
 }
@@ -327,6 +327,35 @@ impl TelegramRequest for GetFile {
 
     fn endpoint(&self) -> &str {
         "getFile"
+    }
+}
+
+#[derive(Serialize, Debug)]
+pub struct SendChatAction {
+    pub chat_id: ChatID,
+    pub action: ChatAction,
+}
+
+#[derive(Debug)]
+pub enum ChatAction {
+    Typing,
+    UploadPhoto,
+}
+
+impl serde::Serialize for ChatAction {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            ChatAction::Typing => serializer.serialize_str("typing"),
+            ChatAction::UploadPhoto => serializer.serialize_str("upload_photo"),
+        }
+    }
+}
+
+impl TelegramRequest for SendChatAction {
+    type Response = bool;
+
+    fn endpoint(&self) -> &str {
+        "sendChatAction"
     }
 }
 
@@ -630,14 +659,14 @@ impl Telegram {
     }
 
     pub fn download_file(&self, file_path: String) -> Result<Vec<u8>, Error> {
-        let url = format!("https://api.telegram.org/file/bot{}/{}", self.api_key, file_path);
+        let url = format!(
+            "https://api.telegram.org/file/bot{}/{}",
+            self.api_key, file_path
+        );
 
         let mut buf: Vec<u8> = Vec::new();
 
-        self.client
-            .get(&url)
-            .send()?
-            .copy_to(&mut buf)?;
+        self.client.get(&url).send()?.copy_to(&mut buf)?;
 
         Ok(buf)
     }

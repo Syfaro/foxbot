@@ -125,21 +125,17 @@ impl FurAffinity {
         };
 
         let sub: fautil::Lookup = match self.fapi.lookup_url(&url) {
-            Ok(mut results) if !results.is_empty() => {
-                results.remove(0)
-            },
+            Ok(mut results) if !results.is_empty() => results.remove(0),
             _ => {
-                return Ok(Some(
-                    PostInfo{
-                        file_type: get_file_ext(&url).unwrap().to_string(),
-                        url: url.clone(),
-                        thumb: url.clone(),
-                        caption: url,
-                        full_url: None,
-                        message: None,
-                    }
-                ));
-            },
+                return Ok(Some(PostInfo {
+                    file_type: get_file_ext(&url).unwrap().to_string(),
+                    url: url.clone(),
+                    thumb: url.clone(),
+                    caption: url,
+                    full_url: None,
+                    message: None,
+                }));
+            }
         };
 
         Ok(Some(PostInfo {
@@ -156,9 +152,11 @@ impl FurAffinity {
         let cookies = vec![
             format!("a={}", self.cookies.0),
             format!("b={}", self.cookies.1),
-        ].join("; ");
+        ]
+        .join("; ");
 
-        let resp = self.client
+        let resp = self
+            .client
             .get(url)
             .header(reqwest::header::COOKIE, cookies)
             .send()?
