@@ -12,13 +12,14 @@ steps:
   settings:
     pull: true
     restore: true
+    debug: true
     root: cache
     endpoint:
-      from_secret: s3_endpoint
+      from_secret: s3_cache_endpoint
     access_key:
-      from_secret: s3_access_key
+      from_secret: s3_cache_access_key
     secret_key:
-      from_secret: s3_secret_key
+      from_secret: s3_cache_secret_key
 
 - name: docker
   image: plugins/docker
@@ -36,13 +37,14 @@ steps:
   settings:
     pull: true
     rebuild: true
+    debug: true
     root: cache
     endpoint:
-      from_secret: s3_endpoint
+      from_secret: s3_cache_endpoint
     access_key:
-      from_secret: s3_access_key
+      from_secret: s3_cache_access_key
     secret_key:
-      from_secret: s3_secret_key
+      from_secret: s3_cache_secret_key
     mount:
       - target
     when:
@@ -54,12 +56,13 @@ steps:
     pull: true
     flush: true
     flush_age: 14
+    debug: true
     root: cache
     endpoint:
-      from_secret: s3_endpoint
+      from_secret: s3_cache_endpoint
     access_key:
-      from_secret: s3_access_key
+      from_secret: s3_cache_access_key
     secret_key:
-      from_secret: s3_secret_key
+      from_secret: s3_cache_secret_key
 
 ...
