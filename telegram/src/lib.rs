@@ -1,6 +1,4 @@
-#![feature(bind_by_move_pattern_guards)]
-
-use serde_derive::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug)]
 pub enum Error {
@@ -274,13 +272,12 @@ impl FileType {
     }
 
     /// Get a multipart Part for the file.
-    /// Note that this panics if called for a type that does not need uploading.
-    pub fn file(&self) -> reqwest::multipart::Part {
+    pub fn file(&self) -> Option<reqwest::multipart::Part> {
         match self {
             FileType::Bytes(file_name, bytes) => {
-                reqwest::multipart::Part::bytes(bytes.clone()).file_name(file_name.clone())
+                Some(reqwest::multipart::Part::bytes(bytes.clone()).file_name(file_name.clone()))
             }
-            _ => unimplemented!(),
+            _ => None,
         }
     }
 }
@@ -303,7 +300,7 @@ impl TelegramRequest for SendPhoto {
 
     fn files(&self) -> Option<Vec<(String, reqwest::multipart::Part)>> {
         if self.photo.needs_upload() {
-            Some(vec![("photo".to_owned(), self.photo.file())])
+            Some(vec![("photo".to_owned(), self.photo.file().unwrap())])
         } else {
             None
         }

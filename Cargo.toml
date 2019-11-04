@@ -5,18 +5,17 @@ authors = ["Syfaro <syfaro@huefox.com>"]
 edition = "2018"
 
 [dependencies]
-reqwest = "0.9.17"
-linkify = "*"
-rand = "*"
-regex = "*"
-scraper = "*"
+reqwest = "0.9.22"
+linkify = "0.4.0"
+rand = "0.7.2"
+regex = "1.3.1"
+scraper = "0.11.0"
 
-log = "*"
-pretty_env_logger = "*"
+log = "0.4.8"
+pretty_env_logger = "0.3.1"
 
-serde = "*"
-serde_json = "*"
-serde_derive = "*"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 telegram = { path = "./telegram" }
 fautil = { path = "./fautil" }

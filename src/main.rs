@@ -1,4 +1,4 @@
-#![feature(try_trait, bind_by_move_pattern_guards)]
+#![feature(try_trait)]
 
 use sites::{PostInfo, Site};
 use telegram::*;
@@ -7,7 +7,7 @@ mod sites;
 
 fn generate_id() -> String {
     use rand::Rng;
-    let mut rng = rand::thread_rng();
+    let rng = rand::thread_rng();
 
     rng.sample_iter(&rand::distributions::Alphanumeric)
         .take(24)
@@ -22,7 +22,7 @@ fn main() {
         std::env::var("FA_B").expect("Missing FA token b"),
     );
 
-    let fa_util_api = std::env::var("FAUTIL_TOKEN").expect("Missing FA Utility API token");
+    let fa_util_api = std::env::var("FAUTIL_APITOKEN").expect("Missing FA Utility API token");
     let fapi = fautil::FAUtil::new(fa_util_api.clone());
 
     let mut sites: Vec<Box<dyn Site>> = vec![

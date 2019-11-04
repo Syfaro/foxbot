@@ -375,7 +375,7 @@ impl Site for Weasyl {
                     PostInfo {
                         file_type: get_file_ext(&sub_url).unwrap().to_owned(),
                         url: sub_url.clone(),
-                        thumb: thumb_url.clone(),
+                        thumb: thumb_url,
                         caption: url.to_string(),
                         full_url: None,
                         message: None,
