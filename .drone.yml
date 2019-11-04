@@ -18,18 +18,4 @@ steps:
     password:
       from_secret: docker_password
 
----
-kind: secret
-name: docker_username
-get:
-  path: drone/docker
-  name: username
-
----
-kind: secret
-name: docker_password
-get:
-  path: drone/docker
-  name: password
-
 ...
