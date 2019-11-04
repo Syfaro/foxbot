@@ -100,6 +100,69 @@ impl Site for Direct {
     }
 }
 
+pub struct e621 {
+    show: regex::Regex,
+    data: regex::Regex,
+
+    client: reqwest::Client,
+}
+
+#[derive(Deserialize)]
+struct e621Post {
+    id: i32,
+    file_url: String,
+    preview_url: String,
+    file_ext: String,
+}
+
+impl e621 {
+    pub fn new() -> Self {
+        Self {
+            show: regex::Regex::new(r"https?://(?P<host>e(?:621|926)\.net)/post/show/(?P<id>\d+)(?:/(?P<tags>.+))?").unwrap(),
+            data: regex::Regex::new(r"https?://(?P<host>static\d+\.e(?:621|926)\.net)/data/(?:(?P<modifier>sample|preview)/)?[0-9a-f]{2}/[0-9a-f]{2}/(?P<md5>[0-9a-f]{32})\.(?P<ext>.+)").unwrap(),
+
+            client: reqwest::Client::new(),
+        }
+    }
+}
+
+impl Site for e621 {
+    fn name(&self) -> &'static str {
+        "e621"
+    }
+
+    fn is_supported(&mut self, url: &str) -> bool {
+        self.show.is_match(url) || self.data.is_match(url)
+    }
+
+    fn get_images(&mut self, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError> {
+        let endpoint = if self.show.is_match(url) {
+            let captures = self.show.captures(url).unwrap();
+            let id = &captures["id"];
+
+            format!("https://e621.net/post/show.json?id={}", id).to_string()
+        } else {
+            let captures = self.data.captures(url).unwrap();
+            let md5 = &captures["md5"];
+
+            format!("https://e621.net/post/show.json?md5={}", md5).to_string()
+        };
+
+        let resp: e621Post = self.client.get(&endpoint).send()?.json()?;
+
+        Ok(Some(vec![
+            PostInfo {
+                file_type: resp.file_ext,
+                url: resp.file_url,
+                thumb: resp.preview_url,
+                caption: format!("https://e621.net/post/show/{}", resp.id),
+                full_url: None,
+                message: None,
+            }
+        ]))
+    }
+}
+
 pub struct FurAffinity {
     cookies: (String, String),
     fapi: fautil::FAUtil,

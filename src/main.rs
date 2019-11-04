@@ -26,6 +26,7 @@ fn main() {
     let fapi = fautil::FAUtil::new(fa_util_api.clone());
 
     let mut sites: Vec<Box<dyn Site>> = vec![
+        Box::new(sites::e621::new()),
         Box::new(sites::FurAffinity::new((fa_a, fa_b), fa_util_api)),
         Box::new(sites::Weasyl::new(
             std::env::var("WEASYL_APITOKEN").expect("Missing Weasyl API token"),
@@ -77,6 +78,8 @@ fn main() {
                                 Some(images) => images,
                                 None => continue 'link,
                             };
+
+                            log::debug!("Found images: {:?}", images);
 
                             results.extend(images);
 

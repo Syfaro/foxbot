@@ -7,6 +7,19 @@ platform:
   arch: amd64
 
 steps:
+- name: restore
+  image: plugins/s3-cache
+  settings:
+    pull: true
+    restore: true
+    root: cache
+    endpoint:
+      from_secret: s3_endpoint
+    access_key:
+      from_secret: s3_access_key
+    secret_key:
+      from_secret: s3_secret_key
+
 - name: docker
   image: plugins/docker
   settings:
@@ -17,5 +30,36 @@ steps:
       from_secret: docker_username
     password:
       from_secret: docker_password
+
+- name: rebuild
+  image: plugins/s3-cache
+  settings:
+    pull: true
+    rebuild: true
+    root: cache
+    endpoint:
+      from_secret: s3_endpoint
+    access_key:
+      from_secret: s3_access_key
+    secret_key:
+      from_secret: s3_secret_key
+    mount:
+      - target
+    when:
+      event: push
+
+- name: flush
+  image: plugins/s3-cache
+  settings:
+    pull: true
+    flush: true
+    flush_age: 14
+    root: cache
+    endpoint:
+      from_secret: s3_endpoint
+    access_key:
+      from_secret: s3_access_key
+    secret_key:
+      from_secret: s3_secret_key
 
 ...
