@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use std::collections::HashMap;
+use tokio::runtime::current_thread::block_on_all;
 
 #[derive(Debug)]
 pub struct PostInfo {
@@ -37,10 +38,16 @@ impl From<std::option::NoneError> for SiteError {
     }
 }
 
+impl From<egg_mode::error::Error> for SiteError {
+    fn from(_: egg_mode::error::Error) -> SiteError {
+        SiteError {}
+    }
+}
+
 pub trait Site {
     fn name(&self) -> &'static str;
     fn is_supported(&mut self, url: &str) -> bool;
-    fn get_images(&mut self, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError>;
+    fn get_images(&mut self, user_id: i32, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError>;
 }
 
 pub struct Direct;
@@ -86,7 +93,7 @@ impl Site for Direct {
         Direct::TYPES.iter().any(|t| content_type == t)
     }
 
-    fn get_images(&mut self, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError> {
+    fn get_images(&mut self, _user_id: i32, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError> {
         let u = url.to_string();
 
         Ok(Some(vec![PostInfo {
@@ -100,7 +107,7 @@ impl Site for Direct {
     }
 }
 
-pub struct e621 {
+pub struct E621 {
     show: regex::Regex,
     data: regex::Regex,
 
@@ -108,14 +115,14 @@ pub struct e621 {
 }
 
 #[derive(Deserialize)]
-struct e621Post {
+struct E621Post {
     id: i32,
     file_url: String,
     preview_url: String,
     file_ext: String,
 }
 
-impl e621 {
+impl E621 {
     pub fn new() -> Self {
         Self {
             show: regex::Regex::new(r"https?://(?P<host>e(?:621|926)\.net)/post/show/(?P<id>\d+)(?:/(?P<tags>.+))?").unwrap(),
@@ -126,7 +133,7 @@ impl e621 {
     }
 }
 
-impl Site for e621 {
+impl Site for E621 {
     fn name(&self) -> &'static str {
         "e621"
     }
@@ -135,31 +142,133 @@ impl Site for e621 {
         self.show.is_match(url) || self.data.is_match(url)
     }
 
-    fn get_images(&mut self, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError> {
+    fn get_images(&mut self, _user_id: i32, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError> {
         let endpoint = if self.show.is_match(url) {
             let captures = self.show.captures(url).unwrap();
             let id = &captures["id"];
 
-            format!("https://e621.net/post/show.json?id={}", id).to_string()
+            format!("https://e621.net/post/show.json?id={}", id)
         } else {
             let captures = self.data.captures(url).unwrap();
             let md5 = &captures["md5"];
 
-            format!("https://e621.net/post/show.json?md5={}", md5).to_string()
+            format!("https://e621.net/post/show.json?md5={}", md5)
         };
 
-        let resp: e621Post = self.client.get(&endpoint).send()?.json()?;
+        let resp: E621Post = self.client.get(&endpoint).send()?.json()?;
 
-        Ok(Some(vec![
-            PostInfo {
-                file_type: resp.file_ext,
-                url: resp.file_url,
-                thumb: resp.preview_url,
-                caption: format!("https://e621.net/post/show/{}", resp.id),
-                full_url: None,
-                message: None,
-            }
-        ]))
+        Ok(Some(vec![PostInfo {
+            file_type: resp.file_ext,
+            url: resp.file_url,
+            thumb: resp.preview_url,
+            caption: format!("https://e621.net/post/show/{}", resp.id),
+            full_url: None,
+            message: None,
+        }]))
+    }
+}
+
+pub struct Twitter {
+    matcher: regex::Regex,
+    consumer: egg_mode::KeyPair,
+    token: egg_mode::Token,
+}
+
+impl Twitter {
+    pub fn new(
+        consumer_key: String,
+        consumer_secret: String, /*, access_token: String, access_token_secret: String*/
+    ) -> Self {
+        use egg_mode::KeyPair;
+
+        let consumer = KeyPair::new(consumer_key, consumer_secret);
+        let token = block_on_all(egg_mode::bearer_token(&consumer)).unwrap();
+
+        Self {
+            matcher: regex::Regex::new(
+                r"https://(?:mobile\.)?twitter.com/(?:\w+)/status/(?P<id>\d+)",
+            )
+            .unwrap(),
+            consumer,
+            token,
+        }
+    }
+}
+
+impl Site for Twitter {
+    fn name(&self) -> &'static str {
+        "Twitter"
+    }
+
+    fn is_supported(&mut self, url: &str) -> bool {
+        self.matcher.is_match(url)
+    }
+
+    fn get_images(&mut self, user_id: i32, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError> {
+        use pickledb::{PickleDb, PickleDbDumpPolicy, SerializationMethod};
+
+        let captures = self.matcher.captures(url).unwrap();
+        let id = captures["id"].to_owned().parse::<u64>().unwrap();
+
+        log::trace!(
+            "Attempting to find saved credentials for {}",
+            &format!("credentials:{}", user_id)
+        );
+
+        let db_path = std::env::var("TWITTER_DATABASE").expect("Missing Twitter database path");
+        let db = PickleDb::load(
+            db_path.clone(),
+            PickleDbDumpPolicy::AutoDump,
+            SerializationMethod::Json,
+        )
+        .unwrap_or_else(|_| {
+            PickleDb::new(
+                db_path,
+                PickleDbDumpPolicy::AutoDump,
+                SerializationMethod::Json,
+            )
+        });
+
+        let saved: Option<(String, String)> = db.get(&format!("credentials:{}", user_id));
+        log::debug!("User saved Twitter credentials: {:?}", saved);
+        let token = match saved {
+            Some(token) => egg_mode::Token::Access {
+                consumer: self.consumer.clone(),
+                access: egg_mode::KeyPair::new(token.0, token.1),
+            },
+            _ => self.token.clone(),
+        };
+
+        log::debug!("token: {:?}", token);
+
+        let tweet = match block_on_all(egg_mode::tweet::show(id, &token)) {
+            Ok(tweet) => tweet.response,
+            Err(e) => return Err(e.into()),
+        };
+
+        let screen_name = tweet.user.unwrap().screen_name.to_owned();
+        let tweet_id = tweet.id;
+
+        let media = match tweet.extended_entities {
+            Some(entity) => entity.media,
+            None => return Ok(None),
+        };
+
+        let link = format!("https://twitter.com/{}/status/{}", screen_name, tweet_id);
+
+        Ok(Some(
+            media
+                .into_iter()
+                .map(|item| PostInfo {
+                    file_type: get_file_ext(&item.media_url_https).unwrap().to_owned(),
+                    url: item.media_url_https.clone(),
+                    thumb: format!("{}:thumb", item.media_url_https.clone()),
+                    caption: link.clone(),
+                    full_url: None,
+                    message: None,
+                })
+                .collect(),
+        ))
     }
 }
 
@@ -255,7 +364,7 @@ impl Site for FurAffinity {
             || url.contains("facdn.net/art/")
     }
 
-    fn get_images(&mut self, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError> {
+    fn get_images(&mut self, _user_id: i32, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError> {
         let image = if url.contains("facdn.net/art/") {
             self.load_direct_url(url)
         } else {
@@ -333,7 +442,7 @@ impl Site for Mastodon {
         true
     }
 
-    fn get_images(&mut self, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError> {
+    fn get_images(&mut self, _user_id: i32, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError> {
         let captures = self.matcher.captures(url).unwrap();
 
         let base = captures["host"].to_owned();
@@ -396,7 +505,7 @@ impl Site for Weasyl {
         self.matcher.is_match(url)
     }
 
-    fn get_images(&mut self, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError> {
+    fn get_images(&mut self, _user_id: i32, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError> {
         let captures = self.matcher.captures(url).unwrap();
         let sub_id = captures["id"].to_owned();
 

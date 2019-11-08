@@ -92,12 +92,64 @@ pub struct Chat {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct MessageEntity {
+    #[serde(rename = "type")]
+    pub entity_type: MessageEntityType,
+    pub offset: i32,
+    pub length: i32,
+    pub url: Option<String>,
+    pub user: Option<User>,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum MessageEntityType {
+    Mention,
+    Hashtag,
+    Cashtag,
+    BotCommand,
+    URL,
+    Email,
+    PhoneNumber,
+    Bold,
+    Italic,
+    Code,
+    Pre,
+    TextLink,
+    TextMention,
+}
+
+impl<'de> Deserialize<'de> for MessageEntityType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where D: serde::Deserializer<'de>
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(match s.as_str() {
+            "mention" => Self::Mention,
+            "hashtag" => Self::Hashtag,
+            "cashtag" => Self::Cashtag,
+            "bot_command" => Self::BotCommand,
+            "url" => Self::URL,
+            "email" => Self::Email,
+            "phone_number" => Self::PhoneNumber,
+            "bold" => Self::Bold,
+            "italic" => Self::Italic,
+            "code" => Self::Code,
+            "pre" => Self::Pre,
+            "text_link" => Self::TextLink,
+            "text_mention" => Self::TextMention,
+            _ => unimplemented!(),
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
 pub struct Message {
     pub message_id: i32,
     pub from: Option<User>,
     pub chat: Chat,
     pub text: Option<String>,
     pub photo: Option<Vec<PhotoSize>>,
+    pub entities: Option<Vec<MessageEntity>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -167,6 +219,12 @@ impl From<i64> for ChatID {
     }
 }
 
+impl From<i32> for ChatID {
+    fn from(item: i32) -> Self {
+        ChatID::Identifier(item as i64)
+    }
+}
+
 impl From<String> for ChatID {
     fn from(item: String) -> Self {
         ChatID::Username(item)
@@ -218,11 +276,36 @@ impl TelegramRequest for GetUpdates {
     }
 }
 
+#[derive(Serialize, Debug)]
+pub struct ForceReply {
+    pub force_reply: bool,
+    pub selective: bool,
+}
+
+impl Default for ForceReply {
+    fn default() -> Self {
+        Self {
+            force_reply: true,
+            selective: false,
+        }
+    }
+}
+
+#[derive(Serialize, Debug)]
+#[serde(untagged)]
+pub enum ReplyMarkup {
+    ForceReply(ForceReply),
+}
+
 /// SendMessage, well, sends a message.
 #[derive(Serialize, Default, Debug)]
 pub struct SendMessage {
     pub chat_id: ChatID,
     pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to_message_id: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_markup: Option<ReplyMarkup>,
 }
 
 impl TelegramRequest for SendMessage {

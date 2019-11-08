@@ -4,20 +4,6 @@ name: default
 type: docker
 
 steps:
-- name: restore
-  image: plugins/s3-cache
-  settings:
-    pull: true
-    restore: true
-    debug: true
-    root: cache
-    endpoint:
-      from_secret: s3_cache_endpoint
-    access_key:
-      from_secret: s3_cache_access_key
-    secret_key:
-      from_secret: s3_cache_secret_key
-
 - name: docker
   image: plugins/docker
   settings:
@@ -28,38 +14,4 @@ steps:
       from_secret: docker_username
     password:
       from_secret: docker_password
-
-- name: rebuild
-  image: plugins/s3-cache
-  settings:
-    pull: true
-    rebuild: true
-    debug: true
-    root: cache
-    endpoint:
-      from_secret: s3_cache_endpoint
-    access_key:
-      from_secret: s3_cache_access_key
-    secret_key:
-      from_secret: s3_cache_secret_key
-    mount:
-      - target
-    when:
-      event: push
-
-- name: flush
-  image: plugins/s3-cache
-  settings:
-    pull: true
-    flush: true
-    flush_age: 14
-    debug: true
-    root: cache
-    endpoint:
-      from_secret: s3_cache_endpoint
-    access_key:
-      from_secret: s3_cache_access_key
-    secret_key:
-      from_secret: s3_cache_secret_key
-
 ...
