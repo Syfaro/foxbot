@@ -177,7 +177,7 @@ pub struct Twitter {
 impl Twitter {
     pub fn new(
         consumer_key: String,
-        consumer_secret: String, /*, access_token: String, access_token_secret: String*/
+        consumer_secret: String,
     ) -> Self {
         use egg_mode::KeyPair;
 
