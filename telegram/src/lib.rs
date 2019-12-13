@@ -185,7 +185,7 @@ pub struct InlineQuery {
 pub trait TelegramRequest: serde::Serialize {
     /// Response is the type used when Deserializing Telegram's result field.
     ///
-    /// For convenience of debugging, it must implement Debug.
+    /// For convenience of debugging, it must implement [Debug](std::fmt::Debug).
     type Response: serde::de::DeserializeOwned + std::fmt::Debug;
 
     /// Endpoint to use for the request.
@@ -243,7 +243,7 @@ impl Default for ChatID {
     }
 }
 
-/// GetMe is a request that returns a User about the current bot.
+/// GetMe is a request that returns [User] information for the current bot.
 #[derive(Serialize, Debug)]
 pub struct GetMe;
 
@@ -255,15 +255,32 @@ impl TelegramRequest for GetMe {
     }
 }
 
-/// GetUpdates is a request that returns any available Updates.
+/// GetUpdates is a request that returns any available [Updates](Update).
 #[derive(Serialize, Default, Debug)]
 pub struct GetUpdates {
+    /// ID for the first update to return. This must be set to one higher
+    /// than previous IDs in order to confirm previous updates and clear them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offset: Option<i32>,
+    /// Maximum number of [Updates](Update) to retrieve. May be set 1-100,
+    /// defaults to 100.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<i32>,
+    /// Number of seconds for long polling. This should be set to a reasonable
+    /// value in production to avoid unneeded requests.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<i32>,
+    /// Which update types to receive. May be set to any available types.
+    /// * `message`
+    /// * `edited_message`
+    /// * `channel_post`
+    /// * `edited_channel_post`
+    /// * `inline_query`
+    /// * `chosen_inline_result`
+    /// * `callback_query`
+    /// * `shipping_query`
+    /// * `pre_checkout_query`
+    /// * `poll`
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_updates: Option<Vec<String>>,
 }
@@ -276,13 +293,29 @@ impl TelegramRequest for GetUpdates {
     }
 }
 
+/// ForceReply allows you to default users to replying to your message.
 #[derive(Serialize, Debug)]
 pub struct ForceReply {
+    /// This must be set to `true` to operate correctly.
     pub force_reply: bool,
+    /// If only the user you are mentioning or replying to should be defaulted
+    /// to replying to your message, or if it should default to replying for all
+    /// members of the chat.
     pub selective: bool,
 }
 
+impl ForceReply {
+    /// Create a [ForceReply] with selectivity.
+    pub fn selective() -> Self {
+        Self {
+            force_reply: true,
+            selective: true,
+        }
+    }
+}
+
 impl Default for ForceReply {
+    /// Create a [ForceReply] without selectivity.
     fn default() -> Self {
         Self {
             force_reply: true,
@@ -291,19 +324,31 @@ impl Default for ForceReply {
     }
 }
 
+/// ReplyMarkup is additional data sent with a [Message] to enhance the bot
+/// user experience.
+///
+/// You may add one of the following:
+/// * [InlineKeyboardMarkup]
+/// * <s>ReplyKeyboardMarkup</s> // TODO
+/// * <s>ReplyKeyboardRemove</s> // TODO
+/// * [ForceReply]
 #[derive(Serialize, Debug)]
 #[serde(untagged)]
 pub enum ReplyMarkup {
     ForceReply(ForceReply),
 }
 
-/// SendMessage, well, sends a message.
+/// SendMessage sends a message.
 #[derive(Serialize, Default, Debug)]
 pub struct SendMessage {
+    /// The ID of the chat to send a message to.
     pub chat_id: ChatID,
+    /// The text of the message.
     pub text: String,
+    /// The ID of the [Message] this Message is in reply to.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reply_to_message_id: Option<i32>,
+    /// The [ReplyMarkup], if desired.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reply_markup: Option<ReplyMarkup>,
 }
@@ -365,11 +410,15 @@ impl FileType {
     }
 }
 
+/// SendPhoto sends a photo.
 #[derive(Serialize, Debug)]
 pub struct SendPhoto {
+    /// The ID of the chat to send a photo to.
     pub chat_id: ChatID,
+    /// The file that makes up this photo.
     #[serde(skip_serializing_if = "FileType::needs_upload")]
     pub photo: FileType,
+    /// A caption for the photo, if desired.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub caption: Option<String>,
 }
@@ -382,6 +431,9 @@ impl TelegramRequest for SendPhoto {
     }
 
     fn files(&self) -> Option<Vec<(String, reqwest::multipart::Part)>> {
+        // Check if the photo needs to be uploaded. If the photo does need to
+        // be uploaded, we specify the field name and get the file. This unwrap
+        // is safe because `needs_upload` only returns true when it exists.
         if self.photo.needs_upload() {
             Some(vec![("photo".to_owned(), self.photo.file().unwrap())])
         } else {
@@ -390,16 +442,26 @@ impl TelegramRequest for SendPhoto {
     }
 }
 
+/// GetFile retrieves information about a file.
+///
+/// This will not download the file! It only returns a [File] containing
+/// the path which is needed to download the file. This returned ID lasts at
+/// least one hour.
 #[derive(Serialize, Debug)]
 pub struct GetFile {
+    /// The ID of the file to fetch.
     pub file_id: String,
 }
 
 #[derive(Deserialize, Debug)]
 pub struct File {
+    /// The ID for this file, specific to this bot.
     pub file_id: String,
-    pub file_size: usize,
-    pub file_path: String,
+    /// The size of the file, if known.
+    pub file_size: Option<usize>,
+    /// A path which is required to download the file. It is unclear
+    /// when this would ever be `None`.
+    pub file_path: Option<String>,
 }
 
 impl TelegramRequest for GetFile {
@@ -410,12 +472,20 @@ impl TelegramRequest for GetFile {
     }
 }
 
+/// SendChatAction allows you to indicate to users that the bot is performing
+/// an action.
+///
+/// Actions last for 5 seconds or until a message is sent,
+/// whichever comes first.
 #[derive(Serialize, Debug)]
 pub struct SendChatAction {
+    /// The ID of the chat to send an action to.
     pub chat_id: ChatID,
+    /// The action to indicate.
     pub action: ChatAction,
 }
 
+/// ChatAction is the action that the bot is indicating.
 #[derive(Debug)]
 pub enum ChatAction {
     Typing,
@@ -424,10 +494,12 @@ pub enum ChatAction {
 
 impl serde::Serialize for ChatAction {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match self {
-            ChatAction::Typing => serializer.serialize_str("typing"),
-            ChatAction::UploadPhoto => serializer.serialize_str("upload_photo"),
-        }
+        let s = match self {
+            ChatAction::Typing => "typing",
+            ChatAction::UploadPhoto => "upload_photo",
+        };
+
+        serializer.serialize_str(s)
     }
 }
 
@@ -462,6 +534,22 @@ pub struct InputMediaVideo {
 pub enum InputMedia {
     Photo(InputMediaPhoto),
     Video(InputMediaVideo),
+}
+
+impl InputMedia {
+    /// Replaces the media within an InputMedia without caring about the type.
+    fn update_media(&self, media: FileType) -> Self {
+        match self {
+            InputMedia::Photo(photo) => InputMedia::Photo(InputMediaPhoto {
+                media,
+                ..photo.clone()
+            }),
+            InputMedia::Video(video) => InputMedia::Video(InputMediaVideo {
+                media,
+                ..video.clone()
+            }),
+        }
+    }
 }
 
 impl InputMedia {
@@ -501,16 +589,7 @@ where
                 _ => unimplemented!(),
             };
 
-            let new_elem = match elem {
-                InputMedia::Photo(photo) => InputMedia::Photo(InputMediaPhoto {
-                    media: new_file,
-                    ..photo.clone()
-                }),
-                InputMedia::Video(video) => InputMedia::Video(InputMediaVideo {
-                    media: new_file,
-                    ..video.clone()
-                }),
-            };
+            let new_elem = elem.update_media(new_file);
 
             seq.serialize_element(&new_elem)?;
         } else {
@@ -683,7 +762,7 @@ impl Telegram {
         Self { api_key, client }
     }
 
-    /// Makes a request for a TelegramRequest item and parses the response
+    /// Make a request for a [TelegramRequest] item and parse the response
     /// into the requested output type if the request succeeded.
     pub fn make_request<T>(&self, request: &T) -> Result<T::Response, Error>
     where
@@ -738,15 +817,25 @@ impl Telegram {
         resp.into()
     }
 
+    /// Download a file from Telegram's servers.
+    ///
+    /// It requires a file path which can be obtained with [GetFile].
     pub fn download_file(&self, file_path: String) -> Result<Vec<u8>, Error> {
+        // Start by sending the request and fetching the Content-Length.
+        // If the length is greater than 20MB, something is wrong and
+        // we will ignore it. Allocate a Vec with the length, if available.
+        // Return this Vec as it contains the file data.
+
         let url = format!(
             "https://api.telegram.org/file/bot{}/{}",
             self.api_key, file_path
         );
 
-        let mut buf: Vec<u8> = Vec::new();
+        let mut resp = self.client.get(&url).send()?;
+        let len = std::cmp::min(resp.content_length().unwrap_or(0), 20_000_000);
 
-        self.client.get(&url).send()?.copy_to(&mut buf)?;
+        let mut buf: Vec<u8> = Vec::with_capacity(len as usize);
+        resp.copy_to(&mut buf)?;
 
         Ok(buf)
     }

@@ -404,7 +404,7 @@ fn process_photo(bot: &Telegram, fapi: &fautil::FAUtil, message: Message) {
         _ => return,
     };
 
-    let photo = match bot.download_file(file.file_path) {
+    let photo = match bot.download_file(file.file_path.unwrap()) {
         Ok(photo) => photo,
         _ => return,
     };
