@@ -120,7 +120,8 @@ pub enum MessageEntityType {
 
 impl<'de> Deserialize<'de> for MessageEntityType {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where D: serde::Deserializer<'de>
+    where
+        D: serde::Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
         Ok(match s.as_str() {
@@ -351,6 +352,9 @@ pub struct SendMessage {
     /// The [ReplyMarkup], if desired.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reply_markup: Option<ReplyMarkup>,
+    /// If Telegram should not generate a web page preview.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disable_web_page_preview: Option<bool>,
 }
 
 impl TelegramRequest for SendMessage {
@@ -757,14 +761,14 @@ pub struct Telegram {
 impl Telegram {
     /// Create a new Telegram instance with a specified API key.
     pub fn new(api_key: String) -> Self {
-        let client = reqwest::Client::builder().timeout(None).build().unwrap();
+        let client = reqwest::Client::builder().build().unwrap();
 
         Self { api_key, client }
     }
 
     /// Make a request for a [TelegramRequest] item and parse the response
     /// into the requested output type if the request succeeded.
-    pub fn make_request<T>(&self, request: &T) -> Result<T::Response, Error>
+    pub async fn make_request<T>(&self, request: &T) -> Result<T::Response, Error>
     where
         T: TelegramRequest,
     {
@@ -800,16 +804,22 @@ impl Telegram {
                 .into_iter()
                 .fold(form, |form, (name, part)| form.part(name, part));
 
-            let mut resp = self.client.post(&url).multipart(form).send()?;
+            let resp = self.client.post(&url).multipart(form).send().await?;
 
             log::trace!("Got response from {} with data {:?}", endpoint, resp);
 
-            resp.json()?
+            resp.json().await?
         } else {
             // No files to upload, use a JSON body in a POST request to the
             // requested endpoint.
 
-            self.client.post(&url).json(&values).send()?.json()?
+            self.client
+                .post(&url)
+                .json(&values)
+                .send()
+                .await?
+                .json()
+                .await?
         };
 
         log::debug!("Got response from {} with data {:?}", endpoint, resp);
@@ -820,7 +830,7 @@ impl Telegram {
     /// Download a file from Telegram's servers.
     ///
     /// It requires a file path which can be obtained with [GetFile].
-    pub fn download_file(&self, file_path: String) -> Result<Vec<u8>, Error> {
+    pub async fn download_file(&self, file_path: String) -> Result<Vec<u8>, Error> {
         // Start by sending the request and fetching the Content-Length.
         // If the length is greater than 20MB, something is wrong and
         // we will ignore it. Allocate a Vec with the length, if available.
@@ -831,12 +841,8 @@ impl Telegram {
             self.api_key, file_path
         );
 
-        let mut resp = self.client.get(&url).send()?;
-        let len = std::cmp::min(resp.content_length().unwrap_or(0), 20_000_000);
+        let bytes = self.client.get(&url).send().await?.bytes().await?;
 
-        let mut buf: Vec<u8> = Vec::with_capacity(len as usize);
-        resp.copy_to(&mut buf)?;
-
-        Ok(buf)
+        Ok(bytes.to_vec())
     }
 }

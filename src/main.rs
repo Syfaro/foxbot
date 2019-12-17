@@ -2,7 +2,7 @@
 
 use sites::{PostInfo, Site};
 use telegram::*;
-use tokio::runtime::current_thread::block_on_all;
+use tokio01::runtime::current_thread::block_on_all;
 
 mod sites;
 
@@ -15,7 +15,8 @@ fn generate_id() -> String {
         .collect()
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     use pickledb::{PickleDb, PickleDbDumpPolicy, SerializationMethod};
 
     pretty_env_logger::init();
@@ -71,7 +72,7 @@ fn main() {
     finder.kinds(&[linkify::LinkKind::Url]);
 
     loop {
-        let updates = match bot.make_request(&update_req) {
+        let updates = match bot.make_request(&update_req).await {
             Ok(updates) => updates,
             Err(e) => {
                 log::error!("Unable to get updates: {:?}", e);
@@ -95,7 +96,7 @@ fn main() {
                         if site.is_supported(link_str) {
                             log::debug!("Link {} supported by {}", link_str, site.name());
 
-                            let images = match site.get_images(inline.from.id, link_str) {
+                            let images = match site.get_images(inline.from.id, link_str).await {
                                 Ok(images) => images,
                                 Err(_) => continue 'link,
                             };
@@ -135,12 +136,12 @@ fn main() {
                     switch_pm_parameter: None,
                 };
 
-                if let Err(e) = bot.make_request(&answer_inline) {
+                if let Err(e) = bot.make_request(&answer_inline).await {
                     log::error!("Unable to respond to inline: {:?}", e);
                 }
             } else if let Some(message) = update.message {
                 if message.photo.is_some() {
-                    process_photo(&bot, &fapi, message);
+                    process_photo(&bot, &fapi, message).await;
                 } else if let Some(entities) = message.entities {
                     let command = entities
                         .iter()
@@ -169,7 +170,8 @@ fn main() {
                                 &bot,
                                 message.message_id,
                                 &message.from.unwrap(),
-                            );
+                            )
+                            .await;
                         }
                         _ => log::info!("Unknown command: {}", command_text),
                     };
@@ -200,11 +202,13 @@ fn main() {
                                     chat_id: from.id.into(),
                                     text: "Something went wrong, please try again later."
                                         .to_string(),
-                                    reply_markup: None,
                                     reply_to_message_id: Some(message.message_id),
+                                    ..Default::default()
                                 };
 
-                                let _ = bot.make_request(&message);
+                                if let Err(e) = bot.make_request(&message).await {
+                                    log::warn!("Unable to send message: {:?}", e);
+                                }
                                 return;
                             }
                             Ok(token) => token,
@@ -213,10 +217,7 @@ fn main() {
                     log::trace!("Got token");
 
                     let access = match token.0 {
-                        egg_mode::Token::Access {
-                            access,
-                            ..
-                        } => access,
+                        egg_mode::Token::Access { access, .. } => access,
                         _ => unimplemented!(),
                     };
 
@@ -231,22 +232,26 @@ fn main() {
                         let message = SendMessage {
                             chat_id: from.id.into(),
                             text: "Something went wrong, please try again later.".to_string(),
-                            reply_markup: None,
                             reply_to_message_id: Some(message.message_id),
+                            ..Default::default()
                         };
 
-                        let _ = bot.make_request(&message);
+                        if let Err(e) = bot.make_request(&message).await {
+                            log::warn!("Unable to send message: {:?}", e);
+                        }
                         return;
                     }
 
                     let message = SendMessage {
                         chat_id: from.id.into(),
                         text: format!("Welcome aboard, {}!", token.2),
-                        reply_markup: None,
                         reply_to_message_id: Some(message.message_id),
+                        ..Default::default()
                     };
 
-                    let _ = bot.make_request(&message);
+                    if let Err(e) = bot.make_request(&message).await {
+                        log::warn!("Unable to send message: {:?}", e);
+                    }
                 }
             }
 
@@ -255,7 +260,7 @@ fn main() {
     }
 }
 
-fn authenticate_twitter(db: &mut pickledb::PickleDb, bot: &Telegram, id: i32, user: &User) {
+async fn authenticate_twitter(db: &mut pickledb::PickleDb, bot: &Telegram, id: i32, user: &User) {
     let (consumer_key, consumer_secret) = (
         std::env::var("TWITTER_CONSUMER_KEY").expect("Missing Twitter consumer key"),
         std::env::var("TWITTER_CONSUMER_SECRET").expect("Missing Twitter consumer secret"),
@@ -271,11 +276,13 @@ fn authenticate_twitter(db: &mut pickledb::PickleDb, bot: &Telegram, id: i32, us
             let message = SendMessage {
                 chat_id: user.id.into(),
                 text: "Something went wrong, please try again later.".to_string(),
-                reply_markup: None,
                 reply_to_message_id: Some(id),
+                ..Default::default()
             };
 
-            let _ = bot.make_request(&message);
+            if let Err(e) = bot.make_request(&message).await {
+                log::warn!("Unable to send message: {:?}", e);
+            }
             return;
         }
     };
@@ -289,11 +296,13 @@ fn authenticate_twitter(db: &mut pickledb::PickleDb, bot: &Telegram, id: i32, us
         let message = SendMessage {
             chat_id: user.id.into(),
             text: "Something went wrong, please try again later.".to_string(),
-            reply_markup: None,
             reply_to_message_id: Some(id),
+            ..Default::default()
         };
 
-        let _ = bot.make_request(&message);
+        if let Err(e) = bot.make_request(&message).await {
+            log::warn!("Unable to send message: {:?}", e);
+        }
         return;
     }
 
@@ -310,9 +319,12 @@ fn authenticate_twitter(db: &mut pickledb::PickleDb, bot: &Telegram, id: i32, us
             selective: true,
         })),
         reply_to_message_id: Some(id),
+        ..Default::default()
     };
 
-    let _ = bot.make_request(&message);
+    if let Err(e) = bot.make_request(&message).await {
+        log::warn!("Unable to send message: {:?}", e);
+    }
 }
 
 fn get_empty_query() -> InlineQueryResult {
@@ -379,12 +391,14 @@ fn process_result(result: &PostInfo) -> Option<Vec<InlineQueryResult>> {
     }
 }
 
-fn process_photo(bot: &Telegram, fapi: &fautil::FAUtil, message: Message) {
+async fn process_photo(bot: &Telegram, fapi: &fautil::FAUtil, message: Message) {
     let chat_action = SendChatAction {
         chat_id: message.chat.id.into(),
         action: ChatAction::Typing,
     };
-    let _ = bot.make_request(&chat_action);
+    if let Err(e) = bot.make_request(&chat_action).await {
+        log::warn!("Unable to send chat action: {:?}", e);
+    }
 
     let photos = message.photo.unwrap();
 
@@ -399,27 +413,31 @@ fn process_photo(bot: &Telegram, fapi: &fautil::FAUtil, message: Message) {
     }
 
     let get_file = GetFile { file_id };
-    let file = match bot.make_request(&get_file) {
+    let file = match bot.make_request(&get_file).await {
         Ok(file) => file,
         _ => return,
     };
 
-    let photo = match bot.download_file(file.file_path.unwrap()) {
+    let photo = match bot.download_file(file.file_path.unwrap()).await {
         Ok(photo) => photo,
         _ => return,
     };
 
-    let matches = match fapi.image_search(photo) {
+    if let Err(e) = bot.make_request(&chat_action).await {
+        log::warn!("Unable to send chat action: {:?}", e);
+    }
+
+    let matches = match fapi.image_search(photo).await {
         Ok(matches) if !matches.is_empty() => matches,
         _ => {
             let message = SendMessage {
                 chat_id: message.chat.id.into(),
                 text: "I was unable to find anything, sorry.".to_owned(),
                 reply_to_message_id: Some(message.message_id),
-                reply_markup: None,
+                ..Default::default()
             };
 
-            if let Err(e) = bot.make_request(&message) {
+            if let Err(e) = bot.make_request(&message).await {
                 log::error!("Unable to respond to photo: {:?}", e);
             }
 
@@ -428,18 +446,32 @@ fn process_photo(bot: &Telegram, fapi: &fautil::FAUtil, message: Message) {
     };
 
     let first = matches.get(0).unwrap();
+    log::debug!("Match has distance of {}", first.distance);
+
+    let (text, hide_preview) = if first.distance < 5 {
+        (
+            format!(
+                "I found this (distance of {}): https://www.furaffinity.net/view/{}/",
+                first.distance, first.id
+            ),
+            false,
+        )
+    } else {
+        (
+            format!("I found this but it may not be the same image, be warned (distance of {}): https://www.furaffinity.net/view/{}/", first.distance, first.id),
+            true,
+        )
+    };
 
     let message = SendMessage {
         chat_id: message.chat.id.into(),
-        text: format!(
-            "I found this: https://www.furaffinity.net/view/{}/",
-            first.id
-        ),
+        text,
+        disable_web_page_preview: Some(hide_preview),
         reply_to_message_id: Some(message.message_id),
-        reply_markup: None,
+        ..Default::default()
     };
 
-    if let Err(e) = bot.make_request(&message) {
+    if let Err(e) = bot.make_request(&message).await {
         log::error!("Unable to respond to photo: {:?}", e);
     }
 }

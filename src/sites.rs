@@ -1,6 +1,7 @@
+use async_trait::async_trait;
 use serde::Deserialize;
 use std::collections::HashMap;
-use tokio::runtime::current_thread::block_on_all;
+use tokio01::runtime::current_thread::block_on_all;
 
 #[derive(Debug)]
 pub struct PostInfo {
@@ -44,10 +45,15 @@ impl From<egg_mode::error::Error> for SiteError {
     }
 }
 
+#[async_trait]
 pub trait Site {
     fn name(&self) -> &'static str;
     fn is_supported(&mut self, url: &str) -> bool;
-    fn get_images(&mut self, user_id: i32, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError>;
+    async fn get_images(
+        &mut self,
+        user_id: i32,
+        url: &str,
+    ) -> Result<Option<Vec<PostInfo>>, SiteError>;
 }
 
 pub struct Direct;
@@ -61,6 +67,7 @@ impl Direct {
     }
 }
 
+#[async_trait]
 impl Site for Direct {
     fn name(&self) -> &'static str {
         "direct links"
@@ -93,7 +100,11 @@ impl Site for Direct {
         Direct::TYPES.iter().any(|t| content_type == t)
     }
 
-    fn get_images(&mut self, _user_id: i32, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError> {
+    async fn get_images(
+        &mut self,
+        _user_id: i32,
+        url: &str,
+    ) -> Result<Option<Vec<PostInfo>>, SiteError> {
         let u = url.to_string();
 
         Ok(Some(vec![PostInfo {
@@ -133,6 +144,7 @@ impl E621 {
     }
 }
 
+#[async_trait]
 impl Site for E621 {
     fn name(&self) -> &'static str {
         "e621"
@@ -142,7 +154,11 @@ impl Site for E621 {
         self.show.is_match(url) || self.data.is_match(url)
     }
 
-    fn get_images(&mut self, _user_id: i32, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError> {
+    async fn get_images(
+        &mut self,
+        _user_id: i32,
+        url: &str,
+    ) -> Result<Option<Vec<PostInfo>>, SiteError> {
         let endpoint = if self.show.is_match(url) {
             let captures = self.show.captures(url).unwrap();
             let id = &captures["id"];
@@ -175,10 +191,7 @@ pub struct Twitter {
 }
 
 impl Twitter {
-    pub fn new(
-        consumer_key: String,
-        consumer_secret: String,
-    ) -> Self {
+    pub fn new(consumer_key: String, consumer_secret: String) -> Self {
         use egg_mode::KeyPair;
 
         let consumer = KeyPair::new(consumer_key, consumer_secret);
@@ -195,6 +208,7 @@ impl Twitter {
     }
 }
 
+#[async_trait]
 impl Site for Twitter {
     fn name(&self) -> &'static str {
         "Twitter"
@@ -204,7 +218,11 @@ impl Site for Twitter {
         self.matcher.is_match(url)
     }
 
-    fn get_images(&mut self, user_id: i32, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError> {
+    async fn get_images(
+        &mut self,
+        user_id: i32,
+        url: &str,
+    ) -> Result<Option<Vec<PostInfo>>, SiteError> {
         use pickledb::{PickleDb, PickleDbDumpPolicy, SerializationMethod};
 
         let captures = self.matcher.captures(url).unwrap();
@@ -289,14 +307,14 @@ impl FurAffinity {
         }
     }
 
-    fn load_direct_url(&self, url: &str) -> Result<Option<PostInfo>, SiteError> {
+    async fn load_direct_url(&self, url: &str) -> Result<Option<PostInfo>, SiteError> {
         let url = if url.starts_with("http://") {
             url.replace("http://", "https://")
         } else {
             url.to_string()
         };
 
-        let sub: fautil::Lookup = match self.fapi.lookup_url(&url) {
+        let sub: fautil::Lookup = match self.fapi.lookup_url(&url).await {
             Ok(mut results) if !results.is_empty() => results.remove(0),
             _ => {
                 return Ok(Some(PostInfo {
@@ -353,6 +371,7 @@ impl FurAffinity {
     }
 }
 
+#[async_trait]
 impl Site for FurAffinity {
     fn name(&self) -> &'static str {
         "FurAffinity"
@@ -364,9 +383,13 @@ impl Site for FurAffinity {
             || url.contains("facdn.net/art/")
     }
 
-    fn get_images(&mut self, _user_id: i32, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError> {
+    async fn get_images(
+        &mut self,
+        _user_id: i32,
+        url: &str,
+    ) -> Result<Option<Vec<PostInfo>>, SiteError> {
         let image = if url.contains("facdn.net/art/") {
-            self.load_direct_url(url)
+            self.load_direct_url(url).await
         } else {
             self.load_submission(url)
         };
@@ -404,6 +427,7 @@ impl Mastodon {
     }
 }
 
+#[async_trait]
 impl Site for Mastodon {
     fn name(&self) -> &'static str {
         "Mastodon"
@@ -442,7 +466,11 @@ impl Site for Mastodon {
         true
     }
 
-    fn get_images(&mut self, _user_id: i32, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError> {
+    async fn get_images(
+        &mut self,
+        _user_id: i32,
+        url: &str,
+    ) -> Result<Option<Vec<PostInfo>>, SiteError> {
         let captures = self.matcher.captures(url).unwrap();
 
         let base = captures["host"].to_owned();
@@ -496,6 +524,7 @@ impl Weasyl {
     }
 }
 
+#[async_trait]
 impl Site for Weasyl {
     fn name(&self) -> &'static str {
         "Weasyl"
@@ -505,7 +534,11 @@ impl Site for Weasyl {
         self.matcher.is_match(url)
     }
 
-    fn get_images(&mut self, _user_id: i32, url: &str) -> Result<Option<Vec<PostInfo>>, SiteError> {
+    async fn get_images(
+        &mut self,
+        _user_id: i32,
+        url: &str,
+    ) -> Result<Option<Vec<PostInfo>>, SiteError> {
         let captures = self.matcher.captures(url).unwrap();
         let sub_id = captures["id"].to_owned();
 

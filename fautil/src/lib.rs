@@ -30,7 +30,7 @@ impl FAUtil {
         }
     }
 
-    fn make_request<T: Default + serde::de::DeserializeOwned>(
+    async fn make_request<T: Default + serde::de::DeserializeOwned>(
         &self,
         endpoint: &str,
         params: &std::collections::HashMap<&str, &str>,
@@ -41,25 +41,27 @@ impl FAUtil {
             .get(&url)
             .header("X-Api-Key", self.api_key.as_bytes())
             .query(params)
-            .send()?
+            .send()
+            .await?
             .json()
+            .await
     }
 
-    pub fn lookup_url(&self, url: &str) -> reqwest::Result<Vec<Lookup>> {
+    pub async fn lookup_url(&self, url: &str) -> reqwest::Result<Vec<Lookup>> {
         let mut params = std::collections::HashMap::new();
         params.insert("url", url);
 
-        self.make_request("url", &params)
+        self.make_request("url", &params).await
     }
 
-    pub fn lookup_filename(&self, filename: &str) -> reqwest::Result<Vec<Lookup>> {
+    pub async fn lookup_filename(&self, filename: &str) -> reqwest::Result<Vec<Lookup>> {
         let mut params = std::collections::HashMap::new();
         params.insert("file", filename);
 
-        self.make_request("file", &params)
+        self.make_request("file", &params).await
     }
 
-    pub fn image_search(&self, data: Vec<u8>) -> reqwest::Result<Vec<ImageLookup>> {
+    pub async fn image_search(&self, data: Vec<u8>) -> reqwest::Result<Vec<ImageLookup>> {
         let url = format!("{}image", Self::API_ENDPOINT);
 
         let part = reqwest::multipart::Part::bytes(data);
@@ -69,8 +71,10 @@ impl FAUtil {
             .post(&url)
             .header("X-Api-Key", self.api_key.as_bytes())
             .multipart(form)
-            .send()?
+            .send()
+            .await?
             .json()
+            .await
     }
 }
 
