@@ -93,7 +93,7 @@ async fn main() {
                     for site in &mut sites {
                         let link_str = link.as_str();
 
-                        if site.is_supported(link_str) {
+                        if site.is_supported(link_str).await {
                             log::debug!("Link {} supported by {}", link_str, site.name());
 
                             let images = match site.get_images(inline.from.id, link_str).await {

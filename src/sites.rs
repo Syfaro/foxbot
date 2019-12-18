@@ -48,7 +48,7 @@ impl From<egg_mode::error::Error> for SiteError {
 #[async_trait]
 pub trait Site {
     fn name(&self) -> &'static str;
-    fn is_supported(&mut self, url: &str) -> bool;
+    async fn is_supported(&mut self, url: &str) -> bool;
     async fn get_images(
         &mut self,
         user_id: i32,
@@ -73,7 +73,7 @@ impl Site for Direct {
         "direct links"
     }
 
-    fn is_supported(&mut self, url: &str) -> bool {
+    async fn is_supported(&mut self, url: &str) -> bool {
         // If the URL extension isn't one in our list, ignore.
         if !Direct::EXTENSIONS.iter().any(|ext| url.ends_with(ext)) {
             return false;
@@ -82,7 +82,7 @@ impl Site for Direct {
         let client = reqwest::Client::new();
 
         // Make a HTTP HEAD request to determine the Content-Type.
-        let resp = match client.head(url).send() {
+        let resp = match client.head(url).send().await {
             Ok(resp) => resp,
             Err(_) => return false,
         };
@@ -150,7 +150,7 @@ impl Site for E621 {
         "e621"
     }
 
-    fn is_supported(&mut self, url: &str) -> bool {
+    async fn is_supported(&mut self, url: &str) -> bool {
         self.show.is_match(url) || self.data.is_match(url)
     }
 
@@ -171,7 +171,7 @@ impl Site for E621 {
             format!("https://e621.net/post/show.json?md5={}", md5)
         };
 
-        let resp: E621Post = self.client.get(&endpoint).send()?.json()?;
+        let resp: E621Post = self.client.get(&endpoint).send().await?.json().await?;
 
         Ok(Some(vec![PostInfo {
             file_type: resp.file_ext,
@@ -214,7 +214,7 @@ impl Site for Twitter {
         "Twitter"
     }
 
-    fn is_supported(&mut self, url: &str) -> bool {
+    async fn is_supported(&mut self, url: &str) -> bool {
         self.matcher.is_match(url)
     }
 
@@ -338,7 +338,7 @@ impl FurAffinity {
         }))
     }
 
-    fn load_submission(&self, url: &str) -> Result<Option<PostInfo>, SiteError> {
+    async fn load_submission(&self, url: &str) -> Result<Option<PostInfo>, SiteError> {
         let cookies = vec![
             format!("a={}", self.cookies.0),
             format!("b={}", self.cookies.1),
@@ -349,8 +349,10 @@ impl FurAffinity {
             .client
             .get(url)
             .header(reqwest::header::COOKIE, cookies)
-            .send()?
-            .text()?;
+            .send()
+            .await?
+            .text()
+            .await?;
 
         let body = scraper::Html::parse_document(&resp);
         let img = match body.select(&self.submission).next() {
@@ -377,7 +379,7 @@ impl Site for FurAffinity {
         "FurAffinity"
     }
 
-    fn is_supported(&mut self, url: &str) -> bool {
+    async fn is_supported(&mut self, url: &str) -> bool {
         url.contains("furaffinity.net/view/")
             || url.contains("furaffinity.net/full/")
             || url.contains("facdn.net/art/")
@@ -391,7 +393,7 @@ impl Site for FurAffinity {
         let image = if url.contains("facdn.net/art/") {
             self.load_direct_url(url).await
         } else {
-            self.load_submission(url)
+            self.load_submission(url).await
         };
 
         image.map(|sub| sub.map(|post| vec![post]))
@@ -433,7 +435,7 @@ impl Site for Mastodon {
         "Mastodon"
     }
 
-    fn is_supported(&mut self, url: &str) -> bool {
+    async fn is_supported(&mut self, url: &str) -> bool {
         let captures = match self.matcher.captures(url) {
             Some(captures) => captures,
             None => return false,
@@ -450,6 +452,7 @@ impl Site for Mastodon {
         let resp = match reqwest::Client::new()
             .head(&format!("{}/api/v1/instance", base))
             .send()
+            .await
         {
             Ok(resp) => resp,
             Err(_) => {
@@ -480,12 +483,12 @@ impl Site for Mastodon {
             .get(&format!("{}/api/v1/statuses/{}", base, status_id))
             .send();
 
-        let mut resp = match resp {
+        let resp = match resp.await {
             Ok(resp) => resp,
             Err(_) => return Err(SiteError {}),
         };
 
-        let json: MastodonStatus = match resp.json() {
+        let json: MastodonStatus = match resp.json().await {
             Ok(json) => json,
             Err(_) => return Err(SiteError {}),
         };
@@ -530,7 +533,7 @@ impl Site for Weasyl {
         "Weasyl"
     }
 
-    fn is_supported(&mut self, url: &str) -> bool {
+    async fn is_supported(&mut self, url: &str) -> bool {
         self.matcher.is_match(url)
     }
 
@@ -548,8 +551,10 @@ impl Site for Weasyl {
                 sub_id
             ))
             .header("X-Weasyl-API-Key", self.api_key.as_bytes())
-            .send()?
-            .json()?;
+            .send()
+            .await?
+            .json()
+            .await?;
 
         let submissions = resp
             .as_object()?
