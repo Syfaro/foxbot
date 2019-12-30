@@ -98,7 +98,10 @@ async fn main() {
 
                             let images = match site.get_images(inline.from.id, link_str).await {
                                 Ok(images) => images,
-                                Err(_) => continue 'link,
+                                Err(e) => {
+                                    log::warn!("Unable to get image: {:?}", e);
+                                    continue 'link;
+                                }
                             };
 
                             let images = match images {
