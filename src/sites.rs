@@ -1,7 +1,14 @@
 use async_trait::async_trait;
+use reqwest::header;
 use serde::Deserialize;
 use std::collections::HashMap;
 use tokio01::runtime::current_thread::block_on_all;
+
+const USER_AGENT: &str = concat!(
+    "t.me/FoxBot version ",
+    env!("CARGO_PKG_VERSION"),
+    " developed by @Syfaro"
+);
 
 #[derive(Debug)]
 pub struct PostInfo {
@@ -18,30 +25,38 @@ fn get_file_ext(name: &str) -> Option<&str> {
     name.split('.').last()
 }
 
-#[derive(Debug, Clone)]
-pub struct SiteError;
+#[derive(Debug)]
+pub struct SiteError {
+    error: Option<Box<dyn std::error::Error>>,
+}
 
 impl From<reqwest::Error> for SiteError {
-    fn from(_: reqwest::Error) -> SiteError {
-        SiteError {}
+    fn from(error: reqwest::Error) -> SiteError {
+        SiteError {
+            error: Some(Box::new(error)),
+        }
     }
 }
 
 impl From<serde_json::Error> for SiteError {
-    fn from(_: serde_json::Error) -> SiteError {
-        SiteError {}
+    fn from(error: serde_json::Error) -> SiteError {
+        SiteError {
+            error: Some(Box::new(error)),
+        }
     }
 }
 
 impl From<std::option::NoneError> for SiteError {
     fn from(_: std::option::NoneError) -> SiteError {
-        SiteError {}
+        SiteError { error: None }
     }
 }
 
 impl From<egg_mode::error::Error> for SiteError {
-    fn from(_: egg_mode::error::Error) -> SiteError {
-        SiteError {}
+    fn from(error: egg_mode::error::Error) -> SiteError {
+        SiteError {
+            error: Some(Box::new(error)),
+        }
     }
 }
 
@@ -82,7 +97,12 @@ impl Site for Direct {
         let client = reqwest::Client::new();
 
         // Make a HTTP HEAD request to determine the Content-Type.
-        let resp = match client.head(url).send().await {
+        let resp = match client
+            .head(url)
+            .header(header::USER_AGENT, USER_AGENT)
+            .send()
+            .await
+        {
             Ok(resp) => resp,
             Err(_) => return false,
         };
@@ -171,7 +191,14 @@ impl Site for E621 {
             format!("https://e621.net/post/show.json?md5={}", md5)
         };
 
-        let resp: E621Post = self.client.get(&endpoint).send().await?.json().await?;
+        let resp: E621Post = self
+            .client
+            .get(&endpoint)
+            .header(header::USER_AGENT, USER_AGENT)
+            .send()
+            .await?
+            .json()
+            .await?;
 
         Ok(Some(vec![PostInfo {
             file_type: resp.file_ext,
@@ -348,7 +375,8 @@ impl FurAffinity {
         let resp = self
             .client
             .get(url)
-            .header(reqwest::header::COOKIE, cookies)
+            .header(header::COOKIE, cookies)
+            .header(header::USER_AGENT, USER_AGENT)
             .send()
             .await?
             .text()
@@ -451,6 +479,7 @@ impl Site for Mastodon {
 
         let resp = match reqwest::Client::new()
             .head(&format!("{}/api/v1/instance", base))
+            .header(header::USER_AGENT, USER_AGENT)
             .send()
             .await
         {
@@ -481,16 +510,25 @@ impl Site for Mastodon {
 
         let resp = reqwest::Client::new()
             .get(&format!("{}/api/v1/statuses/{}", base, status_id))
+            .header(header::USER_AGENT, USER_AGENT)
             .send();
 
         let resp = match resp.await {
             Ok(resp) => resp,
-            Err(_) => return Err(SiteError {}),
+            Err(e) => {
+                return Err(SiteError {
+                    error: Some(Box::new(e)),
+                })
+            }
         };
 
         let json: MastodonStatus = match resp.json().await {
             Ok(json) => json,
-            Err(_) => return Err(SiteError {}),
+            Err(e) => {
+                return Err(SiteError {
+                    error: Some(Box::new(e)),
+                })
+            }
         };
 
         if json.media_attachments.is_empty() {
@@ -551,6 +589,7 @@ impl Site for Weasyl {
                 sub_id
             ))
             .header("X-Weasyl-API-Key", self.api_key.as_bytes())
+            .header(header::USER_AGENT, USER_AGENT)
             .send()
             .await?
             .json()
