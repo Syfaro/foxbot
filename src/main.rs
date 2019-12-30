@@ -123,7 +123,15 @@ async fn main() {
                     .collect();
 
                 if responses.is_empty() {
-                    responses.push(get_empty_query());
+                    responses.push(if inline.query.is_empty() {
+                        InlineQueryResult::article(
+                            generate_id(),
+                            "Type your link or click me for more info".into(),
+                            "Hi there! I'm @FoxBot.\n\nBy typing my name into the Telegram message box followed by a link, I'll grab your image and let you send it to your chats while adding a source and direct image link. If you message me directly, you can even add your Twitter account to get content from locked accounts.".into(),
+                        )
+                    } else {
+                        get_empty_query()
+                    });
                 }
 
                 let answer_inline = AnswerInlineQuery {
@@ -387,7 +395,37 @@ fn process_result(result: &PostInfo) -> Option<Vec<InlineQueryResult>> {
 
             Some(results)
         }
-        _ => None,
+        "gif" => {
+            let mut gif = InlineQueryResult::gif(
+                generate_id(),
+                result.url.to_owned(),
+                result.thumb.to_owned(),
+            );
+            gif.reply_markup = Some(keyboard.clone());
+
+            let mut results = vec![gif];
+
+            if let Some(message) = &result.message {
+                let mut gif = InlineQueryResult::gif(
+                    generate_id(),
+                    result.url.to_owned(),
+                    result.thumb.to_owned(),
+                );
+                gif.reply_markup = Some(keyboard);
+
+                if let InlineQueryType::GIF(ref mut result) = gif.content {
+                    result.caption = Some(message.to_string());
+                }
+
+                results.push(gif);
+            };
+
+            Some(results)
+        }
+        other => {
+            log::warn!("Got unusable type: {}", other);
+            None
+        }
     }
 }
 

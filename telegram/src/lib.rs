@@ -690,6 +690,7 @@ pub struct InlineQueryResult {
 pub enum InlineQueryType {
     Article(InlineQueryResultArticle),
     Photo(InlineQueryResultPhoto),
+    GIF(InlineQueryResultGIF),
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -704,6 +705,14 @@ pub struct InlineQueryResultArticle {
 #[derive(Serialize, Debug, Clone)]
 pub struct InlineQueryResultPhoto {
     pub photo_url: String,
+    pub thumb_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct InlineQueryResultGIF {
+    pub gif_url: String,
     pub thumb_url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub caption: Option<String>,
@@ -736,6 +745,19 @@ impl InlineQueryResult {
                 thumb_url,
                 caption: None,
             }),
+        }
+    }
+
+    pub fn gif(id: String, gif_url: String, thumb_url: String) -> InlineQueryResult {
+        InlineQueryResult {
+            result_type: "gif".into(),
+            id,
+            reply_markup: None,
+            content: InlineQueryType::GIF(InlineQueryResultGIF {
+                gif_url,
+                thumb_url,
+                caption: None,
+            })
         }
     }
 }
