@@ -736,7 +736,7 @@ impl InlineQueryResult {
                 gif_url,
                 thumb_url,
                 caption: None,
-            })
+            }),
         }
     }
 }
@@ -752,6 +752,30 @@ pub struct InputMessageText {
     pub message_text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parse_mode: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SetWebhook {
+    pub url: String,
+}
+
+impl TelegramRequest for SetWebhook {
+    type Response = bool;
+
+    fn endpoint(&self) -> &str {
+        "setWebhook"
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct DeleteWebhook;
+
+impl TelegramRequest for DeleteWebhook {
+    type Response = bool;
+
+    fn endpoint(&self) -> &str {
+        "deleteWebhook"
+    }
 }
 
 pub struct Telegram {

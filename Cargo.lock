@@ -445,6 +445,7 @@ dependencies = [
  "fautil 0.1.0",
  "fluent 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "fluent-langneg 0.11.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hyper 0.13.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "linkify 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "pickledb 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",

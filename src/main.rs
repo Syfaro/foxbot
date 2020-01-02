@@ -73,9 +73,6 @@ async fn main() {
         std::env::var("TELEGRAM_APITOKEN").expect("Missing Telegram API token"),
     ));
 
-    let mut update_req = GetUpdates::default();
-    update_req.timeout = Some(30);
-
     let mut finder = linkify::LinkFinder::new();
     finder.kinds(&[linkify::LinkKind::Url]);
 
@@ -117,6 +114,98 @@ async fn main() {
         langs,
         best_lang: HashMap::new(),
     }));
+
+    let use_webhooks: bool = std::env::var("USE_WEBHOOKS")
+        .unwrap_or_else(|_| "false".to_string())
+        .parse()
+        .unwrap_or(false);
+
+    if use_webhooks {
+        let webhook_endpoint = std::env::var("WEBHOOK_ENDPOINT").expect("Missing WEBHOOK_ENDPOINT");
+        let set_webhook = SetWebhook {
+            url: webhook_endpoint,
+        };
+        if let Err(e) = bot.make_request(&set_webhook).await {
+            log::error!("Unable to set webhook: {:?}", e);
+        }
+        receive_webhook(handler).await;
+    } else {
+        let delete_webhook = DeleteWebhook {};
+        if let Err(e) = bot.make_request(&delete_webhook).await {
+            log::error!("Unable to clear webhook: {:?}", e);
+        }
+        poll_updates(bot, handler).await;
+    }
+}
+
+async fn handle_request(
+    req: hyper::Request<hyper::Body>,
+    handler: Arc<Mutex<MessageHandler>>,
+    secret: &str,
+) -> hyper::Result<hyper::Response<hyper::Body>> {
+    use hyper::{Body, Response, StatusCode};
+
+    log::trace!("Got HTTP request: {} {}", req.method(), req.uri().path());
+
+    match (req.method(), req.uri().path()) {
+        (&hyper::Method::POST, path) if path == secret => {
+            log::trace!("Handling update");
+            let body = req.into_body();
+            let bytes = hyper::body::to_bytes(body)
+                .await
+                .expect("Unable to read body bytes");
+            let update: Update = match serde_json::from_slice(&bytes) {
+                Ok(update) => update,
+                Err(_) => {
+                    let mut resp = Response::default();
+                    *resp.status_mut() = StatusCode::BAD_REQUEST;
+                    return Ok(resp);
+                }
+            };
+            let mut handler = handler.lock().await;
+            log::debug!("Got update: {:?}", update);
+            handler.handle_message(update).await;
+            Ok(Response::new(Body::from("✓")))
+        }
+        _ => {
+            let mut not_found = Response::default();
+            *not_found.status_mut() = StatusCode::NOT_FOUND;
+            Ok(not_found)
+        }
+    }
+}
+
+async fn receive_webhook(handler: Arc<Mutex<MessageHandler>>) {
+    let host = std::env::var("HTTP_HOST").expect("Missing HTTP_HOST");
+    let addr = host.parse().expect("Invalid HTTP_HOST");
+
+    let secret_path = format!(
+        "/{}",
+        std::env::var("HTTP_SECRET").expect("Missing HTTP_SECRET")
+    );
+    let secret_path: &'static str = Box::leak(secret_path.into_boxed_str());
+
+    let make_svc = hyper::service::make_service_fn(move |_conn| {
+        let handler = handler.clone();
+        async move {
+            Ok::<_, hyper::Error>(hyper::service::service_fn(move |req| {
+                handle_request(req, handler.clone(), secret_path)
+            }))
+        }
+    });
+
+    let server = hyper::Server::bind(&addr).serve(make_svc);
+
+    log::info!("Listening on http://{}", addr);
+
+    if let Err(e) = server.await {
+        log::error!("Server error: {:?}", e);
+    }
+}
+
+async fn poll_updates(bot: Arc<Telegram>, handler: Arc<Mutex<MessageHandler>>) {
+    let mut update_req = GetUpdates::default();
+    update_req.timeout = Some(30);
 
     loop {
         let updates = match bot.make_request(&update_req).await {
@@ -678,7 +767,10 @@ impl MessageHandler {
 
         let mut args = fluent::FluentArgs::new();
         args.insert("distance", fluent::FluentValue::from(first.distance));
-        args.insert("link", fluent::FluentValue::from(format!("https://www.furaffinity.net/view/{}", first.id)));
+        args.insert(
+            "link",
+            fluent::FluentValue::from(format!("https://www.furaffinity.net/view/{}", first.id)),
+        );
 
         let message = SendMessage {
             chat_id: message.chat.id.into(),
