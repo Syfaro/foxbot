@@ -25,3 +25,7 @@ Env Name               | Description
 `TWITTER_CONSUMER_KEY` | Twitter app consumer key
 `TWITTER_CONSUMER_KEY` | Twitter app consumer secret
 `TWITTER_DATABASE`     | Path to database file to store Twitter credentials
+`USE_WEBHOOKS`         | If should configure and use webhooks instead of polling
+`WEBHOOK_ENDPOINT`     | If using webhooks, endpoint to set with Telegram
+`HTTP_HOST`            | If using webhooks, host to listen for updates on
+`HTTP_SECRET`          | If using webhooks, secret endpoint to use for Telegram updates
