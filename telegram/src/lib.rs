@@ -490,21 +490,11 @@ pub struct SendChatAction {
 }
 
 /// ChatAction is the action that the bot is indicating.
-#[derive(Debug)]
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "snake_case")]
 pub enum ChatAction {
     Typing,
     UploadPhoto,
-}
-
-impl serde::Serialize for ChatAction {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let s = match self {
-            ChatAction::Typing => "typing",
-            ChatAction::UploadPhoto => "upload_photo",
-        };
-
-        serializer.serialize_str(s)
-    }
 }
 
 impl TelegramRequest for SendChatAction {
@@ -638,7 +628,7 @@ impl TelegramRequest for SendMediaGroup {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct AnswerInlineQuery {
     pub inline_query_id: String,
     pub results: Vec<InlineQueryResult>,
