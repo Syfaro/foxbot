@@ -74,7 +74,7 @@ pub struct Update {
     pub callback_query: Option<CallbackQuery>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct User {
     pub id: i32,
     pub is_bot: bool,
@@ -84,14 +84,14 @@ pub struct User {
     pub language_code: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Chat {
     pub id: i64,
     #[serde(rename = "type")]
     pub chat_type: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct MessageEntity {
     #[serde(rename = "type")]
     pub entity_type: MessageEntityType,
@@ -101,12 +101,14 @@ pub struct MessageEntity {
     pub user: Option<User>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MessageEntityType {
     Mention,
     Hashtag,
     Cashtag,
     BotCommand,
+    #[serde(rename = "url")]
     URL,
     Email,
     PhoneNumber,
@@ -118,32 +120,7 @@ pub enum MessageEntityType {
     TextMention,
 }
 
-impl<'de> Deserialize<'de> for MessageEntityType {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        Ok(match s.as_str() {
-            "mention" => Self::Mention,
-            "hashtag" => Self::Hashtag,
-            "cashtag" => Self::Cashtag,
-            "bot_command" => Self::BotCommand,
-            "url" => Self::URL,
-            "email" => Self::Email,
-            "phone_number" => Self::PhoneNumber,
-            "bold" => Self::Bold,
-            "italic" => Self::Italic,
-            "code" => Self::Code,
-            "pre" => Self::Pre,
-            "text_link" => Self::TextLink,
-            "text_mention" => Self::TextMention,
-            _ => unimplemented!(),
-        })
-    }
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Message {
     pub message_id: i32,
     pub from: Option<User>,
@@ -153,7 +130,13 @@ pub struct Message {
     pub entities: Option<Vec<MessageEntity>>,
 }
 
-#[derive(Debug, Deserialize)]
+impl Message {
+    pub fn chat_id(&self) -> ChatID {
+        ChatID::Identifier(self.chat.id)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct PhotoSize {
     pub file_id: String,
     pub width: i32,
@@ -173,7 +156,7 @@ pub struct ResponseParameters {
     pub retry_after: Option<i32>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct InlineQuery {
     pub id: String,
     pub from: User,
@@ -212,6 +195,12 @@ pub enum ChatID {
     Identifier(i64),
     /// A username for a channel.
     Username(String),
+}
+
+impl From<Message> for ChatID {
+    fn from(item: Message) -> Self {
+        ChatID::Identifier(item.chat.id)
+    }
 }
 
 impl From<i64> for ChatID {

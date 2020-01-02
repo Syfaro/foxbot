@@ -1,10 +1,12 @@
 #![feature(try_trait)]
 
 use sites::{PostInfo, Site};
+use std::collections::HashMap;
 use std::sync::Arc;
 use telegram::*;
 use tokio::sync::Mutex;
 use tokio01::runtime::current_thread::block_on_all;
+use unic_langid::LanguageIdentifier;
 
 mod sites;
 
@@ -16,6 +18,9 @@ fn generate_id() -> String {
         .take(24)
         .collect()
 }
+
+static L10N_RESOURCES: &[&str] = &["foxbot.ftl"];
+static L10N_LANGS: &[&str] = &["en-US"];
 
 #[tokio::main]
 async fn main() {
@@ -74,6 +79,33 @@ async fn main() {
     let mut finder = linkify::LinkFinder::new();
     finder.kinds(&[linkify::LinkKind::Url]);
 
+    let mut dir = std::env::current_dir().expect("Unable to get directory");
+    dir.push("langs");
+
+    use std::io::Read;
+
+    let mut langs = HashMap::new();
+
+    for lang in L10N_LANGS {
+        let path = dir.join(lang);
+
+        let mut lang_resources = Vec::with_capacity(L10N_RESOURCES.len());
+        let langid = lang
+            .parse::<LanguageIdentifier>()
+            .expect("Unable to parse language");
+
+        for resource in L10N_RESOURCES {
+            let file = path.join(resource);
+            let mut f = std::fs::File::open(file).expect("Unable to open language");
+            let mut s = String::new();
+            f.read_to_string(&mut s).expect("Unable to read file");
+
+            lang_resources.push(s);
+        }
+
+        langs.insert(langid, lang_resources);
+    }
+
     let handler = Arc::new(Mutex::new(MessageHandler {
         sites,
         bot: bot.clone(),
@@ -82,6 +114,8 @@ async fn main() {
         db,
         consumer_key,
         consumer_secret,
+        langs,
+        best_lang: HashMap::new(),
     }));
 
     loop {
@@ -111,16 +145,93 @@ async fn main() {
 
 struct MessageHandler {
     sites: Vec<Box<dyn Site + Send + Sync>>,
-    bot: Arc<telegram::Telegram>,
+    bot: Arc<Telegram>,
     fapi: Arc<fautil::FAUtil>,
     finder: linkify::LinkFinder,
     db: pickledb::PickleDb,
     consumer_key: String,
     consumer_secret: String,
+    langs: HashMap<LanguageIdentifier, Vec<String>>,
+    best_lang: HashMap<String, fluent::FluentBundle<fluent::FluentResource>>,
+}
+
+fn get_message(
+    bundle: &fluent::FluentBundle<fluent::FluentResource>,
+    name: &str,
+    args: Option<fluent::FluentArgs>,
+) -> Result<String, Vec<fluent::FluentError>> {
+    let msg = bundle.get_message(name).expect("Message doesn't exist");
+    let pattern = msg.value.expect("Message has no value");
+    let mut errors = vec![];
+    let value = bundle.format_pattern(&pattern, args.as_ref(), &mut errors);
+    if errors.is_empty() {
+        Ok(value.to_string())
+    } else {
+        Err(errors)
+    }
 }
 
 impl MessageHandler {
-    async fn handle_inline(&mut self, inline: telegram::InlineQuery) {
+    fn get_fluent_bundle(
+        &mut self,
+        requested: Option<&str>,
+    ) -> &fluent::FluentBundle<fluent::FluentResource> {
+        let requested = if let Some(requested) = requested {
+            requested
+        } else {
+            "en-US"
+        };
+
+        log::trace!("Looking up language bundle for {}", requested);
+
+        if self.best_lang.contains_key(requested) {
+            return self
+                .best_lang
+                .get(requested)
+                .expect("Should have contained");
+        }
+
+        log::info!("Got new language {}, building bundle", requested);
+
+        let requested_locale = requested
+            .parse::<LanguageIdentifier>()
+            .expect("Requested locale is invalid");
+        let requested_locales: Vec<LanguageIdentifier> = vec![requested_locale];
+        let default_locale = L10N_LANGS[0]
+            .parse::<LanguageIdentifier>()
+            .expect("Unable to parse langid");
+        let available: Vec<LanguageIdentifier> = self.langs.keys().map(Clone::clone).collect();
+        let resolved_locales = fluent_langneg::negotiate_languages(
+            &requested_locales,
+            &available,
+            Some(&&default_locale),
+            fluent_langneg::NegotiationStrategy::Filtering,
+        );
+
+        let current_locale = resolved_locales.get(0).expect("No locales were available");
+
+        let mut bundle =
+            fluent::FluentBundle::<fluent::FluentResource>::new(resolved_locales.clone());
+        let resources = self
+            .langs
+            .get(current_locale)
+            .expect("Missing known locale");
+
+        for resource in resources {
+            let resource = fluent::FluentResource::try_new(resource.to_string())
+                .expect("Unable to parse FTL string");
+            bundle
+                .add_resource(resource)
+                .expect("Unable to add resource");
+        }
+
+        self.best_lang.insert(requested.to_string(), bundle);
+        self.best_lang
+            .get(requested)
+            .expect("Value just inserted is missing")
+    }
+
+    async fn handle_inline(&mut self, inline: InlineQuery) {
         let links: Vec<_> = self.finder.links(&inline.query).collect();
         let mut results: Vec<PostInfo> = Vec::new();
 
@@ -158,20 +269,26 @@ impl MessageHandler {
 
         let mut responses: Vec<InlineQueryResult> = results
             .iter()
-            .map(process_result)
+            .map(|result| self.process_result(result, &inline.from))
             .filter_map(|result| result)
             .flatten()
             .collect();
 
         if responses.is_empty() {
+            let bundle = self.get_fluent_bundle(inline.from.language_code.as_deref());
+
             responses.push(if inline.query.is_empty() {
                 InlineQueryResult::article(
                     generate_id(),
-                    "Type your link or click me for more info".into(),
-                    "Hi there! I'm @FoxBot.\n\nBy typing my name into the Telegram message box followed by a link, I'll grab your image and let you send it to your chats while adding a source and direct image link. If you message me directly, you can even add your Twitter account to get content from locked accounts.".into(),
+                    get_message(&bundle, "inline-help-inline-title", None).unwrap(),
+                    get_message(&bundle, "inline-help-inline-body", None).unwrap(),
                 )
             } else {
-                get_empty_query()
+                InlineQueryResult::article(
+                    generate_id(),
+                    get_message(&bundle, "inline-no-results-title", None).unwrap(),
+                    get_message(&bundle, "inline-no-results-body", None).unwrap(),
+                )
             });
         }
 
@@ -187,12 +304,8 @@ impl MessageHandler {
         }
     }
 
-    async fn handle_photo(&self, message: telegram::Message) {
-        process_photo(&self.bot, &self.fapi, message).await;
-    }
-
-    async fn handle_command(&mut self, message: telegram::Message) {
-        let entities = message.entities.unwrap(); // only here because this existed
+    async fn handle_command(&mut self, message: Message) {
+        let entities = message.clone().entities.unwrap(); // only here because this existed
 
         let command = entities
             .iter()
@@ -201,7 +314,7 @@ impl MessageHandler {
             Some(command) => command,
             None => return,
         };
-        let text = message.text.unwrap();
+        let text = message.text.clone().unwrap();
         let command_text: String = text
             .chars()
             .skip(command.offset as usize)
@@ -216,21 +329,35 @@ impl MessageHandler {
 
         match command_text.as_ref() {
             "/twitter" => {
-                authenticate_twitter(
-                    &mut self.db,
-                    &self.bot,
-                    message.message_id,
-                    &message.from.unwrap(),
-                )
-                .await;
+                self.authenticate_twitter(message.message_id, &message.from.unwrap())
+                    .await;
+            }
+            "/help" | "/start" => {
+                let from = message.from.clone().unwrap();
+                let bundle = self.get_fluent_bundle(from.language_code.as_deref());
+
+                let message = SendMessage {
+                    chat_id: message.chat_id(),
+                    text: get_message(&bundle, "welcome", None).unwrap(),
+                    ..Default::default()
+                };
+
+                if let Err(e) = self.bot.make_request(&message).await {
+                    log::warn!("Unable to send help message: {:?}", e);
+                }
             }
             _ => log::info!("Unknown command: {}", command_text),
         };
     }
 
-    async fn handle_text(&mut self, message: telegram::Message) {
+    async fn handle_text(&mut self, message: Message) {
         let text = message.text.unwrap(); // only here because this existed
         let from = message.from.unwrap();
+
+        if text.trim().parse::<i32>().is_err() {
+            log::trace!("Got text that wasn't OOB, ignoring");
+            return;
+        }
 
         log::trace!("Checking if message was Twitter code");
 
@@ -249,9 +376,11 @@ impl MessageHandler {
             Err(e) => {
                 log::warn!("User was unable to verify OOB: {:?}", e);
 
+                let bundle = self.get_fluent_bundle(from.language_code.as_deref());
+
                 let message = SendMessage {
                     chat_id: from.id.into(),
-                    text: "Something went wrong, please try again later.".to_string(),
+                    text: get_message(&bundle, "error-generic", None).unwrap(),
                     reply_to_message_id: Some(message.message_id),
                     ..Default::default()
                 };
@@ -279,9 +408,11 @@ impl MessageHandler {
         ) {
             log::warn!("Unable to save user credentials: {:?}", e);
 
+            let bundle = self.get_fluent_bundle(from.language_code.as_deref());
+
             let message = SendMessage {
                 chat_id: from.id.into(),
-                text: "Something went wrong, please try again later.".to_string(),
+                text: get_message(&bundle, "error-generic", None).unwrap(),
                 reply_to_message_id: Some(message.message_id),
                 ..Default::default()
             };
@@ -292,9 +423,14 @@ impl MessageHandler {
             return;
         }
 
+        let mut args = fluent::FluentArgs::new();
+        args.insert("userName", fluent::FluentValue::from(token.2));
+
+        let bundle = self.get_fluent_bundle(from.language_code.as_deref());
+
         let message = SendMessage {
             chat_id: from.id.into(),
-            text: format!("Welcome aboard, {}!", token.2),
+            text: get_message(&bundle, "twitter-welcome", Some(args)).unwrap(),
             reply_to_message_id: Some(message.message_id),
             ..Default::default()
         };
@@ -304,12 +440,12 @@ impl MessageHandler {
         }
     }
 
-    async fn handle_message(&mut self, update: telegram::Update) {
+    async fn handle_message(&mut self, update: Update) {
         if let Some(inline) = update.inline_query {
             self.handle_inline(inline).await;
         } else if let Some(message) = update.message {
             if message.photo.is_some() {
-                self.handle_photo(message).await;
+                self.process_photo(message).await;
             } else if message.entities.is_some() {
                 self.handle_command(message).await;
             } else if message.text.is_some() {
@@ -317,250 +453,243 @@ impl MessageHandler {
             }
         }
     }
-}
 
-async fn authenticate_twitter(db: &mut pickledb::PickleDb, bot: &Telegram, id: i32, user: &User) {
-    let (consumer_key, consumer_secret) = (
-        std::env::var("TWITTER_CONSUMER_KEY").expect("Missing Twitter consumer key"),
-        std::env::var("TWITTER_CONSUMER_SECRET").expect("Missing Twitter consumer secret"),
-    );
+    async fn authenticate_twitter(&mut self, id: i32, user: &User) {
+        let con_token =
+            egg_mode::KeyPair::new(self.consumer_key.clone(), self.consumer_secret.clone());
 
-    let con_token = egg_mode::KeyPair::new(consumer_key, consumer_secret);
+        let request_token = match block_on_all(egg_mode::request_token(&con_token, "oob")) {
+            Ok(req) => req,
+            Err(e) => {
+                log::warn!("Unable to get request token: {:?}", e);
 
-    let request_token = match block_on_all(egg_mode::request_token(&con_token, "oob")) {
-        Ok(req) => req,
-        Err(e) => {
-            log::warn!("Unable to get request token: {:?}", e);
+                let bundle = self.get_fluent_bundle(user.language_code.as_deref());
+
+                let message = SendMessage {
+                    chat_id: user.id.into(),
+                    text: get_message(&bundle, "error-generic", None).unwrap(),
+                    reply_to_message_id: Some(id),
+                    ..Default::default()
+                };
+
+                if let Err(e) = self.bot.make_request(&message).await {
+                    log::warn!("Unable to send message: {:?}", e);
+                }
+                return;
+            }
+        };
+
+        if let Err(e) = self.db.set(
+            &format!("authenticate:{}", user.id),
+            &(request_token.key.clone(), request_token.secret.clone()),
+        ) {
+            log::warn!("Unable to save authenticate: {:?}", e);
+
+            let bundle = self.get_fluent_bundle(user.language_code.as_deref());
 
             let message = SendMessage {
                 chat_id: user.id.into(),
-                text: "Something went wrong, please try again later.".to_string(),
+                text: get_message(&bundle, "error-generic", None).unwrap(),
                 reply_to_message_id: Some(id),
                 ..Default::default()
             };
 
-            if let Err(e) = bot.make_request(&message).await {
+            if let Err(e) = self.bot.make_request(&message).await {
                 log::warn!("Unable to send message: {:?}", e);
             }
             return;
         }
-    };
 
-    if let Err(e) = db.set(
-        &format!("authenticate:{}", user.id),
-        &(request_token.key.clone(), request_token.secret.clone()),
-    ) {
-        log::warn!("Unable to save authenticate: {:?}", e);
+        let url = egg_mode::authorize_url(&request_token);
+
+        let mut args = fluent::FluentArgs::new();
+        args.insert("link", fluent::FluentValue::from(url));
+
+        let bundle = self.get_fluent_bundle(user.language_code.as_deref());
 
         let message = SendMessage {
             chat_id: user.id.into(),
-            text: "Something went wrong, please try again later.".to_string(),
+            text: get_message(&bundle, "twitter-oob", Some(args)).unwrap(),
+            reply_markup: Some(ReplyMarkup::ForceReply(ForceReply::selective())),
             reply_to_message_id: Some(id),
             ..Default::default()
         };
 
-        if let Err(e) = bot.make_request(&message).await {
+        if let Err(e) = self.bot.make_request(&message).await {
             log::warn!("Unable to send message: {:?}", e);
         }
-        return;
     }
 
-    let url = egg_mode::authorize_url(&request_token);
+    fn process_result(&mut self, result: &PostInfo, from: &User) -> Option<Vec<InlineQueryResult>> {
+        let full_url = match &result.full_url {
+            Some(full_url) => full_url,
+            None => &result.url,
+        };
 
-    let message = SendMessage {
-        chat_id: user.id.into(),
-        text: format!(
-            "Please follow the link and enter the 6 digit code returned: {}",
-            url
-        ),
-        reply_markup: Some(ReplyMarkup::ForceReply(ForceReply {
-            force_reply: true,
-            selective: true,
-        })),
-        reply_to_message_id: Some(id),
-        ..Default::default()
-    };
+        let bundle = self.get_fluent_bundle(from.language_code.as_deref());
 
-    if let Err(e) = bot.make_request(&message).await {
-        log::warn!("Unable to send message: {:?}", e);
-    }
-}
-
-fn get_empty_query() -> InlineQueryResult {
-    InlineQueryResult::article(
-        generate_id(),
-        "No results found".into(),
-        "I could not find any results for the provided query.".into(),
-    )
-}
-
-fn process_result(result: &PostInfo) -> Option<Vec<InlineQueryResult>> {
-    let full_url = match &result.full_url {
-        Some(full_url) => full_url,
-        None => &result.url,
-    };
-
-    let mut row = vec![InlineKeyboardButton {
-        text: "Direct Link".into(),
-        url: Some(full_url.to_owned()),
-        callback_data: None,
-    }];
-
-    if full_url != &result.caption {
-        row.push(InlineKeyboardButton {
-            text: "Source".into(),
-            url: Some(result.caption.to_owned()),
+        let mut row = vec![InlineKeyboardButton {
+            text: get_message(&bundle, "inline-direct", None).unwrap(),
+            url: Some(full_url.to_owned()),
             callback_data: None,
-        })
-    }
+        }];
 
-    let keyboard = InlineKeyboardMarkup {
-        inline_keyboard: vec![row],
-    };
+        if full_url != &result.caption {
+            row.push(InlineKeyboardButton {
+                text: get_message(&bundle, "inline-source", None).unwrap(),
+                url: Some(result.caption.to_owned()),
+                callback_data: None,
+            })
+        }
 
-    match result.file_type.as_ref() {
-        "png" | "jpeg" | "jpg" => {
-            let mut photo = InlineQueryResult::photo(
-                generate_id(),
-                result.url.to_owned(),
-                result.thumb.to_owned(),
-            );
-            photo.reply_markup = Some(keyboard.clone());
+        let keyboard = InlineKeyboardMarkup {
+            inline_keyboard: vec![row],
+        };
 
-            let mut results = vec![photo];
-
-            if let Some(message) = &result.message {
+        match result.file_type.as_ref() {
+            "png" | "jpeg" | "jpg" => {
                 let mut photo = InlineQueryResult::photo(
                     generate_id(),
                     result.url.to_owned(),
                     result.thumb.to_owned(),
                 );
-                photo.reply_markup = Some(keyboard);
+                photo.reply_markup = Some(keyboard.clone());
 
-                if let InlineQueryType::Photo(ref mut result) = photo.content {
-                    result.caption = Some(message.to_string());
-                }
+                let mut results = vec![photo];
 
-                results.push(photo);
-            };
+                if let Some(message) = &result.message {
+                    let mut photo = InlineQueryResult::photo(
+                        generate_id(),
+                        result.url.to_owned(),
+                        result.thumb.to_owned(),
+                    );
+                    photo.reply_markup = Some(keyboard);
 
-            Some(results)
-        }
-        "gif" => {
-            let mut gif = InlineQueryResult::gif(
-                generate_id(),
-                result.url.to_owned(),
-                result.thumb.to_owned(),
-            );
-            gif.reply_markup = Some(keyboard.clone());
+                    if let InlineQueryType::Photo(ref mut result) = photo.content {
+                        result.caption = Some(message.to_string());
+                    }
 
-            let mut results = vec![gif];
+                    results.push(photo);
+                };
 
-            if let Some(message) = &result.message {
+                Some(results)
+            }
+            "gif" => {
                 let mut gif = InlineQueryResult::gif(
                     generate_id(),
                     result.url.to_owned(),
                     result.thumb.to_owned(),
                 );
-                gif.reply_markup = Some(keyboard);
+                gif.reply_markup = Some(keyboard.clone());
 
-                if let InlineQueryType::GIF(ref mut result) = gif.content {
-                    result.caption = Some(message.to_string());
+                let mut results = vec![gif];
+
+                if let Some(message) = &result.message {
+                    let mut gif = InlineQueryResult::gif(
+                        generate_id(),
+                        result.url.to_owned(),
+                        result.thumb.to_owned(),
+                    );
+                    gif.reply_markup = Some(keyboard);
+
+                    if let InlineQueryType::GIF(ref mut result) = gif.content {
+                        result.caption = Some(message.to_string());
+                    }
+
+                    results.push(gif);
+                };
+
+                Some(results)
+            }
+            other => {
+                log::warn!("Got unusable type: {}", other);
+                None
+            }
+        }
+    }
+
+    async fn process_photo(&mut self, message: Message) {
+        let chat_action = SendChatAction {
+            chat_id: message.chat.id.into(),
+            action: ChatAction::Typing,
+        };
+
+        if let Err(e) = self.bot.make_request(&chat_action).await {
+            log::warn!("Unable to send chat action: {:?}", e);
+        }
+
+        let photos = message.photo.unwrap();
+
+        let mut most_pixels = 0;
+        let mut file_id = String::default();
+        for photo in photos {
+            let pixels = photo.height * photo.width;
+            if pixels > most_pixels {
+                most_pixels = pixels;
+                file_id = photo.file_id.clone();
+            }
+        }
+
+        let get_file = GetFile { file_id };
+        let file = match self.bot.make_request(&get_file).await {
+            Ok(file) => file,
+            _ => return,
+        };
+
+        let photo = match self.bot.download_file(file.file_path.unwrap()).await {
+            Ok(photo) => photo,
+            _ => return,
+        };
+
+        if let Err(e) = self.bot.make_request(&chat_action).await {
+            log::warn!("Unable to send chat action: {:?}", e);
+        }
+
+        let matches = match self.fapi.image_search(photo).await {
+            Ok(matches) if !matches.is_empty() => matches,
+            _ => {
+                let bundle = self.get_fluent_bundle(message.from.unwrap().language_code.as_deref());
+
+                let message = SendMessage {
+                    chat_id: message.chat.id.into(),
+                    text: get_message(&bundle, "reverse-no-results", None).unwrap(),
+                    reply_to_message_id: Some(message.message_id),
+                    ..Default::default()
+                };
+
+                if let Err(e) = self.bot.make_request(&message).await {
+                    log::error!("Unable to respond to photo: {:?}", e);
                 }
 
-                results.push(gif);
-            };
-
-            Some(results)
-        }
-        other => {
-            log::warn!("Got unusable type: {}", other);
-            None
-        }
-    }
-}
-
-async fn process_photo(bot: &Telegram, fapi: &fautil::FAUtil, message: Message) {
-    let chat_action = SendChatAction {
-        chat_id: message.chat.id.into(),
-        action: ChatAction::Typing,
-    };
-    if let Err(e) = bot.make_request(&chat_action).await {
-        log::warn!("Unable to send chat action: {:?}", e);
-    }
-
-    let photos = message.photo.unwrap();
-
-    let mut most_pixels = 0;
-    let mut file_id = String::default();
-    for photo in photos {
-        let pixels = photo.height * photo.width;
-        if pixels > most_pixels {
-            most_pixels = pixels;
-            file_id = photo.file_id.clone();
-        }
-    }
-
-    let get_file = GetFile { file_id };
-    let file = match bot.make_request(&get_file).await {
-        Ok(file) => file,
-        _ => return,
-    };
-
-    let photo = match bot.download_file(file.file_path.unwrap()).await {
-        Ok(photo) => photo,
-        _ => return,
-    };
-
-    if let Err(e) = bot.make_request(&chat_action).await {
-        log::warn!("Unable to send chat action: {:?}", e);
-    }
-
-    let matches = match fapi.image_search(photo).await {
-        Ok(matches) if !matches.is_empty() => matches,
-        _ => {
-            let message = SendMessage {
-                chat_id: message.chat.id.into(),
-                text: "I was unable to find anything, sorry.".to_owned(),
-                reply_to_message_id: Some(message.message_id),
-                ..Default::default()
-            };
-
-            if let Err(e) = bot.make_request(&message).await {
-                log::error!("Unable to respond to photo: {:?}", e);
+                return;
             }
+        };
 
-            return;
+        let first = matches.get(0).unwrap();
+        log::debug!("Match has distance of {}", first.distance);
+
+        let bundle = self.get_fluent_bundle(message.from.unwrap().language_code.as_deref());
+
+        let name = if first.distance < 5 {
+            "reverse-good-result"
+        } else {
+            "reverse-bad-result"
+        };
+
+        let mut args = fluent::FluentArgs::new();
+        args.insert("distance", fluent::FluentValue::from(first.distance));
+        args.insert("link", fluent::FluentValue::from(format!("https://www.furaffinity.net/view/{}", first.id)));
+
+        let message = SendMessage {
+            chat_id: message.chat.id.into(),
+            text: get_message(&bundle, name, Some(args)).unwrap(),
+            disable_web_page_preview: Some(first.distance > 5),
+            reply_to_message_id: Some(message.message_id),
+            ..Default::default()
+        };
+
+        if let Err(e) = self.bot.make_request(&message).await {
+            log::error!("Unable to respond to photo: {:?}", e);
         }
-    };
-
-    let first = matches.get(0).unwrap();
-    log::debug!("Match has distance of {}", first.distance);
-
-    let (text, hide_preview) = if first.distance < 5 {
-        (
-            format!(
-                "I found this (distance of {}): https://www.furaffinity.net/view/{}/",
-                first.distance, first.id
-            ),
-            false,
-        )
-    } else {
-        (
-            format!("I found this but it may not be the same image, be warned (distance of {}): https://www.furaffinity.net/view/{}/", first.distance, first.id),
-            true,
-        )
-    };
-
-    let message = SendMessage {
-        chat_id: message.chat.id.into(),
-        text,
-        disable_web_page_preview: Some(hide_preview),
-        reply_to_message_id: Some(message.message_id),
-        ..Default::default()
-    };
-
-    if let Err(e) = bot.make_request(&message).await {
-        log::error!("Unable to respond to photo: {:?}", e);
     }
 }
