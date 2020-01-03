@@ -73,6 +73,18 @@ async fn main() {
         std::env::var("TELEGRAM_APITOKEN").expect("Missing Telegram API token"),
     ));
 
+    let (influx_host, influx_db) = (
+        std::env::var("INFLUX_HOST").expect("Missing InfluxDB host"),
+        std::env::var("INFLUX_DB").expect("Missing InfluxDB database")
+    );
+
+    let (influx_user, influx_pass) = (
+        std::env::var("INFLUX_USER").expect("Missing InfluxDB user"),
+        std::env::var("INFLUX_PASS").expect("Missing InfluxDB password"),
+    );
+
+    let influx = influxdb::Client::new(influx_host, influx_db).with_auth(influx_user, influx_pass);
+
     let mut finder = linkify::LinkFinder::new();
     finder.kinds(&[linkify::LinkKind::Url]);
 
@@ -113,6 +125,7 @@ async fn main() {
         consumer_secret,
         langs,
         best_lang: HashMap::new(),
+        influx,
     }));
 
     let use_webhooks: bool = std::env::var("USE_WEBHOOKS")
@@ -145,6 +158,8 @@ async fn handle_request(
 ) -> hyper::Result<hyper::Response<hyper::Body>> {
     use hyper::{Body, Response, StatusCode};
 
+    let now = std::time::Instant::now();
+
     log::trace!("Got HTTP request: {} {}", req.method(), req.uri().path());
 
     match (req.method(), req.uri().path()) {
@@ -162,9 +177,23 @@ async fn handle_request(
                     return Ok(resp);
                 }
             };
-            let mut handler = handler.lock().await;
-            log::debug!("Got update: {:?}", update);
-            handler.handle_message(update).await;
+
+            {
+                let mut handler = handler.lock().await;
+                log::debug!("Got update: {:?}", update);
+                handler.handle_message(update).await;
+            }
+
+            tokio::spawn(async move {
+                let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "http")
+                    .add_field("duration", now.elapsed().as_millis() as i64);
+
+                let handler = handler.lock().await;
+                if let Err(e) = handler.influx.query(&point).await {
+                    log::error!("Unable to send http request info to InfluxDB: {:?}", e);
+                }
+            });
+
             Ok(Response::new(Body::from("✓")))
         }
         _ => {
@@ -242,6 +271,7 @@ struct MessageHandler {
     consumer_secret: String,
     langs: HashMap<LanguageIdentifier, Vec<String>>,
     best_lang: HashMap<String, fluent::FluentBundle<fluent::FluentResource>>,
+    influx: influxdb::Client,
 }
 
 fn get_message(
@@ -321,11 +351,15 @@ impl MessageHandler {
     }
 
     async fn handle_inline(&mut self, inline: InlineQuery) {
+        let now = std::time::Instant::now();
+
         let links: Vec<_> = self.finder.links(&inline.query).collect();
         let mut results: Vec<PostInfo> = Vec::new();
 
         log::info!("Got query: {}", inline.query);
         log::debug!("Found links: {:?}", links);
+
+        let mut point = influxdb::Query::write_query(influxdb::Timestamp::Now, "inline");
 
         'link: for link in links {
             for site in &mut self.sites {
@@ -348,6 +382,7 @@ impl MessageHandler {
                     };
 
                     log::debug!("Found images: {:?}", images);
+                    point = point.add_tag("site", site.name());
 
                     results.extend(images);
 
@@ -362,6 +397,8 @@ impl MessageHandler {
             .filter_map(|result| result)
             .flatten()
             .collect();
+
+        point = point.add_field("count", responses.len() as i32);
 
         if responses.is_empty() {
             let bundle = self.get_fluent_bundle(inline.from.language_code.as_deref());
@@ -391,9 +428,16 @@ impl MessageHandler {
         if let Err(e) = self.bot.make_request(&answer_inline).await {
             log::error!("Unable to respond to inline: {:?}", e);
         }
+
+        point = point.add_field("duration", now.elapsed().as_millis() as i64);
+        if let Err(e) = self.influx.query(&point).await {
+            log::error!("Unable to log inline to InfluxDB: {:?}", e);
+        };
     }
 
     async fn handle_command(&mut self, message: Message) {
+        let now = std::time::Instant::now();
+
         let entities = message.clone().entities.unwrap(); // only here because this existed
 
         let command = entities
@@ -437,9 +481,19 @@ impl MessageHandler {
             }
             _ => log::info!("Unknown command: {}", command_text),
         };
+
+        let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "command")
+            .add_tag("command", command_text.clone())
+            .add_field("duration", now.elapsed().as_millis() as i64);
+
+        if let Err(e) = self.influx.query(&point).await {
+            log::error!("Unable to send command to InfluxDB: {:?}", e);
+        }
     }
 
     async fn handle_text(&mut self, message: Message) {
+        let now = std::time::Instant::now();
+
         let text = message.text.unwrap(); // only here because this existed
         let from = message.from.unwrap();
 
@@ -527,6 +581,14 @@ impl MessageHandler {
         if let Err(e) = self.bot.make_request(&message).await {
             log::warn!("Unable to send message: {:?}", e);
         }
+
+        let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "twitter")
+            .add_tag("type", "added")
+            .add_field("duration", now.elapsed().as_millis() as i64);
+
+        if let Err(e) = self.influx.query(&point).await {
+            log::error!("Unable to send command to InfluxDB: {:?}", e);
+        }
     }
 
     async fn handle_message(&mut self, update: Update) {
@@ -544,6 +606,8 @@ impl MessageHandler {
     }
 
     async fn authenticate_twitter(&mut self, id: i32, user: &User) {
+        let now = std::time::Instant::now();
+
         let con_token =
             egg_mode::KeyPair::new(self.consumer_key.clone(), self.consumer_secret.clone());
 
@@ -606,6 +670,14 @@ impl MessageHandler {
 
         if let Err(e) = self.bot.make_request(&message).await {
             log::warn!("Unable to send message: {:?}", e);
+        }
+
+        let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "twitter")
+            .add_tag("type", "new")
+            .add_field("duration", now.elapsed().as_millis() as i64);
+
+        if let Err(e) = self.influx.query(&point).await {
+            log::error!("Unable to send command to InfluxDB: {:?}", e);
         }
     }
 
@@ -698,6 +770,8 @@ impl MessageHandler {
     }
 
     async fn process_photo(&mut self, message: Message) {
+        let now = std::time::Instant::now();
+
         let chat_action = SendChatAction {
             chat_id: message.chat.id.into(),
             action: ChatAction::Typing,
@@ -750,6 +824,14 @@ impl MessageHandler {
                     log::error!("Unable to respond to photo: {:?}", e);
                 }
 
+                let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "source")
+                    .add_field("matches", 0)
+                    .add_field("duration", now.elapsed().as_millis() as i64);
+
+                if let Err(e) = self.influx.query(&point).await {
+                    log::error!("Unable to send command to InfluxDB: {:?}", e);
+                }
+
                 return;
             }
         };
@@ -782,6 +864,15 @@ impl MessageHandler {
 
         if let Err(e) = self.bot.make_request(&message).await {
             log::error!("Unable to respond to photo: {:?}", e);
+        }
+
+        let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "source")
+            .add_tag("good", first.distance < 5)
+            .add_field("matches", matches.len() as i64)
+            .add_field("duration", now.elapsed().as_millis() as i64);
+
+        if let Err(e) = self.influx.query(&point).await {
+            log::error!("Unable to send command to InfluxDB: {:?}", e);
         }
     }
 }

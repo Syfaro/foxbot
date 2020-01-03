@@ -18,6 +18,7 @@ hyper = "0.13.1"
 
 log = "0.4.8"
 pretty_env_logger = "0.3.1"
+influxdb = { git = "https://github.com/NeoLegends/influxdb-rust.git", rev = "7e02d424c0df7eadbbf6ef7db01d7ce8729911c6" }
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
