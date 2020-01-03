@@ -10,5 +10,5 @@ EXPOSE 8080
 WORKDIR /app
 COPY --from=builder /src/langs ./langs
 COPY --from=builder /bin/foxbot /bin/foxbot
-RUN apt-get update -y && apt-get install libssl-dev -y
+RUN apt-get update -y && apt-get install libssl-dev ca-certificates -y
 CMD ["/bin/foxbot"]
