@@ -71,6 +71,7 @@ pub struct Update {
     pub update_id: i32,
     pub message: Option<Message>,
     pub inline_query: Option<InlineQuery>,
+    pub chosen_inline_result: Option<ChosenInlineResult>,
     pub callback_query: Option<CallbackQuery>,
 }
 
@@ -162,6 +163,14 @@ pub struct InlineQuery {
     pub from: User,
     pub query: String,
     pub offset: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ChosenInlineResult {
+    pub result_id: String,
+    pub from: User,
+    pub inline_message_id: Option<String>,
+    pub query: String,
 }
 
 /// A trait for all Telegram requests. It has as many default methods as

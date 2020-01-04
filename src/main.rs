@@ -602,6 +602,13 @@ impl MessageHandler {
             } else if message.text.is_some() {
                 self.handle_text(message).await;
             }
+        } else if let Some(chosen_result) = update.chosen_inline_result {
+            let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "chosen")
+                .add_field("user_id", chosen_result.from.id);
+
+            if let Err(e) = self.influx.query(&point).await {
+                log::error!("Unable to send chosen inline result to InfluxDB: {:?}", e);
+            }
         }
     }
 
