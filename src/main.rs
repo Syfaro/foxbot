@@ -810,17 +810,38 @@ impl MessageHandler {
     async fn process_photo(&mut self, message: Message) {
         let now = std::time::Instant::now();
 
+        let completed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
         let bot = self.bot.clone();
         let chat_id = message.chat_id();
+        let completed_clone = completed.clone();
         tokio::spawn(async move {
+            use futures_util::stream::StreamExt;
+
             let chat_action = SendChatAction {
                 chat_id,
                 action: ChatAction::Typing,
             };
 
-            if let Err(e) = bot.make_request(&chat_action).await {
-                log::warn!("Unable to send chat action: {:?}", e);
-            }
+            let mut count: usize = 0;
+
+            tokio::time::interval(std::time::Duration::from_secs(5))
+                .take_while(|_| {
+                    let completed = completed_clone.load(std::sync::atomic::Ordering::SeqCst);
+                    count = count + 1;
+                    log::trace!(
+                        "Evaluating if should send typing, completed: {}, count: {}",
+                        completed,
+                        count
+                    );
+                    futures::future::ready(!completed && count < 12)
+                })
+                .for_each(|_| async {
+                    if let Err(e) = bot.make_request(&chat_action).await {
+                        log::warn!("Unable to send chat action: {:?}", e);
+                    }
+                })
+                .await;
         });
 
         let photos = message.photo.unwrap();
@@ -857,6 +878,8 @@ impl MessageHandler {
                     reply_to_message_id: Some(message.message_id),
                     ..Default::default()
                 };
+
+                completed.store(true, std::sync::atomic::Ordering::SeqCst);
 
                 if let Err(e) = self.bot.make_request(&message).await {
                     log::error!("Unable to respond to photo: {:?}", e);
@@ -899,6 +922,8 @@ impl MessageHandler {
             reply_to_message_id: Some(message.message_id),
             ..Default::default()
         };
+
+        completed.store(true, std::sync::atomic::Ordering::SeqCst);
 
         if let Err(e) = self.bot.make_request(&message).await {
             log::error!("Unable to respond to photo: {:?}", e);
