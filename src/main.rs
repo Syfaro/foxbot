@@ -389,7 +389,7 @@ impl MessageHandler {
                     };
 
                     log::debug!("Found images: {:?}", images);
-                    point = point.add_tag("site", site.name());
+                    point = point.add_tag("site", site.name().replace(" ", "_"));
 
                     results.extend(images);
 
