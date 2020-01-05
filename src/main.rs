@@ -779,14 +779,18 @@ impl MessageHandler {
     async fn process_photo(&mut self, message: Message) {
         let now = std::time::Instant::now();
 
-        let chat_action = SendChatAction {
-            chat_id: message.chat.id.into(),
-            action: ChatAction::Typing,
-        };
+        let bot = self.bot.clone();
+        let chat_id = message.chat_id();
+        tokio::spawn(async move {
+            let chat_action = SendChatAction {
+                chat_id,
+                action: ChatAction::Typing,
+            };
 
-        if let Err(e) = self.bot.make_request(&chat_action).await {
-            log::warn!("Unable to send chat action: {:?}", e);
-        }
+            if let Err(e) = bot.make_request(&chat_action).await {
+                log::warn!("Unable to send chat action: {:?}", e);
+            }
+        });
 
         let photos = message.photo.unwrap();
 
@@ -810,10 +814,6 @@ impl MessageHandler {
             Ok(photo) => photo,
             _ => return,
         };
-
-        if let Err(e) = self.bot.make_request(&chat_action).await {
-            log::warn!("Unable to send chat action: {:?}", e);
-        }
 
         let matches = match self.fapi.image_search(photo).await {
             Ok(matches) if !matches.is_empty() => matches,

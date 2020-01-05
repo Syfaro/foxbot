@@ -13,6 +13,8 @@ It currently supports a number of sites:
 * e621 (finds original link from direct image links)
 * direct links
 
+It also supports trying to reverse image search images sent directly using [fa.huefox.com](https://fa.huefox.com).
+
 ## Configuration
 
 Env Name               | Description
@@ -29,3 +31,7 @@ Env Name               | Description
 `WEBHOOK_ENDPOINT`     | If using webhooks, endpoint to set with Telegram
 `HTTP_HOST`            | If using webhooks, host to listen for updates on
 `HTTP_SECRET`          | If using webhooks, secret endpoint to use for Telegram updates
+`INFLUX_HOST`          | InfluxDB host, including scheme
+`INFLUX_DB`            | InfluxDB database name
+`INFLUX_USER`          | InfluxDB username
+`INFLUX_PASS`          | InfluxDB password
