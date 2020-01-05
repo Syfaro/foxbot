@@ -75,7 +75,7 @@ async fn main() {
 
     let (influx_host, influx_db) = (
         std::env::var("INFLUX_HOST").expect("Missing InfluxDB host"),
-        std::env::var("INFLUX_DB").expect("Missing InfluxDB database")
+        std::env::var("INFLUX_DB").expect("Missing InfluxDB database"),
     );
 
     let (influx_user, influx_pass) = (
@@ -115,6 +115,11 @@ async fn main() {
         langs.insert(langid, lang_resources);
     }
 
+    let use_proxy = std::env::var("USE_PROXY")
+        .unwrap_or_else(|_| "false".into())
+        .parse()
+        .unwrap_or(false);
+
     let handler = Arc::new(Mutex::new(MessageHandler {
         sites,
         bot: bot.clone(),
@@ -126,6 +131,7 @@ async fn main() {
         langs,
         best_lang: HashMap::new(),
         influx,
+        use_proxy,
     }));
 
     let use_webhooks: bool = std::env::var("USE_WEBHOOKS")
@@ -272,6 +278,7 @@ struct MessageHandler {
     langs: HashMap<LanguageIdentifier, Vec<String>>,
     best_lang: HashMap<String, fluent::FluentBundle<fluent::FluentResource>>,
     influx: influxdb::Client,
+    use_proxy: bool,
 }
 
 fn get_message(
@@ -716,10 +723,22 @@ impl MessageHandler {
 
         match result.file_type.as_ref() {
             "png" | "jpeg" | "jpg" => {
+                let (full_url, thumb_url) = if self.use_proxy {
+                    (
+                        format!("https://images.weserv.nl/?url={}&output=jpg", result.url),
+                        format!(
+                            "https://images.weserv.nl/?url={}&output=jpg&w=300",
+                            result.thumb
+                        ),
+                    )
+                } else {
+                    (result.url.clone(), result.thumb.clone())
+                };
+
                 let mut photo = InlineQueryResult::photo(
                     generate_id(),
-                    result.url.to_owned(),
-                    result.thumb.to_owned(),
+                    full_url.to_owned(),
+                    thumb_url.to_owned(),
                 );
                 photo.reply_markup = Some(keyboard.clone());
 
@@ -728,8 +747,8 @@ impl MessageHandler {
                 if let Some(message) = &result.message {
                     let mut photo = InlineQueryResult::photo(
                         generate_id(),
-                        result.url.to_owned(),
-                        result.thumb.to_owned(),
+                        full_url.to_owned(),
+                        thumb_url.to_owned(),
                     );
                     photo.reply_markup = Some(keyboard);
 
@@ -743,10 +762,22 @@ impl MessageHandler {
                 Some(results)
             }
             "gif" => {
+                let (full_url, thumb_url) = if self.use_proxy {
+                    (
+                        format!("https://images.weserv.nl/?url={}&output=gif", result.url),
+                        format!(
+                            "https://images.weserv.nl/?url={}&output=gif&w=300",
+                            result.thumb
+                        ),
+                    )
+                } else {
+                    (result.url.clone(), result.thumb.clone())
+                };
+
                 let mut gif = InlineQueryResult::gif(
                     generate_id(),
-                    result.url.to_owned(),
-                    result.thumb.to_owned(),
+                    full_url.to_owned(),
+                    thumb_url.to_owned(),
                 );
                 gif.reply_markup = Some(keyboard.clone());
 
@@ -755,8 +786,8 @@ impl MessageHandler {
                 if let Some(message) = &result.message {
                     let mut gif = InlineQueryResult::gif(
                         generate_id(),
-                        result.url.to_owned(),
-                        result.thumb.to_owned(),
+                        full_url.to_owned(),
+                        thumb_url.to_owned(),
                     );
                     gif.reply_markup = Some(keyboard);
 

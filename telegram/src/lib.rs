@@ -653,7 +653,9 @@ impl TelegramRequest for AnswerInlineQuery {
 #[derive(Serialize, Debug, Clone)]
 pub struct InlineKeyboardButton {
     pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub callback_data: Option<String>,
 }
 
