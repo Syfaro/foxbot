@@ -66,7 +66,7 @@ async fn main() {
             consumer_secret.clone(),
         )),
         Box::new(sites::Mastodon::new()),
-        Box::new(sites::Direct::new()),
+        Box::new(sites::Direct::new(fapi.clone())),
     ];
 
     let bot = Arc::new(Telegram::new(
@@ -747,8 +747,8 @@ impl MessageHandler {
                 if let Some(message) = &result.message {
                     let mut photo = InlineQueryResult::photo(
                         generate_id(),
-                        full_url.to_owned(),
-                        thumb_url.to_owned(),
+                        full_url,
+                        thumb_url,
                     );
                     photo.reply_markup = Some(keyboard);
 
@@ -786,8 +786,8 @@ impl MessageHandler {
                 if let Some(message) = &result.message {
                     let mut gif = InlineQueryResult::gif(
                         generate_id(),
-                        full_url.to_owned(),
-                        thumb_url.to_owned(),
+                        full_url,
+                        thumb_url,
                     );
                     gif.reply_markup = Some(keyboard);
 
@@ -828,7 +828,7 @@ impl MessageHandler {
             tokio::time::interval(std::time::Duration::from_secs(5))
                 .take_while(|_| {
                     let completed = completed_clone.load(std::sync::atomic::Ordering::SeqCst);
-                    count = count + 1;
+                    count += 1;
                     log::trace!(
                         "Evaluating if should send typing, completed: {}, count: {}",
                         completed,
@@ -867,7 +867,7 @@ impl MessageHandler {
             _ => return,
         };
 
-        let matches = match self.fapi.image_search(photo).await {
+        let matches = match self.fapi.image_search(photo, false).await {
             Ok(matches) if !matches.is_empty() => matches,
             _ => {
                 let bundle = self.get_fluent_bundle(message.from.unwrap().language_code.as_deref());

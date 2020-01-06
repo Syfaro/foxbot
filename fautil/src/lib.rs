@@ -1,10 +1,14 @@
 use serde::Deserialize;
 
+/// FAUtil is a collection of methods to get information from fa.huefox.com.
 pub struct FAUtil {
     api_key: String,
     client: reqwest::Client,
 }
 
+/// Lookup is information returned when attempting to search for a file by
+/// url or filename. It contains no additional information about the image
+/// besides its ID on FurAffinity.
 #[derive(Debug, Deserialize)]
 pub struct Lookup {
     pub id: usize,
@@ -12,6 +16,9 @@ pub struct Lookup {
     pub filename: String,
 }
 
+/// ImageLookup is information returned when attempting to reverse image search.
+/// It includes a distance, which is the hamming distance between the provided
+/// image and the image in the database.
 #[derive(Debug, Deserialize)]
 pub struct ImageLookup {
     pub id: usize,
@@ -23,6 +30,7 @@ pub struct ImageLookup {
 impl FAUtil {
     pub const API_ENDPOINT: &'static str = "https://fa.huefox.com/api/v1/";
 
+    /// Create a new FAUtil instance. Requires the API key.
     pub fn new(api_key: String) -> Self {
         Self {
             api_key,
@@ -30,6 +38,8 @@ impl FAUtil {
         }
     }
 
+    /// Makes a request against the API. It deserializes the JSON response.
+    /// Generally not used as there are more specific methods available.
     async fn make_request<T: Default + serde::de::DeserializeOwned>(
         &self,
         endpoint: &str,
@@ -47,6 +57,7 @@ impl FAUtil {
             .await
     }
 
+    /// Attempt to look up an image by its URL. Note that URLs should be https.
     pub async fn lookup_url(&self, url: &str) -> reqwest::Result<Vec<Lookup>> {
         let mut params = std::collections::HashMap::new();
         params.insert("url", url);
@@ -54,6 +65,7 @@ impl FAUtil {
         self.make_request("url", &params).await
     }
 
+    /// Attempt to look up an image by its original name on FA.
     pub async fn lookup_filename(&self, filename: &str) -> reqwest::Result<Vec<Lookup>> {
         let mut params = std::collections::HashMap::new();
         params.insert("file", filename);
@@ -61,14 +73,28 @@ impl FAUtil {
         self.make_request("file", &params).await
     }
 
-    pub async fn image_search(&self, data: Vec<u8>) -> reqwest::Result<Vec<ImageLookup>> {
+    /// Attempt to reverse image search.
+    ///
+    /// Requiring an exact match will be faster, but potentially leave out results.
+    pub async fn image_search(
+        &self,
+        data: Vec<u8>,
+        exact: bool,
+    ) -> reqwest::Result<Vec<ImageLookup>> {
         let url = format!("{}image", Self::API_ENDPOINT);
 
         let part = reqwest::multipart::Part::bytes(data);
         let form = reqwest::multipart::Form::new().part("image", part);
 
+        let query = if exact {
+            vec![("exact", "true")]
+        } else {
+            vec![]
+        };
+
         self.client
             .post(&url)
+            .query(&query)
             .header("X-Api-Key", self.api_key.as_bytes())
             .multipart(form)
             .send()

@@ -71,14 +71,43 @@ pub trait Site {
     ) -> Result<Option<Vec<PostInfo>>, SiteError>;
 }
 
-pub struct Direct;
+pub struct Direct {
+    client: reqwest::Client,
+    fautil: std::sync::Arc<fautil::FAUtil>,
+}
 
 impl Direct {
     const EXTENSIONS: &'static [&'static str] = &["png", "jpg", "jpeg", "gif"];
     const TYPES: &'static [&'static str] = &["image/png", "image/jpeg", "image/gif"];
 
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(fautil: std::sync::Arc<fautil::FAUtil>) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+            .expect("Unable to create client");
+
+        Self { fautil, client }
+    }
+
+    async fn reverse_search(&self, url: &str) -> Option<fautil::ImageLookup> {
+        let image = self.client.get(url).send().await;
+
+        let image = match image {
+            Ok(res) => res.bytes().await,
+            Err(_) => return None,
+        };
+
+        let body = match image {
+            Ok(body) => body,
+            Err(_) => return None,
+        };
+
+        let results = self.fautil.image_search(body.to_vec(), true).await;
+
+        match results {
+            Ok(results) => results.into_iter().next(),
+            Err(_) => None,
+        }
     }
 }
 
@@ -94,10 +123,9 @@ impl Site for Direct {
             return false;
         }
 
-        let client = reqwest::Client::new();
-
         // Make a HTTP HEAD request to determine the Content-Type.
-        let resp = match client
+        let resp = match self
+            .client
             .head(url)
             .header(header::USER_AGENT, USER_AGENT)
             .send()
@@ -126,12 +154,27 @@ impl Site for Direct {
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, SiteError> {
         let u = url.to_string();
+        let mut caption = u.clone();
+
+        if let Ok(result) =
+            tokio::time::timeout(std::time::Duration::from_secs(4), self.reverse_search(&u)).await
+        {
+            log::trace!("Got result from reverse search");
+            if let Some(post) = result {
+                log::debug!("Found ID of post matching: {}", post.id);
+                caption = format!("https://www.furaffinity.net/view/{}/", post.id);
+            } else {
+                log::trace!("No posts matched");
+            }
+        } else {
+            log::debug!("Reverse search timed out");
+        }
 
         Ok(Some(vec![PostInfo {
             file_type: get_file_ext(url).unwrap().to_string(),
             url: u.clone(),
             thumb: u.clone(),
-            caption: u,
+            caption,
             full_url: None,
             message: None,
         }]))
