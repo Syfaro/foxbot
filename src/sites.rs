@@ -12,13 +12,16 @@ const USER_AGENT: &str = concat!(
 
 #[derive(Debug)]
 pub struct PostInfo {
+    /// File type, as a standard file extension (png, jpg, etc.)
     pub file_type: String,
+    /// URL to full image
     pub url: String,
-    pub thumb: String,
-    pub caption: String,
-
-    pub full_url: Option<String>,
-    pub message: Option<String>,
+    /// URL to thumbnail, if available
+    pub thumb: Option<String>,
+    /// URL to original source of this image, if available
+    pub source_link: Option<String>,
+    /// Additional caption to add as a second result for the provided query
+    pub extra_caption: Option<String>,
 }
 
 fn get_file_ext(name: &str) -> Option<&str> {
@@ -63,7 +66,7 @@ impl From<egg_mode::error::Error> for SiteError {
 #[async_trait]
 pub trait Site {
     fn name(&self) -> &'static str;
-    async fn is_supported(&mut self, url: &str) -> bool;
+    async fn url_supported(&mut self, url: &str) -> bool;
     async fn get_images(
         &mut self,
         user_id: i32,
@@ -117,7 +120,7 @@ impl Site for Direct {
         "direct links"
     }
 
-    async fn is_supported(&mut self, url: &str) -> bool {
+    async fn url_supported(&mut self, url: &str) -> bool {
         // If the URL extension isn't one in our list, ignore.
         if !Direct::EXTENSIONS.iter().any(|ext| url.ends_with(ext)) {
             return false;
@@ -154,7 +157,7 @@ impl Site for Direct {
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, SiteError> {
         let u = url.to_string();
-        let mut caption = u.clone();
+        let mut source_link = None;
 
         if let Ok(result) =
             tokio::time::timeout(std::time::Duration::from_secs(4), self.reverse_search(&u)).await
@@ -162,7 +165,7 @@ impl Site for Direct {
             log::trace!("Got result from reverse search");
             if let Some(post) = result {
                 log::debug!("Found ID of post matching: {}", post.id);
-                caption = format!("https://www.furaffinity.net/view/{}/", post.id);
+                source_link = Some(format!("https://www.furaffinity.net/view/{}/", post.id));
             } else {
                 log::trace!("No posts matched");
             }
@@ -173,10 +176,9 @@ impl Site for Direct {
         Ok(Some(vec![PostInfo {
             file_type: get_file_ext(url).unwrap().to_string(),
             url: u.clone(),
-            thumb: u.clone(),
-            caption,
-            full_url: None,
-            message: None,
+            thumb: None,
+            source_link,
+            extra_caption: None,
         }]))
     }
 }
@@ -213,7 +215,7 @@ impl Site for E621 {
         "e621"
     }
 
-    async fn is_supported(&mut self, url: &str) -> bool {
+    async fn url_supported(&mut self, url: &str) -> bool {
         self.show.is_match(url) || self.data.is_match(url)
     }
 
@@ -246,10 +248,9 @@ impl Site for E621 {
         Ok(Some(vec![PostInfo {
             file_type: resp.file_ext,
             url: resp.file_url,
-            thumb: resp.preview_url,
-            caption: format!("https://e621.net/post/show/{}", resp.id),
-            full_url: None,
-            message: None,
+            thumb: Some(resp.preview_url),
+            source_link: Some(format!("https://e621.net/post/show/{}", resp.id)),
+            extra_caption: None,
         }]))
     }
 }
@@ -284,7 +285,7 @@ impl Site for Twitter {
         "Twitter"
     }
 
-    async fn is_supported(&mut self, url: &str) -> bool {
+    async fn url_supported(&mut self, url: &str) -> bool {
         self.matcher.is_match(url)
     }
 
@@ -350,10 +351,9 @@ impl Site for Twitter {
                 .map(|item| PostInfo {
                     file_type: get_file_ext(&item.media_url_https).unwrap().to_owned(),
                     url: item.media_url_https.clone(),
-                    thumb: format!("{}:thumb", item.media_url_https.clone()),
-                    caption: link.clone(),
-                    full_url: None,
-                    message: None,
+                    thumb: Some(format!("{}:thumb", item.media_url_https.clone())),
+                    source_link: Some(link.clone()),
+                    extra_caption: None,
                 })
                 .collect(),
         ))
@@ -390,10 +390,9 @@ impl FurAffinity {
                 return Ok(Some(PostInfo {
                     file_type: get_file_ext(&url).unwrap().to_string(),
                     url: url.clone(),
-                    thumb: url.clone(),
-                    caption: url,
-                    full_url: None,
-                    message: None,
+                    thumb: None,
+                    source_link: None,
+                    extra_caption: None,
                 }));
             }
         };
@@ -401,10 +400,9 @@ impl FurAffinity {
         Ok(Some(PostInfo {
             file_type: get_file_ext(&sub.filename).unwrap().to_string(),
             url: sub.url.clone(),
-            thumb: sub.url.clone(),
-            caption: format!("https://www.furaffinity.net/view/{}/", sub.id),
-            full_url: None,
-            message: None,
+            thumb: None,
+            source_link: Some(format!("https://www.furaffinity.net/view/{}/", sub.id)),
+            extra_caption: None,
         }))
     }
 
@@ -436,10 +434,9 @@ impl FurAffinity {
         Ok(Some(PostInfo {
             file_type: get_file_ext(&image_url).unwrap().to_string(),
             url: image_url.clone(),
-            thumb: image_url.clone(),
-            caption: url.to_string(),
-            full_url: None,
-            message: None,
+            thumb: None,
+            source_link: Some(url.to_string()),
+            extra_caption: None,
         }))
     }
 }
@@ -450,7 +447,7 @@ impl Site for FurAffinity {
         "FurAffinity"
     }
 
-    async fn is_supported(&mut self, url: &str) -> bool {
+    async fn url_supported(&mut self, url: &str) -> bool {
         url.contains("furaffinity.net/view/")
             || url.contains("furaffinity.net/full/")
             || url.contains("facdn.net/art/")
@@ -506,7 +503,7 @@ impl Site for Mastodon {
         "Mastodon"
     }
 
-    async fn is_supported(&mut self, url: &str) -> bool {
+    async fn url_supported(&mut self, url: &str) -> bool {
         let captures = match self.matcher.captures(url) {
             Some(captures) => captures,
             None => return false,
@@ -584,10 +581,9 @@ impl Site for Mastodon {
                 .map(|media| PostInfo {
                     file_type: get_file_ext(&media.url).unwrap().to_owned(),
                     url: media.url.clone(),
-                    thumb: media.preview_url.clone(),
-                    caption: json.url.clone(),
-                    full_url: None,
-                    message: None,
+                    thumb: Some(media.preview_url.clone()),
+                    source_link: Some(json.url.clone()),
+                    extra_caption: None,
                 })
                 .collect(),
         ))
@@ -614,7 +610,7 @@ impl Site for Weasyl {
         "Weasyl"
     }
 
-    async fn is_supported(&mut self, url: &str) -> bool {
+    async fn url_supported(&mut self, url: &str) -> bool {
         self.matcher.is_match(url)
     }
 
@@ -667,10 +663,9 @@ impl Site for Weasyl {
                     PostInfo {
                         file_type: get_file_ext(&sub_url).unwrap().to_owned(),
                         url: sub_url.clone(),
-                        thumb: thumb_url,
-                        caption: url.to_string(),
-                        full_url: None,
-                        message: None,
+                        thumb: Some(thumb_url),
+                        source_link: Some(url.to_string()),
+                        extra_caption: None,
                     }
                 })
                 .collect(),

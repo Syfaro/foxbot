@@ -125,10 +125,28 @@ pub enum MessageEntityType {
 pub struct Message {
     pub message_id: i32,
     pub from: Option<User>,
+    pub date: i64,
     pub chat: Chat,
+    pub forward_from: Option<User>,
+    pub forward_from_chat: Option<Chat>,
+    pub forward_from_message_id: Option<i32>,
+    pub forward_signature: Option<String>,
+    pub forward_sender_name: Option<String>,
+    pub forward_date: Option<i64>,
+    pub reply_to_message: Option<Box<Message>>,
+    pub edit_date: Option<i64>,
+    pub media_group_id: Option<String>,
+    pub author_signature: Option<String>,
     pub text: Option<String>,
-    pub photo: Option<Vec<PhotoSize>>,
     pub entities: Option<Vec<MessageEntity>>,
+    pub photo: Option<Vec<PhotoSize>>,
+    pub caption: Option<String>,
+    pub new_chat_members: Option<Vec<User>>,
+    pub left_chat_member: Option<User>,
+    pub new_chat_title: Option<String>,
+    pub migrate_to_chat_id: Option<i64>,
+    pub migrate_from_chat_id: Option<i64>,
+    pub reply_markup: Option<InlineKeyboardMarkup>,
 }
 
 impl Message {
@@ -650,7 +668,7 @@ impl TelegramRequest for AnswerInlineQuery {
     }
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct InlineKeyboardButton {
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -659,7 +677,7 @@ pub struct InlineKeyboardButton {
     pub callback_data: Option<String>,
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct InlineKeyboardMarkup {
     pub inline_keyboard: Vec<Vec<InlineKeyboardButton>>,
 }

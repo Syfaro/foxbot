@@ -372,7 +372,7 @@ impl MessageHandler {
             for site in &mut self.sites {
                 let link_str = link.as_str();
 
-                if site.is_supported(link_str).await {
+                if site.url_supported(link_str).await {
                     log::debug!("Link {} supported by {}", link_str, site.name());
 
                     let images = match site.get_images(inline.from.id, link_str).await {
@@ -696,23 +696,18 @@ impl MessageHandler {
     }
 
     fn process_result(&mut self, result: &PostInfo, from: &User) -> Option<Vec<InlineQueryResult>> {
-        let full_url = match &result.full_url {
-            Some(full_url) => full_url,
-            None => &result.url,
-        };
-
         let bundle = self.get_fluent_bundle(from.language_code.as_deref());
 
         let mut row = vec![InlineKeyboardButton {
             text: get_message(&bundle, "inline-direct", None).unwrap(),
-            url: Some(full_url.to_owned()),
+            url: Some(result.url.clone()),
             callback_data: None,
         }];
 
-        if full_url != &result.caption {
+        if let Some(source_link) = &result.source_link {
             row.push(InlineKeyboardButton {
                 text: get_message(&bundle, "inline-source", None).unwrap(),
-                url: Some(result.caption.to_owned()),
+                url: Some(source_link.clone()),
                 callback_data: None,
             })
         }
@@ -721,6 +716,8 @@ impl MessageHandler {
             inline_keyboard: vec![row],
         };
 
+        let thumb_url = result.thumb.clone().unwrap_or_else(|| result.url.clone());
+
         match result.file_type.as_ref() {
             "png" | "jpeg" | "jpg" => {
                 let (full_url, thumb_url) = if self.use_proxy {
@@ -728,11 +725,11 @@ impl MessageHandler {
                         format!("https://images.weserv.nl/?url={}&output=jpg", result.url),
                         format!(
                             "https://images.weserv.nl/?url={}&output=jpg&w=300",
-                            result.thumb
+                            thumb_url
                         ),
                     )
                 } else {
-                    (result.url.clone(), result.thumb.clone())
+                    (result.url.clone(), thumb_url)
                 };
 
                 let mut photo = InlineQueryResult::photo(
@@ -744,12 +741,8 @@ impl MessageHandler {
 
                 let mut results = vec![photo];
 
-                if let Some(message) = &result.message {
-                    let mut photo = InlineQueryResult::photo(
-                        generate_id(),
-                        full_url,
-                        thumb_url,
-                    );
+                if let Some(message) = &result.extra_caption {
+                    let mut photo = InlineQueryResult::photo(generate_id(), full_url, thumb_url);
                     photo.reply_markup = Some(keyboard);
 
                     if let InlineQueryType::Photo(ref mut result) = photo.content {
@@ -767,11 +760,11 @@ impl MessageHandler {
                         format!("https://images.weserv.nl/?url={}&output=gif", result.url),
                         format!(
                             "https://images.weserv.nl/?url={}&output=gif&w=300",
-                            result.thumb
+                            thumb_url
                         ),
                     )
                 } else {
-                    (result.url.clone(), result.thumb.clone())
+                    (result.url.clone(), thumb_url)
                 };
 
                 let mut gif = InlineQueryResult::gif(
@@ -783,12 +776,8 @@ impl MessageHandler {
 
                 let mut results = vec![gif];
 
-                if let Some(message) = &result.message {
-                    let mut gif = InlineQueryResult::gif(
-                        generate_id(),
-                        full_url,
-                        thumb_url,
-                    );
+                if let Some(message) = &result.extra_caption {
+                    let mut gif = InlineQueryResult::gif(generate_id(), full_url, thumb_url);
                     gif.reply_markup = Some(keyboard);
 
                     if let InlineQueryType::GIF(ref mut result) = gif.content {
