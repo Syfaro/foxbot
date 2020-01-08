@@ -1,5 +1,6 @@
 #![feature(try_trait)]
 
+use sentry::integrations::failure::capture_fail;
 use sites::{PostInfo, Site};
 use std::collections::HashMap;
 use std::sync::{atomic::AtomicBool, Arc};
@@ -7,6 +8,9 @@ use telegram::*;
 use tokio::sync::Mutex;
 use tokio01::runtime::current_thread::block_on_all;
 use unic_langid::LanguageIdentifier;
+
+#[macro_use]
+extern crate failure;
 
 mod sites;
 
@@ -155,18 +159,27 @@ async fn main() {
         .parse()
         .unwrap_or(false);
 
+    let _guard = if let Ok(dsn) = std::env::var("SENTRY_DSN") {
+        sentry::integrations::panic::register_panic_handler();
+        Some(sentry::init(dsn))
+    } else {
+        None
+    };
+
     if use_webhooks {
         let webhook_endpoint = std::env::var("WEBHOOK_ENDPOINT").expect("Missing WEBHOOK_ENDPOINT");
         let set_webhook = SetWebhook {
             url: webhook_endpoint,
         };
         if let Err(e) = bot.make_request(&set_webhook).await {
+            capture_fail(&e);
             log::error!("Unable to set webhook: {:?}", e);
         }
         receive_webhook(handler).await;
     } else {
         let delete_webhook = DeleteWebhook {};
         if let Err(e) = bot.make_request(&delete_webhook).await {
+            capture_fail(&e);
             log::error!("Unable to clear webhook: {:?}", e);
         }
         poll_updates(bot, handler).await;
@@ -212,7 +225,12 @@ async fn handle_request(
 
                 let handler = handler.lock().await;
                 if let Err(e) = handler.influx.query(&point).await {
-                    log::error!("Unable to send http request info to InfluxDB: {:?}", e);
+                    let uuid = capture_fail(&e);
+                    log::error!(
+                        "[{}]  Unable to send http request info to InfluxDB: {:?}",
+                        uuid,
+                        e
+                    );
                 }
             });
 
@@ -262,6 +280,7 @@ async fn poll_updates(bot: Arc<Telegram>, handler: Arc<Mutex<MessageHandler>>) {
         let updates = match bot.make_request(&update_req).await {
             Ok(updates) => updates,
             Err(e) => {
+                capture_fail(&e);
                 log::error!("Unable to get updates: {:?}", e);
                 std::thread::sleep(std::time::Duration::from_secs(5));
                 continue;
@@ -312,6 +331,33 @@ fn get_message(
     } else {
         Err(errors)
     }
+}
+
+fn with_user_scope<C>(
+    from: Option<&User>,
+    tags: Option<std::collections::HashMap<&'static str, String>>,
+    callback: C,
+) where
+    C: FnOnce(),
+{
+    sentry::with_scope(
+        |scope| {
+            if let Some(user) = from {
+                scope.set_user(Some(sentry::User {
+                    id: Some(user.id.to_string()),
+                    username: user.username.clone(),
+                    ..Default::default()
+                }));
+            };
+
+            if let Some(tags) = tags {
+                for tag in tags {
+                    scope.set_tag(tag.0, tag.1);
+                }
+            }
+        },
+        callback,
+    );
 }
 
 impl MessageHandler {
@@ -395,6 +441,18 @@ impl MessageHandler {
                     let images = match site.get_images(inline.from.id, link_str).await {
                         Ok(images) => images,
                         Err(e) => {
+                            with_user_scope(
+                                Some(&inline.from),
+                                Some(
+                                    [("site", site.name().to_string())]
+                                        .iter()
+                                        .cloned()
+                                        .collect(),
+                                ),
+                                || {
+                                    capture_fail(&e);
+                                },
+                            );
                             log::warn!("Unable to get image: {:?}", e);
                             continue 'link;
                         }
@@ -451,12 +509,18 @@ impl MessageHandler {
         }
 
         if let Err(e) = self.bot.make_request(&answer_inline).await {
+            with_user_scope(Some(&inline.from), None, || {
+                capture_fail(&e);
+            });
             log::error!("Unable to respond to inline: {:?}", e);
         }
 
         point = point.add_field("duration", now.elapsed().as_millis() as i64);
         if let Err(e) = self.influx.query(&point).await {
-            log::error!("Unable to log inline to InfluxDB: {:?}", e);
+            with_user_scope(Some(&inline.from), None, || {
+                let uuid = capture_fail(&e);
+                log::error!("[{}] Unable to log inline to InfluxDB: {:?}", uuid, e);
+            });
         };
     }
 
@@ -495,6 +559,8 @@ impl MessageHandler {
         log::debug!("Got command: {}", command_text);
         log::trace!("Command {} had arguments: {}", command_text, args);
 
+        let from = message.from.clone();
+
         match command_text {
             "/help" | "/start" => {
                 let from = message.from.clone().unwrap();
@@ -513,15 +579,27 @@ impl MessageHandler {
                     }]],
                 });
 
-                let message = SendMessage {
+                let send_message = SendMessage {
                     chat_id: message.chat_id(),
                     text: get_message(&bundle, "welcome", None).unwrap(),
                     reply_markup: Some(reply_markup),
                     ..Default::default()
                 };
 
-                if let Err(e) = self.bot.make_request(&message).await {
-                    log::warn!("Unable to send help message: {:?}", e);
+                if let Err(e) = self.bot.make_request(&send_message).await {
+                    with_user_scope(
+                        message.from.as_ref(),
+                        Some(
+                            [("command", command_text.to_string())]
+                                .iter()
+                                .cloned()
+                                .collect(),
+                        ),
+                        || {
+                            let uuid = capture_fail(&e);
+                            log::error!("[{}] Unable to send help message: {:?}", uuid, e);
+                        },
+                    );
                 }
             }
             "/twitter" => self.authenticate_twitter(message).await,
@@ -535,6 +613,9 @@ impl MessageHandler {
             .add_field("duration", now.elapsed().as_millis() as i64);
 
         if let Err(e) = self.influx.query(&point).await {
+            with_user_scope(from.as_ref(), None, || {
+                capture_fail(&e);
+            });
             log::error!("Unable to send command to InfluxDB: {:?}", e);
         }
     }
@@ -543,6 +624,7 @@ impl MessageHandler {
         &self,
         max: usize,
         chat_id: ChatID,
+        user: Option<User>,
         action: ChatAction,
         completed: Arc<AtomicBool>,
     ) {
@@ -569,6 +651,9 @@ impl MessageHandler {
                 })
                 .for_each(|_| async {
                     if let Err(e) = bot.make_request(&chat_action).await {
+                        with_user_scope(user.as_ref(), None, || {
+                            capture_fail(&e);
+                        });
                         log::warn!("Unable to send chat action: {:?}", e);
                     }
                 })
@@ -578,7 +663,13 @@ impl MessageHandler {
 
     async fn handle_source(&mut self, message: Message) {
         let completed = Arc::new(AtomicBool::new(false));
-        self.send_action(12, message.chat_id(), ChatAction::Typing, completed.clone());
+        self.send_action(
+            12,
+            message.chat_id(),
+            message.from.clone(),
+            ChatAction::Typing,
+            completed.clone(),
+        );
 
         let message = if let Some(reply_to_message) = message.reply_to_message {
             *reply_to_message
@@ -607,6 +698,9 @@ impl MessageHandler {
             Ok(file) => file,
             Err(e) => {
                 self.send_generic_reply(&message, "error-generic").await;
+                with_user_scope(message.from.as_ref(), None, || {
+                    capture_fail(&e);
+                });
                 log::error!("Unable to get file: {:?}", e);
                 return;
             }
@@ -616,6 +710,9 @@ impl MessageHandler {
             Ok(bytes) => bytes,
             Err(e) => {
                 self.send_generic_reply(&message, "error-generic").await;
+                with_user_scope(message.from.as_ref(), None, || {
+                    capture_fail(&e);
+                });
                 log::error!("Unable to download file: {:?}", e);
                 return;
             }
@@ -625,6 +722,9 @@ impl MessageHandler {
             Ok(matches) => matches,
             Err(e) => {
                 self.send_generic_reply(&message, "error-generic").await;
+                with_user_scope(message.from.as_ref(), None, || {
+                    capture_fail(&e);
+                });
                 log::error!("Unable to find matches: {:?}", e);
                 return;
             }
@@ -639,7 +739,7 @@ impl MessageHandler {
             }
         };
 
-        let bundle = self.get_fluent_bundle(message.from.unwrap().language_code.as_deref());
+        let bundle = self.get_fluent_bundle(message.from.clone().unwrap().language_code.as_deref());
 
         let name = if result.distance < 5 {
             "reverse-good-result"
@@ -654,7 +754,7 @@ impl MessageHandler {
             fluent::FluentValue::from(format!("https://www.furaffinity.net/view/{}/", result.id)),
         );
 
-        let message = SendMessage {
+        let send_message = SendMessage {
             chat_id: message.chat.id.into(),
             text: get_message(&bundle, name, Some(args)).unwrap(),
             disable_web_page_preview: Some(result.distance > 5),
@@ -662,8 +762,11 @@ impl MessageHandler {
             ..Default::default()
         };
 
-        if let Err(e) = self.bot.make_request(&message).await {
+        if let Err(e) = self.bot.make_request(&send_message).await {
             log::error!("Unable to make request: {:?}", e);
+            with_user_scope(message.from.as_ref(), None, || {
+                capture_fail(&e);
+            });
         }
 
         completed.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -676,15 +779,18 @@ impl MessageHandler {
         };
 
         let bundle = self.get_fluent_bundle(language_code.as_deref());
-        let message = SendMessage {
+        let send_message = SendMessage {
             chat_id: message.chat_id(),
             reply_to_message_id: Some(message.message_id),
             text: get_message(&bundle, name, None).unwrap(),
             ..Default::default()
         };
 
-        if let Err(e) = self.bot.make_request(&message).await {
+        if let Err(e) = self.bot.make_request(&send_message).await {
             log::error!("Unable to make request: {:?}", e);
+            with_user_scope(message.from.as_ref(), None, || {
+                capture_fail(&e);
+            });
         }
     }
 
@@ -695,6 +801,7 @@ impl MessageHandler {
         self.send_action(
             6,
             message.chat_id(),
+            message.from.clone(),
             ChatAction::UploadPhoto,
             completed.clone(),
         );
@@ -732,6 +839,9 @@ impl MessageHandler {
                         Err(e) => {
                             missing.push(link_str.to_string());
                             log::warn!("Unable to get image: {:?}", e);
+                            with_user_scope(message.from.as_ref(), None, || {
+                                capture_fail(&e);
+                            });
                             continue 'link;
                         }
                     };
@@ -778,6 +888,9 @@ impl MessageHandler {
 
             if let Err(e) = self.bot.make_request(&photo).await {
                 log::error!("Unable to make request: {:?}", e);
+                with_user_scope(message.from.as_ref(), None, || {
+                    capture_fail(&e);
+                });
             }
         } else {
             for chunk in results.chunks(10) {
@@ -805,6 +918,9 @@ impl MessageHandler {
 
                 if let Err(e) = self.bot.make_request(&media_group).await {
                     log::error!("Unable to make request: {:?}", e);
+                    with_user_scope(message.from.as_ref(), None, || {
+                        capture_fail(&e);
+                    });
                 }
             }
 
@@ -817,7 +933,7 @@ impl MessageHandler {
             let mut args = fluent::FluentArgs::new();
             args.insert("links", fluent::FluentValue::from(links.join("\n")));
 
-            let message = SendMessage {
+            let send_message = SendMessage {
                 chat_id: message.chat_id(),
                 reply_to_message_id: Some(message.message_id),
                 text: get_message(&bundle, "mirror-missing", Some(args)).unwrap(),
@@ -825,8 +941,11 @@ impl MessageHandler {
                 ..Default::default()
             };
 
-            if let Err(e) = self.bot.make_request(&message).await {
+            if let Err(e) = self.bot.make_request(&send_message).await {
                 log::error!("Unable to make request: {:?}", e);
+                with_user_scope(message.from.as_ref(), None, || {
+                    capture_fail(&e);
+                });
             }
         }
     }
@@ -891,6 +1010,13 @@ impl MessageHandler {
         ) {
             log::warn!("Unable to save user credentials: {:?}", e);
 
+            with_user_scope(Some(&from), None, || {
+                sentry::integrations::failure::capture_error(&format_err!(
+                    "Unable to save to Twitter database: {}",
+                    e
+                ));
+            });
+
             let bundle = self.get_fluent_bundle(from.language_code.as_deref());
 
             let message = SendMessage {
@@ -902,6 +1028,9 @@ impl MessageHandler {
 
             if let Err(e) = self.bot.make_request(&message).await {
                 log::warn!("Unable to send message: {:?}", e);
+                with_user_scope(Some(&from), None, || {
+                    capture_fail(&e);
+                });
             }
             return;
         }
@@ -920,6 +1049,9 @@ impl MessageHandler {
 
         if let Err(e) = self.bot.make_request(&message).await {
             log::warn!("Unable to send message: {:?}", e);
+            with_user_scope(Some(&from), None, || {
+                capture_fail(&e);
+            });
         }
 
         let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "twitter")
@@ -928,6 +1060,9 @@ impl MessageHandler {
 
         if let Err(e) = self.influx.query(&point).await {
             log::error!("Unable to send command to InfluxDB: {:?}", e);
+            with_user_scope(Some(&from), None, || {
+                capture_fail(&e);
+            });
         }
     }
 
@@ -948,6 +1083,7 @@ impl MessageHandler {
 
             if let Err(e) = self.influx.query(&point).await {
                 log::error!("Unable to send chosen inline result to InfluxDB: {:?}", e);
+                capture_fail(&e);
             }
         }
     }
@@ -960,7 +1096,7 @@ impl MessageHandler {
             return;
         }
 
-        let user = message.from.unwrap();
+        let user = message.from.clone().unwrap();
 
         let con_token =
             egg_mode::KeyPair::new(self.consumer_key.clone(), self.consumer_secret.clone());
@@ -969,6 +1105,10 @@ impl MessageHandler {
             Ok(req) => req,
             Err(e) => {
                 log::warn!("Unable to get request token: {:?}", e);
+
+                with_user_scope(Some(&user), None, || {
+                    capture_fail(&e);
+                });
 
                 let bundle = self.get_fluent_bundle(user.language_code.as_deref());
 
@@ -981,6 +1121,9 @@ impl MessageHandler {
 
                 if let Err(e) = self.bot.make_request(&message).await {
                     log::warn!("Unable to send message: {:?}", e);
+                    with_user_scope(Some(&user), None, || {
+                        capture_fail(&e);
+                    });
                 }
                 return;
             }
@@ -991,6 +1134,13 @@ impl MessageHandler {
             &(request_token.key.clone(), request_token.secret.clone()),
         ) {
             log::warn!("Unable to save authenticate: {:?}", e);
+
+            with_user_scope(Some(&user), None, || {
+                sentry::integrations::failure::capture_error(&format_err!(
+                    "Unable to save to Twitter database: {}",
+                    e
+                ));
+            });
 
             let bundle = self.get_fluent_bundle(user.language_code.as_deref());
 
@@ -1003,6 +1153,9 @@ impl MessageHandler {
 
             if let Err(e) = self.bot.make_request(&message).await {
                 log::warn!("Unable to send message: {:?}", e);
+                with_user_scope(Some(&user), None, || {
+                    capture_fail(&e);
+                });
             }
             return;
         }
@@ -1014,16 +1167,19 @@ impl MessageHandler {
 
         let bundle = self.get_fluent_bundle(user.language_code.as_deref());
 
-        let message = SendMessage {
-            chat_id: user.id.into(),
+        let send_message = SendMessage {
+            chat_id: message.chat_id(),
             text: get_message(&bundle, "twitter-oob", Some(args)).unwrap(),
             reply_markup: Some(ReplyMarkup::ForceReply(ForceReply::selective())),
             reply_to_message_id: Some(message.message_id),
             ..Default::default()
         };
 
-        if let Err(e) = self.bot.make_request(&message).await {
+        if let Err(e) = self.bot.make_request(&send_message).await {
             log::warn!("Unable to send message: {:?}", e);
+            with_user_scope(Some(&user), None, || {
+                capture_fail(&e);
+            });
         }
 
         let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "twitter")
@@ -1032,6 +1188,9 @@ impl MessageHandler {
 
         if let Err(e) = self.influx.query(&point).await {
             log::error!("Unable to send command to InfluxDB: {:?}", e);
+            with_user_scope(Some(&user), None, || {
+                capture_fail(&e);
+            });
         }
     }
 
@@ -1142,9 +1301,15 @@ impl MessageHandler {
         let now = std::time::Instant::now();
 
         let completed = Arc::new(AtomicBool::new(false));
-        self.send_action(12, message.chat_id(), ChatAction::Typing, completed.clone());
+        self.send_action(
+            12,
+            message.chat_id(),
+            message.from.clone(),
+            ChatAction::Typing,
+            completed.clone(),
+        );
 
-        let photos = message.photo.unwrap();
+        let photos = message.photo.clone().unwrap();
 
         let mut most_pixels = 0;
         let mut file_id = String::default();
@@ -1159,21 +1324,34 @@ impl MessageHandler {
         let get_file = GetFile { file_id };
         let file = match self.bot.make_request(&get_file).await {
             Ok(file) => file,
-            _ => return,
+            Err(e) => {
+                with_user_scope(message.from.as_ref(), None, || {
+                    capture_fail(&e);
+                });
+                self.send_generic_reply(&message, "error-generic").await;
+                return;
+            }
         };
 
         let photo = match self.bot.download_file(file.file_path.unwrap()).await {
             Ok(photo) => photo,
-            _ => return,
+            Err(e) => {
+                with_user_scope(message.from.as_ref(), None, || {
+                    capture_fail(&e);
+                });
+                self.send_generic_reply(&message, "error-generic").await;
+                return;
+            }
         };
 
         let matches = match self.fapi.image_search(photo, false).await {
             Ok(matches) if !matches.is_empty() => matches,
             _ => {
-                let bundle = self.get_fluent_bundle(message.from.unwrap().language_code.as_deref());
+                let bundle =
+                    self.get_fluent_bundle(message.from.clone().unwrap().language_code.as_deref());
 
-                let message = SendMessage {
-                    chat_id: message.chat.id.into(),
+                let send_message = SendMessage {
+                    chat_id: message.chat_id(),
                     text: get_message(&bundle, "reverse-no-results", None).unwrap(),
                     reply_to_message_id: Some(message.message_id),
                     ..Default::default()
@@ -1181,8 +1359,12 @@ impl MessageHandler {
 
                 completed.store(true, std::sync::atomic::Ordering::SeqCst);
 
-                if let Err(e) = self.bot.make_request(&message).await {
+                if let Err(e) = self.bot.make_request(&send_message).await {
                     log::error!("Unable to respond to photo: {:?}", e);
+                    with_user_scope(message.from.as_ref(), None, || {
+                        capture_fail(&e);
+                    });
+                    self.send_generic_reply(&message, "error-generic").await;
                 }
 
                 let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "source")
@@ -1191,6 +1373,10 @@ impl MessageHandler {
 
                 if let Err(e) = self.influx.query(&point).await {
                     log::error!("Unable to send command to InfluxDB: {:?}", e);
+                    with_user_scope(message.from.as_ref(), None, || {
+                        capture_fail(&e);
+                    });
+                    self.send_generic_reply(&message, "error-generic").await;
                 }
 
                 return;
@@ -1200,7 +1386,7 @@ impl MessageHandler {
         let first = matches.get(0).unwrap();
         log::debug!("Match has distance of {}", first.distance);
 
-        let bundle = self.get_fluent_bundle(message.from.unwrap().language_code.as_deref());
+        let bundle = self.get_fluent_bundle(message.from.clone().unwrap().language_code.as_deref());
 
         let name = if first.distance < 5 {
             "reverse-good-result"
@@ -1215,8 +1401,8 @@ impl MessageHandler {
             fluent::FluentValue::from(format!("https://www.furaffinity.net/view/{}/", first.id)),
         );
 
-        let message = SendMessage {
-            chat_id: message.chat.id.into(),
+        let send_message = SendMessage {
+            chat_id: message.chat_id(),
             text: get_message(&bundle, name, Some(args)).unwrap(),
             disable_web_page_preview: Some(first.distance > 5),
             reply_to_message_id: Some(message.message_id),
@@ -1225,8 +1411,12 @@ impl MessageHandler {
 
         completed.store(true, std::sync::atomic::Ordering::SeqCst);
 
-        if let Err(e) = self.bot.make_request(&message).await {
+        if let Err(e) = self.bot.make_request(&send_message).await {
             log::error!("Unable to respond to photo: {:?}", e);
+            with_user_scope(message.from.as_ref(), None, || {
+                capture_fail(&e);
+            });
+            self.send_generic_reply(&message, "error-generic").await;
         }
 
         let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "source")
@@ -1236,6 +1426,10 @@ impl MessageHandler {
 
         if let Err(e) = self.influx.query(&point).await {
             log::error!("Unable to send command to InfluxDB: {:?}", e);
+            with_user_scope(message.from.as_ref(), None, || {
+                capture_fail(&e);
+            });
+            self.send_generic_reply(&message, "error-generic").await;
         }
     }
 }

@@ -1,9 +1,15 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug)]
+#[macro_use]
+extern crate failure;
+
+#[derive(Fail, Debug)]
 pub enum Error {
+    #[fail(display = "telegram error: {}", _0)]
     Telegram(TelegramError),
+    #[fail(display = "json parsing error: {}", _0)]
     JSON(serde_json::Error),
+    #[fail(display = "http error: {}", _0)]
     Request(reqwest::Error),
 }
 
@@ -33,6 +39,19 @@ pub struct TelegramError {
     pub description: Option<String>,
     /// Additional information about errors in the request.
     pub parameters: Option<ResponseParameters>,
+}
+
+impl std::fmt::Display for TelegramError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "Telegram Error {}: {}",
+            self.error_code.unwrap_or(-1),
+            self.description
+                .clone()
+                .unwrap_or_else(|| "no description".to_string())
+        )
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -413,7 +432,7 @@ impl std::fmt::Debug for FileType {
             FileType::Attach(attach) => write!(f, "FileType Attach: {}", attach),
             FileType::Bytes(name, bytes) => {
                 write!(f, "FileType Bytes: {} with len {}", name, bytes.len())
-            },
+            }
             FileType::Missing => write!(f, "FileType Missing!!"),
         }
     }

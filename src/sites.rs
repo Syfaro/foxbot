@@ -30,38 +30,39 @@ fn get_file_ext(name: &str) -> Option<&str> {
     name.split('.').last()
 }
 
-#[derive(Debug)]
-pub struct SiteError {
-    error: Option<Box<dyn std::error::Error>>,
+#[derive(Fail, Debug)]
+pub enum SiteError {
+    #[fail(display = "http error")]
+    Request(reqwest::Error),
+    #[fail(display = "json parsing error")]
+    JSON(serde_json::Error),
+    #[fail(display = "missing required value")]
+    Missing(std::option::NoneError),
+    #[fail(display = "twitter error")]
+    Twitter(egg_mode::error::Error),
 }
 
 impl From<reqwest::Error> for SiteError {
-    fn from(error: reqwest::Error) -> SiteError {
-        SiteError {
-            error: Some(Box::new(error)),
-        }
+    fn from(e: reqwest::Error) -> Self {
+        SiteError::Request(e)
     }
 }
 
 impl From<serde_json::Error> for SiteError {
-    fn from(error: serde_json::Error) -> SiteError {
-        SiteError {
-            error: Some(Box::new(error)),
-        }
-    }
-}
-
-impl From<std::option::NoneError> for SiteError {
-    fn from(_: std::option::NoneError) -> SiteError {
-        SiteError { error: None }
+    fn from(e: serde_json::Error) -> Self {
+        SiteError::JSON(e)
     }
 }
 
 impl From<egg_mode::error::Error> for SiteError {
-    fn from(error: egg_mode::error::Error) -> SiteError {
-        SiteError {
-            error: Some(Box::new(error)),
-        }
+    fn from(e: egg_mode::error::Error) -> Self {
+        SiteError::Twitter(e)
+    }
+}
+
+impl From<std::option::NoneError> for SiteError {
+    fn from(e: std::option::NoneError) -> Self {
+        SiteError::Missing(e)
     }
 }
 
@@ -558,28 +559,13 @@ impl Site for Mastodon {
         let base = captures["host"].to_owned();
         let status_id = captures["id"].to_owned();
 
-        let resp = reqwest::Client::new()
+        let json: MastodonStatus = reqwest::Client::new()
             .get(&format!("{}/api/v1/statuses/{}", base, status_id))
             .header(header::USER_AGENT, USER_AGENT)
-            .send();
-
-        let resp = match resp.await {
-            Ok(resp) => resp,
-            Err(e) => {
-                return Err(SiteError {
-                    error: Some(Box::new(e)),
-                })
-            }
-        };
-
-        let json: MastodonStatus = match resp.json().await {
-            Ok(json) => json,
-            Err(e) => {
-                return Err(SiteError {
-                    error: Some(Box::new(e)),
-                })
-            }
-        };
+            .send()
+            .await?
+            .json()
+            .await?;
 
         if json.media_attachments.is_empty() {
             return Ok(None);
