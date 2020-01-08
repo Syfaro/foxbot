@@ -26,7 +26,7 @@ static STARTING_ARTWORK: &[&str] = &[
     "https://www.furaffinity.net/view/32914936/",
     "https://www.furaffinity.net/view/32396231/",
     "https://www.furaffinity.net/view/32267612/",
-    "https://www.furaffinity.net/view/32232169/"
+    "https://www.furaffinity.net/view/32232169/",
 ];
 
 static L10N_RESOURCES: &[&str] = &["foxbot.ftl"];
@@ -130,9 +130,15 @@ async fn main() {
         .parse()
         .unwrap_or(false);
 
+    let bot_user = bot
+        .make_request(&GetMe {})
+        .await
+        .expect("Unable to fetch bot user");
+
     let handler = Arc::new(Mutex::new(MessageHandler {
         sites,
         bot: bot.clone(),
+        bot_user,
         finder,
         fapi,
         db,
@@ -280,6 +286,7 @@ async fn poll_updates(bot: Arc<Telegram>, handler: Arc<Mutex<MessageHandler>>) {
 struct MessageHandler {
     sites: Vec<Box<dyn Site + Send + Sync>>,
     bot: Arc<Telegram>,
+    bot_user: User,
     fapi: Arc<fautil::FAUtil>,
     finder: linkify::LinkFinder,
     db: pickledb::PickleDb,
@@ -408,7 +415,7 @@ impl MessageHandler {
             }
         }
 
-        let personal = results.iter().find(|result| result.personal).is_some();
+        let personal = results.iter().any(|result| result.personal);
 
         let mut responses: Vec<InlineQueryResult> = results
             .iter()
@@ -471,14 +478,24 @@ impl MessageHandler {
             .skip(command.offset as usize)
             .take(command.length as usize)
             .collect();
+        let mut command_parts = command_text.split('@');
+        let command_text = command_parts.next().unwrap();
+        if let Some(username) = command_parts.next() {
+            if username.to_lowercase() != self.bot_user.username.as_ref().unwrap().to_lowercase() {
+                log::debug!("Got command for other bot: {}", username);
+                return;
+            }
+        }
+
         let args: String = text
             .chars()
             .skip((command.offset + command.length + 1) as usize)
             .collect();
+
         log::debug!("Got command: {}", command_text);
         log::trace!("Command {} had arguments: {}", command_text, args);
 
-        match command_text.as_ref() {
+        match command_text {
             "/help" | "/start" => {
                 let from = message.from.clone().unwrap();
                 let bundle = self.get_fluent_bundle(from.language_code.as_deref());
@@ -514,7 +531,7 @@ impl MessageHandler {
         };
 
         let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "command")
-            .add_tag("command", command_text.clone())
+            .add_tag("command", command_text)
             .add_field("duration", now.elapsed().as_millis() as i64);
 
         if let Err(e) = self.influx.query(&point).await {
