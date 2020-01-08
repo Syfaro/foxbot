@@ -16,6 +16,8 @@ pub struct PostInfo {
     pub file_type: String,
     /// URL to full image
     pub url: String,
+    /// If this result is personal
+    pub personal: bool,
     /// URL to thumbnail, if available
     pub thumb: Option<String>,
     /// URL to original source of this image, if available
@@ -179,6 +181,7 @@ impl Site for Direct {
             thumb: None,
             source_link,
             extra_caption: None,
+            personal: false,
         }]))
     }
 }
@@ -251,6 +254,7 @@ impl Site for E621 {
             thumb: Some(resp.preview_url),
             source_link: Some(format!("https://e621.net/post/show/{}", resp.id)),
             extra_caption: None,
+            personal: false,
         }]))
     }
 }
@@ -335,7 +339,9 @@ impl Site for Twitter {
             Err(e) => return Err(e.into()),
         };
 
-        let screen_name = tweet.user.unwrap().screen_name.to_owned();
+        let user = tweet.user.unwrap();
+
+        let screen_name = user.screen_name.to_owned();
         let tweet_id = tweet.id;
 
         let media = match tweet.extended_entities {
@@ -354,6 +360,7 @@ impl Site for Twitter {
                     thumb: Some(format!("{}:thumb", item.media_url_https.clone())),
                     source_link: Some(link.clone()),
                     extra_caption: None,
+                    personal: user.protected,
                 })
                 .collect(),
         ))
@@ -393,6 +400,7 @@ impl FurAffinity {
                     thumb: None,
                     source_link: None,
                     extra_caption: None,
+                    personal: false,
                 }));
             }
         };
@@ -403,6 +411,7 @@ impl FurAffinity {
             thumb: None,
             source_link: Some(format!("https://www.furaffinity.net/view/{}/", sub.id)),
             extra_caption: None,
+            personal: false,
         }))
     }
 
@@ -437,6 +446,7 @@ impl FurAffinity {
             thumb: None,
             source_link: Some(url.to_string()),
             extra_caption: None,
+            personal: false,
         }))
     }
 }
@@ -584,6 +594,7 @@ impl Site for Mastodon {
                     thumb: Some(media.preview_url.clone()),
                     source_link: Some(json.url.clone()),
                     extra_caption: None,
+                    personal: false,
                 })
                 .collect(),
         ))
@@ -666,6 +677,7 @@ impl Site for Weasyl {
                         thumb: Some(thumb_url),
                         source_link: Some(url.to_string()),
                         extra_caption: None,
+                        personal: false,
                     }
                 })
                 .collect(),

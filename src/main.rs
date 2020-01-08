@@ -408,6 +408,8 @@ impl MessageHandler {
             }
         }
 
+        let personal = results.iter().find(|result| result.personal).is_some();
+
         let mut responses: Vec<InlineQueryResult> = results
             .iter()
             .map(|result| self.process_result(result, &inline.from))
@@ -438,7 +440,7 @@ impl MessageHandler {
         let answer_inline = AnswerInlineQuery {
             inline_query_id: inline.id,
             results: responses,
-            is_personal: Some(true),
+            is_personal: Some(personal),
             ..Default::default()
         };
 
