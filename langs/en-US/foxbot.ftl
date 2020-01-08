@@ -13,15 +13,6 @@ welcome =
     
     Contact my creator { -creatorName } if you have any issues or feature suggestions.
 
-# Inline Help Text
-inline-help-inline-title = Type your link or click me for more info
-inline-help-inline-body =
-    Hi there! I'm { -botName }.
-    
-    By typing my name into the Telegram message box followed by a link, I'll grab your image and let you send it to your chats while adding a source and direct image link. You can even add your Twitter account to get content from locked accounts.
-    
-    If you send me a photo directly, I'll try and find its source on FurAffinity.
-
 # Inline Keyboard
 inline-direct = Direct Link
 inline-source = Source

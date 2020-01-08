@@ -422,27 +422,26 @@ impl MessageHandler {
         if responses.is_empty() {
             let bundle = self.get_fluent_bundle(inline.from.language_code.as_deref());
 
-            responses.push(if inline.query.is_empty() {
-                InlineQueryResult::article(
-                    generate_id(),
-                    get_message(&bundle, "inline-help-inline-title", None).unwrap(),
-                    get_message(&bundle, "inline-help-inline-body", None).unwrap(),
-                )
-            } else {
-                InlineQueryResult::article(
+            if !inline.query.is_empty() {
+                responses.push(InlineQueryResult::article(
                     generate_id(),
                     get_message(&bundle, "inline-no-results-title", None).unwrap(),
                     get_message(&bundle, "inline-no-results-body", None).unwrap(),
-                )
-            });
+                ));
+            }
         }
 
-        let answer_inline = AnswerInlineQuery {
+        let mut answer_inline = AnswerInlineQuery {
             inline_query_id: inline.id,
             results: responses,
             is_personal: Some(personal),
             ..Default::default()
         };
+
+        if inline.query.is_empty() {
+            answer_inline.switch_pm_text = Some("Help".to_string());
+            answer_inline.switch_pm_parameter = Some("help".to_string());
+        }
 
         if let Err(e) = self.bot.make_request(&answer_inline).await {
             log::error!("Unable to respond to inline: {:?}", e);
