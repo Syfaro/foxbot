@@ -352,6 +352,7 @@ impl Default for ForceReply {
 #[derive(Serialize, Debug)]
 #[serde(untagged)]
 pub enum ReplyMarkup {
+    InlineKeyboardMarkup(InlineKeyboardMarkup),
     ForceReply(ForceReply),
 }
 
@@ -394,6 +395,14 @@ pub enum FileType {
     /// Bytes requires a filename in addition to the file bytes, which it
     /// then uploads to Telegram.
     Bytes(String, Vec<u8>),
+    /// Missing means that a file should have been specified but has not.
+    Missing,
+}
+
+impl Default for FileType {
+    fn default() -> Self {
+        FileType::Missing
+    }
 }
 
 impl std::fmt::Debug for FileType {
@@ -404,7 +413,8 @@ impl std::fmt::Debug for FileType {
             FileType::Attach(attach) => write!(f, "FileType Attach: {}", attach),
             FileType::Bytes(name, bytes) => {
                 write!(f, "FileType Bytes: {} with len {}", name, bytes.len())
-            }
+            },
+            FileType::Missing => write!(f, "FileType Missing!!"),
         }
     }
 }
@@ -431,7 +441,7 @@ impl FileType {
 }
 
 /// SendPhoto sends a photo.
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Default)]
 pub struct SendPhoto {
     /// The ID of the chat to send a photo to.
     pub chat_id: ChatID,
@@ -441,6 +451,10 @@ pub struct SendPhoto {
     /// A caption for the photo, if desired.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub caption: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to_message_id: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_markup: Option<ReplyMarkup>,
 }
 
 impl TelegramRequest for SendPhoto {
@@ -530,6 +544,16 @@ pub struct InputMediaPhoto {
     pub caption: Option<String>,
 }
 
+impl Default for InputMediaPhoto {
+    fn default() -> Self {
+        Self {
+            media_type: "photo".to_string(),
+            media: Default::default(),
+            caption: None,
+        }
+    }
+}
+
 #[derive(Serialize, Clone)]
 pub struct InputMediaVideo {
     #[serde(rename = "type")]
@@ -572,15 +596,21 @@ impl InputMedia {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct SendMediaGroup {
     pub chat_id: ChatID,
     #[serde(serialize_with = "clean_input_media")]
     pub media: Vec<InputMedia>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disable_notification: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to_message_id: Option<i32>,
 }
 
 /// Attempt to remove body for types that are getting uploaded.
 /// It also converts files into attachments with names based on filenames.
+///
+/// This will panic if you attempt to upload a Missing file.
 fn clean_input_media<S>(input_media: &[InputMedia], s: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
@@ -591,6 +621,11 @@ where
 
     for elem in input_media {
         let file = elem.get_file();
+
+        if let FileType::Missing = file {
+            panic!("tried to uploading missing file");
+        }
+
         if file.needs_upload() {
             let new_file = match file {
                 FileType::Bytes(file_name, _) => {
@@ -668,13 +703,17 @@ impl TelegramRequest for AnswerInlineQuery {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct InlineKeyboardButton {
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub callback_data: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub switch_inline_query: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub switch_inline_query_current_chat: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

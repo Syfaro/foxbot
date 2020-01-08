@@ -2,7 +2,7 @@
 
 use sites::{PostInfo, Site};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{atomic::AtomicBool, Arc};
 use telegram::*;
 use tokio::sync::Mutex;
 use tokio01::runtime::current_thread::block_on_all;
@@ -18,6 +18,16 @@ fn generate_id() -> String {
         .take(24)
         .collect()
 }
+
+static STARTING_ARTWORK: &[&str] = &[
+    "https://www.furaffinity.net/view/33742297/",
+    "https://www.furaffinity.net/view/33166216/",
+    "https://www.furaffinity.net/view/33040454/",
+    "https://www.furaffinity.net/view/32914936/",
+    "https://www.furaffinity.net/view/32396231/",
+    "https://www.furaffinity.net/view/32267612/",
+    "https://www.furaffinity.net/view/32232169/"
+];
 
 static L10N_RESOURCES: &[&str] = &["foxbot.ftl"];
 static L10N_LANGS: &[&str] = &["en-US"];
@@ -468,17 +478,27 @@ impl MessageHandler {
         log::trace!("Command {} had arguments: {}", command_text, args);
 
         match command_text.as_ref() {
-            "/twitter" => {
-                self.authenticate_twitter(message.message_id, &message.from.unwrap())
-                    .await;
-            }
             "/help" | "/start" => {
                 let from = message.from.clone().unwrap();
                 let bundle = self.get_fluent_bundle(from.language_code.as_deref());
 
+                use rand::seq::SliceRandom;
+
+                let reply_markup = ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
+                    inline_keyboard: vec![vec![InlineKeyboardButton {
+                        text: "Try Me!".to_string(),
+                        switch_inline_query_current_chat: Some(
+                            (*STARTING_ARTWORK.choose(&mut rand::thread_rng()).unwrap())
+                                .to_string(),
+                        ),
+                        ..Default::default()
+                    }]],
+                });
+
                 let message = SendMessage {
                     chat_id: message.chat_id(),
                     text: get_message(&bundle, "welcome", None).unwrap(),
+                    reply_markup: Some(reply_markup),
                     ..Default::default()
                 };
 
@@ -486,6 +506,9 @@ impl MessageHandler {
                     log::warn!("Unable to send help message: {:?}", e);
                 }
             }
+            "/twitter" => self.authenticate_twitter(message).await,
+            "/mirror" => self.handle_mirror(message).await,
+            "/source" => self.handle_source(message).await,
             _ => log::info!("Unknown command: {}", command_text),
         };
 
@@ -495,6 +518,298 @@ impl MessageHandler {
 
         if let Err(e) = self.influx.query(&point).await {
             log::error!("Unable to send command to InfluxDB: {:?}", e);
+        }
+    }
+
+    fn send_action(
+        &self,
+        max: usize,
+        chat_id: ChatID,
+        action: ChatAction,
+        completed: Arc<AtomicBool>,
+    ) {
+        use futures_util::stream::StreamExt;
+        use std::{sync::atomic::Ordering::SeqCst, time::Duration};
+
+        let bot = self.bot.clone();
+
+        tokio::spawn(async move {
+            let chat_action = SendChatAction { chat_id, action };
+
+            let mut count: usize = 0;
+
+            tokio::time::interval(Duration::from_secs(5))
+                .take_while(|_| {
+                    let completed = completed.load(SeqCst);
+                    count += 1;
+                    log::trace!(
+                        "Evaluating if should send action, completed: {}, count: {}",
+                        completed,
+                        count
+                    );
+                    futures::future::ready(!completed && count < max)
+                })
+                .for_each(|_| async {
+                    if let Err(e) = bot.make_request(&chat_action).await {
+                        log::warn!("Unable to send chat action: {:?}", e);
+                    }
+                })
+                .await;
+        });
+    }
+
+    async fn handle_source(&mut self, message: Message) {
+        let completed = Arc::new(AtomicBool::new(false));
+        self.send_action(12, message.chat_id(), ChatAction::Typing, completed.clone());
+
+        let message = if let Some(reply_to_message) = message.reply_to_message {
+            *reply_to_message
+        } else {
+            message
+        };
+
+        let photo = match message.photo.clone() {
+            Some(photo) if !photo.is_empty() => photo,
+            _ => {
+                completed.store(true, std::sync::atomic::Ordering::SeqCst);
+                self.send_generic_reply(&message, "source-no-photo").await;
+                return;
+            }
+        };
+
+        let biggest = photo
+            .iter()
+            .max_by_key(|size| size.height * size.width)
+            .unwrap();
+        let get_file = GetFile {
+            file_id: biggest.file_id.to_owned(),
+        };
+
+        let file = match self.bot.make_request(&get_file).await {
+            Ok(file) => file,
+            Err(e) => {
+                self.send_generic_reply(&message, "error-generic").await;
+                log::error!("Unable to get file: {:?}", e);
+                return;
+            }
+        };
+
+        let bytes = match self.bot.download_file(file.file_path.unwrap()).await {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                self.send_generic_reply(&message, "error-generic").await;
+                log::error!("Unable to download file: {:?}", e);
+                return;
+            }
+        };
+
+        let matches = match self.fapi.image_search(bytes, false).await {
+            Ok(matches) => matches,
+            Err(e) => {
+                self.send_generic_reply(&message, "error-generic").await;
+                log::error!("Unable to find matches: {:?}", e);
+                return;
+            }
+        };
+
+        let result = match matches.first() {
+            Some(result) => result,
+            None => {
+                self.send_generic_reply(&message, "reverse-no-results")
+                    .await;
+                return;
+            }
+        };
+
+        let bundle = self.get_fluent_bundle(message.from.unwrap().language_code.as_deref());
+
+        let name = if result.distance < 5 {
+            "reverse-good-result"
+        } else {
+            "reverse-bad-result"
+        };
+
+        let mut args = fluent::FluentArgs::new();
+        args.insert("distance", fluent::FluentValue::from(result.distance));
+        args.insert(
+            "link",
+            fluent::FluentValue::from(format!("https://www.furaffinity.net/view/{}/", result.id)),
+        );
+
+        let message = SendMessage {
+            chat_id: message.chat.id.into(),
+            text: get_message(&bundle, name, Some(args)).unwrap(),
+            disable_web_page_preview: Some(result.distance > 5),
+            reply_to_message_id: Some(message.message_id),
+            ..Default::default()
+        };
+
+        if let Err(e) = self.bot.make_request(&message).await {
+            log::error!("Unable to make request: {:?}", e);
+        }
+
+        completed.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    async fn send_generic_reply(&mut self, message: &Message, name: &str) {
+        let language_code = match &message.from {
+            Some(from) => &from.language_code,
+            None => return,
+        };
+
+        let bundle = self.get_fluent_bundle(language_code.as_deref());
+        let message = SendMessage {
+            chat_id: message.chat_id(),
+            reply_to_message_id: Some(message.message_id),
+            text: get_message(&bundle, name, None).unwrap(),
+            ..Default::default()
+        };
+
+        if let Err(e) = self.bot.make_request(&message).await {
+            log::error!("Unable to make request: {:?}", e);
+        }
+    }
+
+    async fn handle_mirror(&mut self, message: Message) {
+        let from = message.from.clone().unwrap();
+
+        let completed = Arc::new(AtomicBool::new(false));
+        self.send_action(
+            6,
+            message.chat_id(),
+            ChatAction::UploadPhoto,
+            completed.clone(),
+        );
+
+        let message = if let Some(reply_to_message) = message.reply_to_message {
+            *reply_to_message
+        } else {
+            message
+        };
+
+        let links: Vec<_> = if let Some(text) = &message.text {
+            self.finder.links(&text).collect()
+        } else {
+            vec![]
+        };
+
+        if links.is_empty() {
+            self.send_generic_reply(&message, "mirror-no-links").await;
+            completed.store(true, std::sync::atomic::Ordering::SeqCst);
+            return;
+        }
+
+        let mut results: Vec<PostInfo> = Vec::with_capacity(links.len());
+        let mut missing: Vec<String> = Vec::new();
+
+        'link: for link in links {
+            for site in &mut self.sites {
+                let link_str = link.as_str();
+
+                if site.url_supported(link_str).await {
+                    log::debug!("Link {} supported by {}", link_str, site.name());
+
+                    let images = match site.get_images(from.id, link_str).await {
+                        Ok(images) => images,
+                        Err(e) => {
+                            missing.push(link_str.to_string());
+                            log::warn!("Unable to get image: {:?}", e);
+                            continue 'link;
+                        }
+                    };
+
+                    let images = match images {
+                        Some(images) => images,
+                        None => {
+                            missing.push(link_str.to_string());
+                            continue 'link;
+                        }
+                    };
+
+                    log::debug!("Found images: {:?}", images);
+
+                    results.extend(images);
+
+                    continue 'link;
+                }
+            }
+        }
+
+        if results.is_empty() {
+            self.send_generic_reply(&message, "mirror-no-results").await;
+            completed.store(true, std::sync::atomic::Ordering::SeqCst);
+            return;
+        }
+
+        if results.len() == 1 {
+            let result = results.get(0).unwrap();
+
+            let photo = SendPhoto {
+                chat_id: message.chat_id(),
+                caption: if let Some(source_link) = &result.source_link {
+                    Some(source_link.to_owned())
+                } else {
+                    None
+                },
+                photo: FileType::URL(result.url.clone()),
+                reply_to_message_id: Some(message.message_id),
+                ..Default::default()
+            };
+
+            completed.store(true, std::sync::atomic::Ordering::SeqCst);
+
+            if let Err(e) = self.bot.make_request(&photo).await {
+                log::error!("Unable to make request: {:?}", e);
+            }
+        } else {
+            for chunk in results.chunks(10) {
+                let media = chunk
+                    .iter()
+                    .map(|result| {
+                        InputMedia::Photo(InputMediaPhoto {
+                            media: FileType::URL(result.url.to_owned()),
+                            caption: if let Some(source_link) = &result.source_link {
+                                Some(source_link.to_owned())
+                            } else {
+                                None
+                            },
+                            ..Default::default()
+                        })
+                    })
+                    .collect();
+
+                let media_group = SendMediaGroup {
+                    chat_id: message.chat_id(),
+                    reply_to_message_id: Some(message.message_id),
+                    media,
+                    ..Default::default()
+                };
+
+                if let Err(e) = self.bot.make_request(&media_group).await {
+                    log::error!("Unable to make request: {:?}", e);
+                }
+            }
+
+            completed.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        if !missing.is_empty() {
+            let bundle = self.get_fluent_bundle(from.language_code.as_deref());
+            let links: Vec<String> = missing.iter().map(|item| format!("· {}", item)).collect();
+            let mut args = fluent::FluentArgs::new();
+            args.insert("links", fluent::FluentValue::from(links.join("\n")));
+
+            let message = SendMessage {
+                chat_id: message.chat_id(),
+                reply_to_message_id: Some(message.message_id),
+                text: get_message(&bundle, "mirror-missing", Some(args)).unwrap(),
+                disable_web_page_preview: Some(true),
+                ..Default::default()
+            };
+
+            if let Err(e) = self.bot.make_request(&message).await {
+                log::error!("Unable to make request: {:?}", e);
+            }
         }
     }
 
@@ -619,8 +934,15 @@ impl MessageHandler {
         }
     }
 
-    async fn authenticate_twitter(&mut self, id: i32, user: &User) {
+    async fn authenticate_twitter(&mut self, message: Message) {
         let now = std::time::Instant::now();
+
+        if message.chat.chat_type != "private" {
+            self.send_generic_reply(&message, "twitter-private").await;
+            return;
+        }
+
+        let user = message.from.unwrap();
 
         let con_token =
             egg_mode::KeyPair::new(self.consumer_key.clone(), self.consumer_secret.clone());
@@ -635,7 +957,7 @@ impl MessageHandler {
                 let message = SendMessage {
                     chat_id: user.id.into(),
                     text: get_message(&bundle, "error-generic", None).unwrap(),
-                    reply_to_message_id: Some(id),
+                    reply_to_message_id: Some(message.message_id),
                     ..Default::default()
                 };
 
@@ -657,7 +979,7 @@ impl MessageHandler {
             let message = SendMessage {
                 chat_id: user.id.into(),
                 text: get_message(&bundle, "error-generic", None).unwrap(),
-                reply_to_message_id: Some(id),
+                reply_to_message_id: Some(message.message_id),
                 ..Default::default()
             };
 
@@ -678,7 +1000,7 @@ impl MessageHandler {
             chat_id: user.id.into(),
             text: get_message(&bundle, "twitter-oob", Some(args)).unwrap(),
             reply_markup: Some(ReplyMarkup::ForceReply(ForceReply::selective())),
-            reply_to_message_id: Some(id),
+            reply_to_message_id: Some(message.message_id),
             ..Default::default()
         };
 
@@ -702,6 +1024,7 @@ impl MessageHandler {
             text: get_message(&bundle, "inline-direct", None).unwrap(),
             url: Some(result.url.clone()),
             callback_data: None,
+            ..Default::default()
         }];
 
         if let Some(source_link) = &result.source_link {
@@ -709,6 +1032,7 @@ impl MessageHandler {
                 text: get_message(&bundle, "inline-source", None).unwrap(),
                 url: Some(source_link.clone()),
                 callback_data: None,
+                ..Default::default()
             })
         }
 
@@ -799,39 +1123,8 @@ impl MessageHandler {
     async fn process_photo(&mut self, message: Message) {
         let now = std::time::Instant::now();
 
-        let completed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-
-        let bot = self.bot.clone();
-        let chat_id = message.chat_id();
-        let completed_clone = completed.clone();
-        tokio::spawn(async move {
-            use futures_util::stream::StreamExt;
-
-            let chat_action = SendChatAction {
-                chat_id,
-                action: ChatAction::Typing,
-            };
-
-            let mut count: usize = 0;
-
-            tokio::time::interval(std::time::Duration::from_secs(5))
-                .take_while(|_| {
-                    let completed = completed_clone.load(std::sync::atomic::Ordering::SeqCst);
-                    count += 1;
-                    log::trace!(
-                        "Evaluating if should send typing, completed: {}, count: {}",
-                        completed,
-                        count
-                    );
-                    futures::future::ready(!completed && count < 12)
-                })
-                .for_each(|_| async {
-                    if let Err(e) = bot.make_request(&chat_action).await {
-                        log::warn!("Unable to send chat action: {:?}", e);
-                    }
-                })
-                .await;
-        });
+        let completed = Arc::new(AtomicBool::new(false));
+        self.send_action(12, message.chat_id(), ChatAction::Typing, completed.clone());
 
         let photos = message.photo.unwrap();
 
@@ -901,7 +1194,7 @@ impl MessageHandler {
         args.insert("distance", fluent::FluentValue::from(first.distance));
         args.insert(
             "link",
-            fluent::FluentValue::from(format!("https://www.furaffinity.net/view/{}", first.id)),
+            fluent::FluentValue::from(format!("https://www.furaffinity.net/view/{}/", first.id)),
         );
 
         let message = SendMessage {
