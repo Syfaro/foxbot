@@ -19,6 +19,7 @@ hyper = "0.13.1"
 log = "0.4.8"
 pretty_env_logger = "0.3.1"
 sentry = "0.17.0"
+uuid = "0.7.4"
 failure = "0.1.6"
 influxdb = { git = "https://github.com/Empty2k12/influxdb-rust.git", rev = "1b0cae12d8b1b0e2bd29129e6757a9df8a8faf50" }
 

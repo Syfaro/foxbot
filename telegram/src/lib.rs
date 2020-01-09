@@ -375,6 +375,14 @@ pub enum ReplyMarkup {
     ForceReply(ForceReply),
 }
 
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub enum ParseMode {
+    HTML,
+    Markdown,
+    MarkdownV2,
+}
+
 /// SendMessage sends a message.
 #[derive(Serialize, Default, Debug)]
 pub struct SendMessage {
@@ -382,6 +390,9 @@ pub struct SendMessage {
     pub chat_id: ChatID,
     /// The text of the message.
     pub text: String,
+    /// The mode used to parse the provided text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parse_mode: Option<ParseMode>,
     /// The ID of the [Message] this Message is in reply to.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reply_to_message_id: Option<i32>,

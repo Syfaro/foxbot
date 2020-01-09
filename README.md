@@ -36,3 +36,4 @@ Env Name               | Description
 `INFLUX_USER`          | InfluxDB username
 `INFLUX_PASS`          | InfluxDB password
 `USE_PROXY`            | If should use images.weserv.nl to proxy images
+`SENTRY_DSN`           | Sentry DSN to report errors

@@ -45,4 +45,5 @@ mirror-missing =
 source-no-photo = Sorry, I can't seem to find the photo here.
 
 # Error Messages
-error-generic = Something went wrong, please try again later.
+error-generic = Oh no, something went wrong! Please send a message to my creator { -creatorName } if you continue having issues.
+error-uuid = Oh no, something went wrong! Please send a message to my creator { -creatorName } with this ID if you continue having issues: { $uuid }
