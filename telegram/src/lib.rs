@@ -104,11 +104,20 @@ pub struct User {
     pub language_code: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ChatType {
+    Private,
+    Group,
+    Supergroup,
+    Channel,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Chat {
     pub id: i64,
     #[serde(rename = "type")]
-    pub chat_type: String,
+    pub chat_type: ChatType,
 }
 
 #[derive(Clone, Debug, Deserialize)]

@@ -1133,7 +1133,7 @@ impl MessageHandler {
     async fn authenticate_twitter(&mut self, message: Message) {
         let now = std::time::Instant::now();
 
-        if message.chat.chat_type != "private" {
+        if message.chat.chat_type != ChatType::Private {
             self.send_generic_reply(&message, "twitter-private").await;
             return;
         }
@@ -1322,6 +1322,10 @@ impl MessageHandler {
 
     async fn process_photo(&mut self, message: Message) {
         let now = std::time::Instant::now();
+
+        if message.chat.chat_type != ChatType::Private {
+            return;
+        }
 
         let completed = Arc::new(AtomicBool::new(false));
         self.send_action(
