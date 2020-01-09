@@ -600,39 +600,7 @@ impl MessageHandler {
         let from = message.from.clone();
 
         match command_text {
-            "/help" | "/start" => {
-                let from = message.from.clone().unwrap();
-                let bundle = self.get_fluent_bundle(from.language_code.as_deref());
-
-                use rand::seq::SliceRandom;
-
-                let reply_markup = ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
-                    inline_keyboard: vec![vec![InlineKeyboardButton {
-                        text: "Try Me!".to_string(),
-                        switch_inline_query_current_chat: Some(
-                            (*STARTING_ARTWORK.choose(&mut rand::thread_rng()).unwrap())
-                                .to_string(),
-                        ),
-                        ..Default::default()
-                    }]],
-                });
-
-                let send_message = SendMessage {
-                    chat_id: message.chat_id(),
-                    text: get_message(&bundle, "welcome", None).unwrap(),
-                    reply_markup: Some(reply_markup),
-                    ..Default::default()
-                };
-
-                if let Err(e) = self.bot.make_request(&send_message).await {
-                    log::error!("Unable to send help message: {:?}", e);
-                    with_user_scope(
-                        message.from.as_ref(),
-                        Some(vec![("command", command_text.to_string())]),
-                        || capture_fail(&e),
-                    );
-                }
-            }
+            "/help" | "/start" => self.handle_welcome(message, command_text).await,
             "/twitter" => self.authenticate_twitter(message).await,
             "/mirror" => self.handle_mirror(message).await,
             "/source" => self.handle_source(message).await,
@@ -648,6 +616,45 @@ impl MessageHandler {
             with_user_scope(from.as_ref(), None, || {
                 capture_fail(&e);
             });
+        }
+    }
+
+    async fn handle_welcome(&mut self, message: Message, command: &str) {
+        let from = message.from.clone().unwrap();
+        let bundle = self.get_fluent_bundle(from.language_code.as_deref());
+
+        use rand::seq::SliceRandom;
+
+        let reply_markup = ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
+            inline_keyboard: vec![vec![InlineKeyboardButton {
+                text: "Try Me!".to_string(),
+                switch_inline_query_current_chat: Some(
+                    (*STARTING_ARTWORK.choose(&mut rand::thread_rng()).unwrap()).to_string(),
+                ),
+                ..Default::default()
+            }]],
+        });
+
+        let name = if command == "group-add" {
+            "welcome-group"
+        } else {
+            "welcome"
+        };
+
+        let send_message = SendMessage {
+            chat_id: message.chat_id(),
+            text: get_message(&bundle, &name, None).unwrap(),
+            reply_markup: Some(reply_markup),
+            ..Default::default()
+        };
+
+        if let Err(e) = self.bot.make_request(&send_message).await {
+            log::error!("Unable to send help message: {:?}", e);
+            with_user_scope(
+                message.from.as_ref(),
+                Some(vec![("command", command.to_string())]),
+                || capture_fail(&e),
+            );
         }
     }
 
@@ -1104,6 +1111,13 @@ impl MessageHandler {
                 self.handle_command(message).await;
             } else if message.text.is_some() {
                 self.handle_text(message).await;
+            } else if let Some(new_members) = &message.new_chat_members {
+                if new_members
+                    .iter()
+                    .any(|member| member.id == self.bot_user.id)
+                {
+                    self.handle_welcome(message, "group-add").await;
+                }
             }
         } else if let Some(chosen_result) = update.chosen_inline_result {
             let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "chosen")

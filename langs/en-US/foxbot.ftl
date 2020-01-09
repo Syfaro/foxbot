@@ -13,6 +13,15 @@ welcome =
     
     Contact my creator { -creatorName } if you have any issues or feature suggestions.
 
+welcome-group =
+    Hi, I'm { -botName }.
+    
+    I'm here to help with sharing images! If you use me as an inline bot, I can easily get images from most furry sites, while keeping a link to the original source.
+    
+    I've also got a few commands to help in groups:
+    · /mirror - I'll look at all the links in your message or the message you're replying to and mirror them
+    · /source - I'll attempt to find if the photo you're replying to has been posted on FurAffinity
+
 # Inline Keyboard
 inline-direct = Direct Link
 inline-source = Source
