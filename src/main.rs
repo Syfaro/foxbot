@@ -15,6 +15,8 @@ extern crate failure;
 mod sites;
 mod utils;
 
+// MARK: Statics and types
+
 type BoxedSite = Box<dyn Site + Send + Sync>;
 
 fn generate_id() -> String {
@@ -38,6 +40,8 @@ static STARTING_ARTWORK: &[&str] = &[
 
 static L10N_RESOURCES: &[&str] = &["foxbot.ftl"];
 static L10N_LANGS: &[&str] = &["en-US"];
+
+// MARK: Initialization
 
 #[tokio::main]
 async fn main() {
@@ -189,6 +193,8 @@ async fn main() {
     }
 }
 
+// MARK: Get Bot API updates
+
 async fn handle_request(
     req: hyper::Request<hyper::Body>,
     handler: Arc<Mutex<MessageHandler>>,
@@ -251,10 +257,9 @@ async fn receive_webhook(handler: Arc<Mutex<MessageHandler>>) {
     let host = std::env::var("HTTP_HOST").expect("Missing HTTP_HOST");
     let addr = host.parse().expect("Invalid HTTP_HOST");
 
-    let secret_path = format!(
-        "/{}",
-        std::env::var("HTTP_SECRET").expect("Missing HTTP_SECRET")
-    );
+    let secret = std::env::var("HTTP_SECRET").expect("Missing HTTP_SECRET");
+
+    let secret_path = format!("/{}", secret);
     let secret_path: &'static str = Box::leak(secret_path.into_boxed_str());
 
     let make_svc = hyper::service::make_service_fn(move |_conn| {
@@ -305,61 +310,28 @@ async fn poll_updates(bot: Arc<Telegram>, handler: Arc<Mutex<MessageHandler>>) {
     }
 }
 
+// MARK: Handling updates
+
 struct MessageHandler {
-    sites: Vec<Box<dyn Site + Send + Sync>>,
-    bot: Arc<Telegram>,
+    // State
     bot_user: User,
-    fapi: Arc<fautil::FAUtil>,
-    finder: linkify::LinkFinder,
-    db: pickledb::PickleDb,
-    consumer_key: String,
-    consumer_secret: String,
     langs: HashMap<LanguageIdentifier, Vec<String>>,
     best_lang: HashMap<String, fluent::FluentBundle<fluent::FluentResource>>,
+
+    // API clients
+    bot: Arc<Telegram>,
+    fapi: Arc<fautil::FAUtil>,
     influx: Arc<influxdb::Client>,
+    finder: linkify::LinkFinder,
+
+    // Configuration
+    sites: Vec<BoxedSite>,
+    consumer_key: String,
+    consumer_secret: String,
     use_proxy: bool,
-}
 
-fn get_message(
-    bundle: &fluent::FluentBundle<fluent::FluentResource>,
-    name: &str,
-    args: Option<fluent::FluentArgs>,
-) -> Result<String, Vec<fluent::FluentError>> {
-    let msg = bundle.get_message(name).expect("Message doesn't exist");
-    let pattern = msg.value.expect("Message has no value");
-    let mut errors = vec![];
-    let value = bundle.format_pattern(&pattern, args.as_ref(), &mut errors);
-    if errors.is_empty() {
-        Ok(value.to_string())
-    } else {
-        Err(errors)
-    }
-}
-
-type SentryTags<'a> = Option<Vec<(&'a str, String)>>;
-
-fn with_user_scope<C, R>(from: Option<&User>, tags: SentryTags, callback: C) -> R
-where
-    C: FnOnce() -> R,
-{
-    sentry::with_scope(
-        |scope| {
-            if let Some(user) = from {
-                scope.set_user(Some(sentry::User {
-                    id: Some(user.id.to_string()),
-                    username: user.username.clone(),
-                    ..Default::default()
-                }));
-            };
-
-            if let Some(tags) = tags {
-                for tag in tags {
-                    scope.set_tag(tag.0, tag.1);
-                }
-            }
-        },
-        callback,
-    )
+    // Storage
+    db: pickledb::PickleDb,
 }
 
 impl MessageHandler {
@@ -432,7 +404,7 @@ impl MessageHandler {
     ) where
         C: FnOnce() -> uuid::Uuid,
     {
-        let u = with_user_scope(message.from.as_ref(), tags, callback);
+        let u = utils::with_user_scope(message.from.as_ref(), tags, callback);
 
         let lang_code = message
             .from
@@ -442,14 +414,14 @@ impl MessageHandler {
         let bundle = self.get_fluent_bundle(lang_code.as_deref());
 
         let msg = if u.is_nil() {
-            get_message(&bundle, "error-generic", None)
+            utils::get_message(&bundle, "error-generic", None)
         } else {
             let f = format!("`{}`", u.to_string());
 
             let mut args = fluent::FluentArgs::new();
             args.insert("uuid", fluent::FluentValue::from(f));
 
-            get_message(&bundle, "error-uuid", Some(args))
+            utils::get_message(&bundle, "error-uuid", Some(args))
         };
 
         let send_message = SendMessage {
@@ -462,7 +434,7 @@ impl MessageHandler {
 
         if let Err(e) = self.bot.make_request(&send_message).await {
             log::error!("Unable to send error message to user: {:?}", e);
-            with_user_scope(message.from.as_ref(), None, || {
+            utils::with_user_scope(message.from.as_ref(), None, || {
                 capture_fail(&e);
             });
         }
@@ -510,8 +482,8 @@ impl MessageHandler {
             if !inline.query.is_empty() {
                 responses.push(InlineQueryResult::article(
                     generate_id(),
-                    get_message(&bundle, "inline-no-results-title", None).unwrap(),
-                    get_message(&bundle, "inline-no-results-body", None).unwrap(),
+                    utils::get_message(&bundle, "inline-no-results-title", None).unwrap(),
+                    utils::get_message(&bundle, "inline-no-results-body", None).unwrap(),
                 ));
             }
         }
@@ -529,7 +501,7 @@ impl MessageHandler {
         }
 
         if let Err(e) = self.bot.make_request(&answer_inline).await {
-            with_user_scope(Some(&inline.from), None, || {
+            utils::with_user_scope(Some(&inline.from), None, || {
                 capture_fail(&e);
             });
             log::error!("Unable to respond to inline: {:?}", e);
@@ -561,6 +533,7 @@ impl MessageHandler {
             "/twitter" => self.authenticate_twitter(message).await,
             "/mirror" => self.handle_mirror(message).await,
             "/source" => self.handle_source(message).await,
+            "/alts" => self.handle_alts(message).await,
             _ => log::info!("Unknown command: {}", command.command),
         };
 
@@ -570,17 +543,17 @@ impl MessageHandler {
 
         if let Err(e) = self.influx.query(&point).await {
             log::error!("Unable to send command to InfluxDB: {:?}", e);
-            with_user_scope(from.as_ref(), None, || {
+            utils::with_user_scope(from.as_ref(), None, || {
                 capture_fail(&e);
             });
         }
     }
 
     async fn handle_welcome(&mut self, message: Message, command: &str) {
+        use rand::seq::SliceRandom;
+
         let from = message.from.clone().unwrap();
         let bundle = self.get_fluent_bundle(from.language_code.as_deref());
-
-        use rand::seq::SliceRandom;
 
         let random_artwork = *STARTING_ARTWORK.choose(&mut rand::thread_rng()).unwrap();
 
@@ -600,7 +573,7 @@ impl MessageHandler {
 
         let send_message = SendMessage {
             chat_id: message.chat_id(),
-            text: get_message(&bundle, &name, None).unwrap(),
+            text: utils::get_message(&bundle, &name, None).unwrap(),
             reply_markup: Some(reply_markup),
             ..Default::default()
         };
@@ -608,7 +581,7 @@ impl MessageHandler {
         if let Err(e) = self.bot.make_request(&send_message).await {
             log::error!("Unable to send help message: {:?}", e);
             let tags = Some(vec![("command", command.to_string())]);
-            with_user_scope(message.from.as_ref(), tags, || capture_fail(&e));
+            utils::with_user_scope(message.from.as_ref(), tags, || capture_fail(&e));
         }
     }
 
@@ -644,7 +617,7 @@ impl MessageHandler {
                 .for_each(|_| async {
                     if let Err(e) = bot.make_request(&chat_action).await {
                         log::warn!("Unable to send chat action: {:?}", e);
-                        with_user_scope(user.as_ref(), None, || {
+                        utils::with_user_scope(user.as_ref(), None, || {
                             capture_fail(&e);
                         });
                     }
@@ -729,7 +702,7 @@ impl MessageHandler {
 
         let send_message = SendMessage {
             chat_id: message.chat.id.into(),
-            text: get_message(&bundle, name, Some(args)).unwrap(),
+            text: utils::get_message(&bundle, name, Some(args)).unwrap(),
             disable_web_page_preview: Some(result.distance > 5),
             reply_to_message_id: Some(message.message_id),
             ..Default::default()
@@ -739,7 +712,121 @@ impl MessageHandler {
 
         if let Err(e) = self.bot.make_request(&send_message).await {
             log::error!("Unable to make request: {:?}", e);
-            with_user_scope(message.from.as_ref(), None, || {
+            utils::with_user_scope(message.from.as_ref(), None, || {
+                capture_fail(&e);
+            });
+        }
+    }
+
+    async fn handle_alts(&mut self, message: Message) {
+        let completed = Arc::new(AtomicBool::new(false));
+        self.send_action(
+            12,
+            message.chat_id(),
+            message.from.clone(),
+            ChatAction::Typing,
+            completed.clone(),
+        );
+
+        let message = if let Some(reply_to_message) = message.reply_to_message {
+            *reply_to_message
+        } else {
+            message
+        };
+
+        let photo = match message.photo.clone() {
+            Some(photo) if !photo.is_empty() => photo,
+            _ => {
+                completed.store(true, std::sync::atomic::Ordering::SeqCst);
+                self.send_generic_reply(&message, "source-no-photo").await;
+                return;
+            }
+        };
+
+        let best_photo = utils::find_best_photo(&photo).unwrap();
+        let bytes = match utils::download_by_id(&self.bot, &best_photo.file_id).await {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                log::error!("Unable to download file: {:?}", e);
+                let tags = Some(vec![("command", "source".to_string())]);
+                self.report_error(&message, tags, || capture_fail(&e)).await;
+                return;
+            }
+        };
+
+        let matches = match self
+            .fapi
+            .image_search(bytes, fautil::MatchType::Force)
+            .await
+        {
+            Ok(matches) => matches,
+            Err(e) => {
+                log::error!("Unable to find matches: {:?}", e);
+                let tags = Some(vec![("command", "source".to_string())]);
+                self.report_error(&message, tags, || capture_fail(&e)).await;
+                return;
+            }
+        };
+
+        if matches.is_empty() {
+            self.send_generic_reply(&message, "reverse-no-results")
+                .await;
+            return;
+        }
+
+        let mut results: HashMap<i32, Vec<fautil::ImageLookup>> = HashMap::new();
+
+        for m in matches {
+            let v = results.entry(m.artist_id).or_default();
+            v.push(m);
+        }
+
+        let mut items = results
+            .iter()
+            .map(|item| (item.0, item.1))
+            .collect::<Vec<_>>();
+        items.sort_by(|a, b| {
+            let a_distance: usize = a.1.iter().map(|item| item.distance).sum();
+            let b_distance: usize = b.1.iter().map(|item| item.distance).sum();
+
+            a_distance.partial_cmp(&b_distance).unwrap()
+        });
+
+        completed.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let mut s = String::new();
+        s.push_str("Here are some possible alternate versions:\n\n");
+
+        for item in items {
+            let total_dist: usize = item.1.iter().map(|item| item.distance).sum();
+            if total_dist > (7 * item.1.len()) {
+                continue;
+            }
+            s.push_str(&format!(
+                "Posted by *{}*\n",
+                item.1.first().unwrap().artist_name
+            ));
+            for sub in item.1 {
+                s.push_str(&format!(
+                    "· https://www.furaffinity.net/view/{}/ (distance of {})\n",
+                    sub.id, sub.distance
+                ));
+            }
+            s.push_str("\n");
+        }
+
+        let send_message = SendMessage {
+            chat_id: message.chat.id.into(),
+            text: s,
+            disable_web_page_preview: Some(true),
+            parse_mode: Some(ParseMode::Markdown),
+            reply_to_message_id: Some(message.message_id),
+            ..Default::default()
+        };
+
+        if let Err(e) = self.bot.make_request(&send_message).await {
+            log::error!("Unable to make request: {:?}", e);
+            utils::with_user_scope(message.from.as_ref(), None, || {
                 capture_fail(&e);
             });
         }
@@ -755,13 +842,13 @@ impl MessageHandler {
         let send_message = SendMessage {
             chat_id: message.chat_id(),
             reply_to_message_id: Some(message.message_id),
-            text: get_message(&bundle, name, None).unwrap(),
+            text: utils::get_message(&bundle, name, None).unwrap(),
             ..Default::default()
         };
 
         if let Err(e) = self.bot.make_request(&send_message).await {
             log::error!("Unable to make request: {:?}", e);
-            with_user_scope(message.from.as_ref(), None, || {
+            utils::with_user_scope(message.from.as_ref(), None, || {
                 capture_fail(&e);
             });
         }
@@ -885,14 +972,14 @@ impl MessageHandler {
             let send_message = SendMessage {
                 chat_id: message.chat_id(),
                 reply_to_message_id: Some(message.message_id),
-                text: get_message(&bundle, "mirror-missing", Some(args)).unwrap(),
+                text: utils::get_message(&bundle, "mirror-missing", Some(args)).unwrap(),
                 disable_web_page_preview: Some(true),
                 ..Default::default()
             };
 
             if let Err(e) = self.bot.make_request(&send_message).await {
                 log::error!("Unable to make request: {:?}", e);
-                with_user_scope(message.from.as_ref(), None, || {
+                utils::with_user_scope(message.from.as_ref(), None, || {
                     capture_fail(&e);
                 });
             }
@@ -974,14 +1061,14 @@ impl MessageHandler {
 
         let message = SendMessage {
             chat_id: from.id.into(),
-            text: get_message(&bundle, "twitter-welcome", Some(args)).unwrap(),
+            text: utils::get_message(&bundle, "twitter-welcome", Some(args)).unwrap(),
             reply_to_message_id: Some(message.message_id),
             ..Default::default()
         };
 
         if let Err(e) = self.bot.make_request(&message).await {
             log::warn!("Unable to send message: {:?}", e);
-            with_user_scope(Some(&from), None, || {
+            utils::with_user_scope(Some(&from), None, || {
                 capture_fail(&e);
             });
         }
@@ -992,7 +1079,7 @@ impl MessageHandler {
 
         if let Err(e) = self.influx.query(&point).await {
             log::error!("Unable to send command to InfluxDB: {:?}", e);
-            with_user_scope(Some(&from), None, || {
+            utils::with_user_scope(Some(&from), None, || {
                 capture_fail(&e);
             });
         }
@@ -1089,7 +1176,7 @@ impl MessageHandler {
 
         let send_message = SendMessage {
             chat_id: message.chat_id(),
-            text: get_message(&bundle, "twitter-oob", Some(args)).unwrap(),
+            text: utils::get_message(&bundle, "twitter-oob", Some(args)).unwrap(),
             reply_markup: Some(ReplyMarkup::ForceReply(ForceReply::selective())),
             reply_to_message_id: Some(message.message_id),
             ..Default::default()
@@ -1097,7 +1184,7 @@ impl MessageHandler {
 
         if let Err(e) = self.bot.make_request(&send_message).await {
             log::warn!("Unable to send message: {:?}", e);
-            with_user_scope(Some(&user), None, || {
+            utils::with_user_scope(Some(&user), None, || {
                 capture_fail(&e);
             });
         }
@@ -1108,7 +1195,7 @@ impl MessageHandler {
 
         if let Err(e) = self.influx.query(&point).await {
             log::error!("Unable to send command to InfluxDB: {:?}", e);
-            with_user_scope(Some(&user), None, || {
+            utils::with_user_scope(Some(&user), None, || {
                 capture_fail(&e);
             });
         }
@@ -1118,7 +1205,7 @@ impl MessageHandler {
         let bundle = self.get_fluent_bundle(from.language_code.as_deref());
 
         let mut row = vec![InlineKeyboardButton {
-            text: get_message(&bundle, "inline-direct", None).unwrap(),
+            text: utils::get_message(&bundle, "inline-direct", None).unwrap(),
             url: Some(result.url.clone()),
             callback_data: None,
             ..Default::default()
@@ -1126,7 +1213,7 @@ impl MessageHandler {
 
         if let Some(source_link) = &result.source_link {
             row.push(InlineKeyboardButton {
-                text: get_message(&bundle, "inline-source", None).unwrap(),
+                text: utils::get_message(&bundle, "inline-source", None).unwrap(),
                 url: Some(source_link.clone()),
                 callback_data: None,
                 ..Default::default()
@@ -1257,7 +1344,7 @@ impl MessageHandler {
 
                 let send_message = SendMessage {
                     chat_id: message.chat_id(),
-                    text: get_message(&bundle, "reverse-no-results", None).unwrap(),
+                    text: utils::get_message(&bundle, "reverse-no-results", None).unwrap(),
                     reply_to_message_id: Some(message.message_id),
                     ..Default::default()
                 };
@@ -1266,7 +1353,7 @@ impl MessageHandler {
 
                 if let Err(e) = self.bot.make_request(&send_message).await {
                     log::error!("Unable to respond to photo: {:?}", e);
-                    with_user_scope(message.from.as_ref(), None, || {
+                    utils::with_user_scope(message.from.as_ref(), None, || {
                         capture_fail(&e);
                     });
                 }
@@ -1277,7 +1364,7 @@ impl MessageHandler {
 
                 if let Err(e) = self.influx.query(&point).await {
                     log::error!("Unable to send command to InfluxDB: {:?}", e);
-                    with_user_scope(message.from.as_ref(), None, || {
+                    utils::with_user_scope(message.from.as_ref(), None, || {
                         capture_fail(&e);
                     });
                 }
@@ -1314,7 +1401,7 @@ impl MessageHandler {
 
         let send_message = SendMessage {
             chat_id: message.chat_id(),
-            text: get_message(&bundle, name, Some(args)).unwrap(),
+            text: utils::get_message(&bundle, name, Some(args)).unwrap(),
             disable_web_page_preview: Some(first.distance > 5),
             reply_to_message_id: Some(message.message_id),
             ..Default::default()
@@ -1324,7 +1411,7 @@ impl MessageHandler {
 
         if let Err(e) = self.bot.make_request(&send_message).await {
             log::error!("Unable to respond to photo: {:?}", e);
-            with_user_scope(message.from.as_ref(), None, || {
+            utils::with_user_scope(message.from.as_ref(), None, || {
                 capture_fail(&e);
             });
         }
@@ -1336,7 +1423,7 @@ impl MessageHandler {
 
         if let Err(e) = self.influx.query(&point).await {
             log::error!("Unable to send command to InfluxDB: {:?}", e);
-            with_user_scope(message.from.as_ref(), None, || {
+            utils::with_user_scope(message.from.as_ref(), None, || {
                 capture_fail(&e);
             });
         }

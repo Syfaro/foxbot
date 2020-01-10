@@ -15,6 +15,7 @@ pub struct FAUtil {
 pub enum MatchType {
     Close,
     Exact,
+    Force,
 }
 
 impl FAUtil {
@@ -78,10 +79,10 @@ impl FAUtil {
         let part = Part::bytes(data);
         let form = Form::new().part("image", part);
 
-        let query = if exact == MatchType::Exact {
-            vec![("exact", "true")]
-        } else {
-            vec![]
+        let query = match exact {
+            MatchType::Exact => vec![("exact", "true")],
+            MatchType::Force => vec![("exact", "force")],
+            _ => vec![],
         };
 
         self.client

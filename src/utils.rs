@@ -2,7 +2,7 @@ use linkify::Link;
 use sentry::integrations::failure::capture_fail;
 use std::time::Instant;
 
-use crate::{with_user_scope, BoxedSite};
+use crate::BoxedSite;
 
 pub struct SiteCallback<'a> {
     pub site: &'a BoxedSite,
@@ -84,4 +84,46 @@ pub async fn download_by_id(
     };
     let file = bot.make_request(&get_file).await?;
     bot.download_file(file.file_path.unwrap()).await
+}
+
+pub fn get_message(
+    bundle: &fluent::FluentBundle<fluent::FluentResource>,
+    name: &str,
+    args: Option<fluent::FluentArgs>,
+) -> Result<String, Vec<fluent::FluentError>> {
+    let msg = bundle.get_message(name).expect("Message doesn't exist");
+    let pattern = msg.value.expect("Message has no value");
+    let mut errors = vec![];
+    let value = bundle.format_pattern(&pattern, args.as_ref(), &mut errors);
+    if errors.is_empty() {
+        Ok(value.to_string())
+    } else {
+        Err(errors)
+    }
+}
+
+type SentryTags<'a> = Option<Vec<(&'a str, String)>>;
+
+pub fn with_user_scope<C, R>(from: Option<&telegram::User>, tags: SentryTags, callback: C) -> R
+where
+    C: FnOnce() -> R,
+{
+    sentry::with_scope(
+        |scope| {
+            if let Some(user) = from {
+                scope.set_user(Some(sentry::User {
+                    id: Some(user.id.to_string()),
+                    username: user.username.clone(),
+                    ..Default::default()
+                }));
+            };
+
+            if let Some(tags) = tags {
+                for tag in tags {
+                    scope.set_tag(tag.0, tag.1);
+                }
+            }
+        },
+        callback,
+    )
 }
