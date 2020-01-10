@@ -802,9 +802,11 @@ impl MessageHandler {
             if total_dist > (7 * item.1.len()) {
                 continue;
             }
+            let artist_name = item.1.first().unwrap().artist_name.to_string();
             s.push_str(&format!(
-                "Posted by *{}*\n",
-                item.1.first().unwrap().artist_name
+                "Posted by [{}](https://www.furaffinity.net/user/{}/)\n",
+                artist_name,
+                artist_name.replace("_", ""),
             ));
             for sub in item.1 {
                 s.push_str(&format!(
@@ -815,13 +817,30 @@ impl MessageHandler {
             s.push_str("\n");
         }
 
+        s.push_str("Finding alternate images is an experimental feature, please use the keyboard below to let me know if it is working as expected.");
+
+        let feedback_keyboard = InlineKeyboardMarkup {
+            inline_keyboard: vec![vec![
+                InlineKeyboardButton {
+                    text: "Yes!".to_string(),
+                    callback_data: Some("alts,y".to_string()),
+                    ..Default::default()
+                },
+                InlineKeyboardButton {
+                    text: "Nope :(".to_string(),
+                    callback_data: Some("alts,n".to_string()),
+                    ..Default::default()
+                },
+            ]],
+        };
+
         let send_message = SendMessage {
             chat_id: message.chat.id.into(),
             text: s,
             disable_web_page_preview: Some(true),
             parse_mode: Some(ParseMode::Markdown),
             reply_to_message_id: Some(reply_to_id),
-            ..Default::default()
+            reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(feedback_keyboard)),
         };
 
         if let Err(e) = self.bot.make_request(&send_message).await {
@@ -1111,6 +1130,51 @@ impl MessageHandler {
                 log::error!("Unable to send chosen inline result to InfluxDB: {:?}", e);
                 capture_fail(&e);
             }
+        } else if let Some(callback_data) = update.callback_query {
+            self.handle_callback(callback_data).await;
+        }
+    }
+
+    async fn handle_callback(&mut self, callback_data: CallbackQuery) {
+        let mut answer = AnswerCallbackQuery {
+            callback_query_id: callback_data.id,
+            ..Default::default()
+        };
+
+        if let Some(text) = callback_data.data {
+            let mut parts = text.split(',');
+
+            match parts.next() {
+                Some("alts") => {
+                    if let Some(feedback) = parts.next() {
+                        let point =
+                            influxdb::WriteQuery::new(influxdb::Timestamp::Now, "alts_feedback")
+                                .add_field("dummy", 0)
+                                .add_tag("feedback", feedback);
+                        if let Err(e) = self.influx.query(&point).await {
+                            log::error!("Unable to log alts feedback: {:?}", e);
+                            capture_fail(&e);
+                        }
+
+                        match feedback {
+                            "y" => answer.text = Some("Thank you for the feedback!".to_string()),
+                            "n" => {
+                                answer.text = Some("I'm sorry to hear that. Please contact my creator @Syfaro if you have feedback.".to_string());
+                                answer.show_alert = Some(true);
+                            }
+                            _ => log::warn!("Got weird alts feedback: {}", feedback),
+                        }
+                    }
+                }
+                part => {
+                    log::info!("Got unexpected callback query text: {:?}", part);
+                }
+            }
+        }
+
+        if let Err(e) = self.bot.make_request(&answer).await {
+            log::error!("Unable to answer callback query: {:?}", e);
+            capture_fail(&e);
         }
     }
 
