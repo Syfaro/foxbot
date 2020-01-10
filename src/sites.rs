@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use fautil::MatchType;
 use reqwest::header;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -108,7 +109,10 @@ impl Direct {
             Err(_) => return None,
         };
 
-        let results = self.fautil.image_search(body.to_vec(), true).await;
+        let results = self
+            .fautil
+            .image_search(body.to_vec(), MatchType::Exact)
+            .await;
 
         match results {
             Ok(results) => results.into_iter().next(),

@@ -13,6 +13,9 @@ use unic_langid::LanguageIdentifier;
 extern crate failure;
 
 mod sites;
+mod utils;
+
+type BoxedSite = Box<dyn Site + Send + Sync>;
 
 fn generate_id() -> String {
     use rand::Rng;
@@ -69,7 +72,7 @@ async fn main() {
     let fa_util_api = std::env::var("FAUTIL_APITOKEN").expect("Missing FA Utility API token");
     let fapi = Arc::new(fautil::FAUtil::new(fa_util_api.clone()));
 
-    let sites: Vec<Box<dyn Site + Send + Sync>> = vec![
+    let sites: Vec<BoxedSite> = vec![
         Box::new(sites::E621::new()),
         Box::new(sites::FurAffinity::new((fa_a, fa_b), fa_util_api)),
         Box::new(sites::Weasyl::new(
@@ -150,7 +153,7 @@ async fn main() {
         consumer_secret,
         langs,
         best_lang: HashMap::new(),
-        influx,
+        influx: Arc::new(influx),
         use_proxy,
     }));
 
@@ -313,7 +316,7 @@ struct MessageHandler {
     consumer_secret: String,
     langs: HashMap<LanguageIdentifier, Vec<String>>,
     best_lang: HashMap<String, fluent::FluentBundle<fluent::FluentResource>>,
-    influx: influxdb::Client,
+    influx: Arc<influxdb::Client>,
     use_proxy: bool,
 }
 
@@ -466,52 +469,31 @@ impl MessageHandler {
     }
 
     async fn handle_inline(&mut self, inline: InlineQuery) {
-        let now = std::time::Instant::now();
-
         let links: Vec<_> = self.finder.links(&inline.query).collect();
         let mut results: Vec<PostInfo> = Vec::new();
 
         log::info!("Got query: {}", inline.query);
         log::debug!("Found links: {:?}", links);
 
-        let mut point = influxdb::Query::write_query(influxdb::Timestamp::Now, "inline");
+        let influx = self.influx.clone();
+        utils::find_images(&inline.from, links, &mut self.sites, &mut |info| {
+            let influx = influx.clone();
+            let duration = info.duration;
+            let count = info.results.len();
+            let name = info.site.name();
 
-        'link: for link in links {
-            for site in &mut self.sites {
-                let link_str = link.as_str();
+            tokio::spawn(async move {
+                let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "inline")
+                    .add_tag("site", name.replace(" ", "_"))
+                    .add_field("count", count as i32)
+                    .add_field("duration", duration);
 
-                if site.url_supported(link_str).await {
-                    log::debug!("Link {} supported by {}", link_str, site.name());
+                influx.query(&point).await
+            });
 
-                    let images = match site.get_images(inline.from.id, link_str).await {
-                        Ok(images) => images,
-                        Err(e) => {
-                            log::warn!("Unable to get image: {:?}", e);
-                            with_user_scope(
-                                Some(&inline.from),
-                                Some(vec![("site", site.name().to_string())]),
-                                || {
-                                    capture_fail(&e);
-                                },
-                            );
-                            continue 'link;
-                        }
-                    };
-
-                    let images = match images {
-                        Some(images) => images,
-                        None => continue 'link,
-                    };
-
-                    log::debug!("Found images: {:?}", images);
-                    point = point.add_tag("site", site.name().replace(" ", "_"));
-
-                    results.extend(images);
-
-                    continue 'link;
-                }
-            }
-        }
+            results.extend(info.results);
+        })
+        .await;
 
         let personal = results.iter().any(|result| result.personal);
 
@@ -521,8 +503,6 @@ impl MessageHandler {
             .filter_map(|result| result)
             .flatten()
             .collect();
-
-        point = point.add_field("count", responses.len() as i32);
 
         if responses.is_empty() {
             let bundle = self.get_fluent_bundle(inline.from.language_code.as_deref());
@@ -554,61 +534,38 @@ impl MessageHandler {
             });
             log::error!("Unable to respond to inline: {:?}", e);
         }
-
-        point = point.add_field("duration", now.elapsed().as_millis() as i64);
-        if let Err(e) = self.influx.query(&point).await {
-            log::error!("Unable to log inline to InfluxDB: {:?}", e);
-            with_user_scope(Some(&inline.from), None, || capture_fail(&e));
-        };
     }
 
     async fn handle_command(&mut self, message: Message) {
         let now = std::time::Instant::now();
 
-        let entities = message.clone().entities.unwrap(); // only here because this existed
-
-        let command = entities
-            .iter()
-            .find(|entity| entity.entity_type == MessageEntityType::BotCommand);
-        let command = match command {
+        let command = match message.get_command() {
             Some(command) => command,
             None => return,
         };
-        let text = message.text.clone().unwrap();
-        let command_text: String = text
-            .chars()
-            .skip(command.offset as usize)
-            .take(command.length as usize)
-            .collect();
-        let mut command_parts = command_text.split('@');
-        let command_text = command_parts.next().unwrap();
-        if let Some(username) = command_parts.next() {
-            if username.to_lowercase() != self.bot_user.username.as_ref().unwrap().to_lowercase() {
+
+        if let Some(username) = command.username {
+            let bot_username = self.bot_user.username.as_ref().unwrap();
+            if &username != bot_username {
                 log::debug!("Got command for other bot: {}", username);
                 return;
             }
         }
 
-        let args: String = text
-            .chars()
-            .skip((command.offset + command.length + 1) as usize)
-            .collect();
-
-        log::debug!("Got command: {}", command_text);
-        log::trace!("Command {} had arguments: {}", command_text, args);
+        log::debug!("Got command: {}", command.command);
 
         let from = message.from.clone();
 
-        match command_text {
-            "/help" | "/start" => self.handle_welcome(message, command_text).await,
+        match command.command.as_ref() {
+            "/help" | "/start" => self.handle_welcome(message, &command.command).await,
             "/twitter" => self.authenticate_twitter(message).await,
             "/mirror" => self.handle_mirror(message).await,
             "/source" => self.handle_source(message).await,
-            _ => log::info!("Unknown command: {}", command_text),
+            _ => log::info!("Unknown command: {}", command.command),
         };
 
         let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "command")
-            .add_tag("command", command_text)
+            .add_tag("command", command.command)
             .add_field("duration", now.elapsed().as_millis() as i64);
 
         if let Err(e) = self.influx.query(&point).await {
@@ -625,12 +582,12 @@ impl MessageHandler {
 
         use rand::seq::SliceRandom;
 
+        let random_artwork = *STARTING_ARTWORK.choose(&mut rand::thread_rng()).unwrap();
+
         let reply_markup = ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
             inline_keyboard: vec![vec![InlineKeyboardButton {
                 text: "Try Me!".to_string(),
-                switch_inline_query_current_chat: Some(
-                    (*STARTING_ARTWORK.choose(&mut rand::thread_rng()).unwrap()).to_string(),
-                ),
+                switch_inline_query_current_chat: Some(random_artwork.to_string()),
                 ..Default::default()
             }]],
         });
@@ -650,11 +607,8 @@ impl MessageHandler {
 
         if let Err(e) = self.bot.make_request(&send_message).await {
             log::error!("Unable to send help message: {:?}", e);
-            with_user_scope(
-                message.from.as_ref(),
-                Some(vec![("command", command.to_string())]),
-                || capture_fail(&e),
-            );
+            let tags = Some(vec![("command", command.to_string())]);
+            with_user_scope(message.from.as_ref(), tags, || capture_fail(&e));
         }
     }
 
@@ -724,52 +678,27 @@ impl MessageHandler {
             }
         };
 
-        let biggest = photo
-            .iter()
-            .max_by_key(|size| size.height * size.width)
-            .unwrap();
-        let get_file = GetFile {
-            file_id: biggest.file_id.to_owned(),
-        };
-
-        let file = match self.bot.make_request(&get_file).await {
-            Ok(file) => file,
-            Err(e) => {
-                log::error!("Unable to get file: {:?}", e);
-                self.report_error(
-                    &message,
-                    Some(vec![("command", "source".to_string())]),
-                    || capture_fail(&e),
-                )
-                .await;
-                return;
-            }
-        };
-
-        let bytes = match self.bot.download_file(file.file_path.unwrap()).await {
+        let best_photo = utils::find_best_photo(&photo).unwrap();
+        let bytes = match utils::download_by_id(&self.bot, &best_photo.file_id).await {
             Ok(bytes) => bytes,
             Err(e) => {
                 log::error!("Unable to download file: {:?}", e);
-                self.report_error(
-                    &message,
-                    Some(vec![("command", "source".to_string())]),
-                    || capture_fail(&e),
-                )
-                .await;
+                let tags = Some(vec![("command", "source".to_string())]);
+                self.report_error(&message, tags, || capture_fail(&e)).await;
                 return;
             }
         };
 
-        let matches = match self.fapi.image_search(bytes, false).await {
+        let matches = match self
+            .fapi
+            .image_search(bytes, fautil::MatchType::Close)
+            .await
+        {
             Ok(matches) => matches,
             Err(e) => {
                 log::error!("Unable to find matches: {:?}", e);
-                self.report_error(
-                    &message,
-                    Some(vec![("command", "source".to_string())]),
-                    || capture_fail(&e),
-                )
-                .await;
+                let tags = Some(vec![("command", "source".to_string())]);
+                self.report_error(&message, tags, || capture_fail(&e)).await;
                 return;
             }
         };
@@ -806,14 +735,14 @@ impl MessageHandler {
             ..Default::default()
         };
 
+        completed.store(true, std::sync::atomic::Ordering::SeqCst);
+
         if let Err(e) = self.bot.make_request(&send_message).await {
             log::error!("Unable to make request: {:?}", e);
             with_user_scope(message.from.as_ref(), None, || {
                 capture_fail(&e);
             });
         }
-
-        completed.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     async fn send_generic_reply(&mut self, message: &Message, name: &str) {
@@ -869,43 +798,11 @@ impl MessageHandler {
         }
 
         let mut results: Vec<PostInfo> = Vec::with_capacity(links.len());
-        let mut missing: Vec<String> = Vec::new();
 
-        'link: for link in links {
-            for site in &mut self.sites {
-                let link_str = link.as_str();
-
-                if site.url_supported(link_str).await {
-                    log::debug!("Link {} supported by {}", link_str, site.name());
-
-                    let images = match site.get_images(from.id, link_str).await {
-                        Ok(images) => images,
-                        Err(e) => {
-                            missing.push(link_str.to_string());
-                            log::warn!("Unable to get image: {:?}", e);
-                            with_user_scope(message.from.as_ref(), None, || {
-                                capture_fail(&e);
-                            });
-                            continue 'link;
-                        }
-                    };
-
-                    let images = match images {
-                        Some(images) => images,
-                        None => {
-                            missing.push(link_str.to_string());
-                            continue 'link;
-                        }
-                    };
-
-                    log::debug!("Found images: {:?}", images);
-
-                    results.extend(images);
-
-                    continue 'link;
-                }
-            }
-        }
+        let missing = utils::find_images(&from, links, &mut self.sites, &mut |info| {
+            results.extend(info.results);
+        })
+        .await;
 
         if results.is_empty() {
             self.send_generic_reply(&message, "mirror-no-results").await;
@@ -1337,60 +1234,24 @@ impl MessageHandler {
         );
 
         let photos = message.photo.clone().unwrap();
-
-        let mut most_pixels = 0;
-        let mut file_id = String::default();
-        for photo in photos {
-            let pixels = photo.height * photo.width;
-            if pixels > most_pixels {
-                most_pixels = pixels;
-                file_id = photo.file_id.clone();
-            }
-        }
-
-        let get_file = GetFile { file_id };
-        let file = match self.bot.make_request(&get_file).await {
-            Ok(file) => file,
-            Err(e) => {
-                log::error!("Unable to get file: {:?}", e);
-                self.report_error(
-                    &message,
-                    Some(vec![("command", "photo".to_string())]),
-                    || capture_fail(&e),
-                )
-                .await;
-                return;
-            }
-        };
-
-        let photo = match self.bot.download_file(file.file_path.unwrap()).await {
+        let best_photo = utils::find_best_photo(&photos).unwrap();
+        let photo = match utils::download_by_id(&self.bot, &best_photo.file_id).await {
             Ok(photo) => photo,
             Err(e) => {
                 log::error!("Unable to download file: {:?}", e);
-                self.report_error(
-                    &message,
-                    Some(vec![("command", "photo".to_string())]),
-                    || capture_fail(&e),
-                )
-                .await;
+                let tags = Some(vec![("command", "photo".to_string())]);
+                self.report_error(&message, tags, || capture_fail(&e)).await;
                 return;
             }
         };
 
-        let matches = match self.fapi.image_search(photo, false).await {
+        let matches = match self
+            .fapi
+            .image_search(photo, fautil::MatchType::Close)
+            .await
+        {
             Ok(matches) if !matches.is_empty() => matches,
-            Err(e) => {
-                log::error!("Unable to reverse search image file: {:?}", e);
-                completed.store(true, std::sync::atomic::Ordering::SeqCst);
-                self.report_error(
-                    &message,
-                    Some(vec![("command", "photo".to_string())]),
-                    || capture_fail(&e),
-                )
-                .await;
-                return;
-            }
-            _ => {
+            Ok(_matches) => {
                 let bundle =
                     self.get_fluent_bundle(message.from.clone().unwrap().language_code.as_deref());
 
@@ -1408,7 +1269,6 @@ impl MessageHandler {
                     with_user_scope(message.from.as_ref(), None, || {
                         capture_fail(&e);
                     });
-                    self.send_generic_reply(&message, "error-generic").await;
                 }
 
                 let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "source")
@@ -1422,6 +1282,14 @@ impl MessageHandler {
                     });
                 }
 
+                return;
+            }
+            Err(e) => {
+                completed.store(true, std::sync::atomic::Ordering::SeqCst);
+
+                log::error!("Unable to reverse search image file: {:?}", e);
+                let tags = Some(vec![("command", "photo".to_string())]);
+                self.report_error(&message, tags, || capture_fail(&e)).await;
                 return;
             }
         };

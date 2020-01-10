@@ -125,6 +125,45 @@ pub struct Message {
     pub reply_markup: Option<InlineKeyboardMarkup>,
 }
 
+/// Command represents information obtained from the BotCommand MessageEntity.
+pub struct Command {
+    pub command: String,
+    pub entity: MessageEntity,
+    pub username: Option<String>,
+}
+
+impl Message {
+    /// Extracts the command from a given message.
+    ///
+    /// Returns None if there is not a MessageEntity of type BotCommand
+    /// starting at offset 0. Optionally returns the username of the mentioned
+    /// bot, if data exists.
+    pub fn get_command(&self) -> Option<Command> {
+        let entities = self.entities.as_ref()?;
+        let text = self.text.as_ref()?;
+        let entity = entities.iter().find(|entity| {
+            entity.offset == 0 && entity.entity_type == MessageEntityType::BotCommand
+        })?;
+
+        let command_text: String = text
+            .chars()
+            .skip(entity.offset as usize)
+            .take(entity.length as usize)
+            .collect();
+
+        let mut command_parts = command_text.split('@');
+
+        let command = command_parts.next().unwrap().to_string();
+        let username = command_parts.next().map(|part| part.to_string());
+
+        Some(Command {
+            command,
+            entity: entity.clone(),
+            username,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct PhotoSize {
     pub file_id: String,

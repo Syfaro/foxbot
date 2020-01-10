@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use serde::de::DeserializeOwned;
+use std::collections::HashMap;
 
 pub use types::*;
 
@@ -9,6 +9,12 @@ mod types;
 pub struct FAUtil {
     api_key: String,
     client: reqwest::Client,
+}
+
+#[derive(PartialEq)]
+pub enum MatchType {
+    Close,
+    Exact,
 }
 
 impl FAUtil {
@@ -63,16 +69,16 @@ impl FAUtil {
     pub async fn image_search(
         &self,
         data: Vec<u8>,
-        exact: bool,
+        exact: MatchType,
     ) -> reqwest::Result<Vec<ImageLookup>> {
-        use reqwest::multipart::{Part, Form};
+        use reqwest::multipart::{Form, Part};
 
         let url = format!("{}image", Self::API_ENDPOINT);
 
         let part = Part::bytes(data);
         let form = Form::new().part("image", part);
 
-        let query = if exact {
+        let query = if exact == MatchType::Exact {
             vec![("exact", "true")]
         } else {
             vec![]
