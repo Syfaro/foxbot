@@ -1,30 +1,14 @@
-use serde::Deserialize;
+use std::collections::HashMap;
+use serde::de::DeserializeOwned;
+
+pub use types::*;
+
+mod types;
 
 /// FAUtil is a collection of methods to get information from fa.huefox.com.
 pub struct FAUtil {
     api_key: String,
     client: reqwest::Client,
-}
-
-/// Lookup is information returned when attempting to search for a file by
-/// url or filename. It contains no additional information about the image
-/// besides its ID on FurAffinity.
-#[derive(Debug, Deserialize)]
-pub struct Lookup {
-    pub id: usize,
-    pub url: String,
-    pub filename: String,
-}
-
-/// ImageLookup is information returned when attempting to reverse image search.
-/// It includes a distance, which is the hamming distance between the provided
-/// image and the image in the database.
-#[derive(Debug, Deserialize)]
-pub struct ImageLookup {
-    pub id: usize,
-    pub distance: usize,
-    pub url: String,
-    pub filename: String,
 }
 
 impl FAUtil {
@@ -40,10 +24,10 @@ impl FAUtil {
 
     /// Makes a request against the API. It deserializes the JSON response.
     /// Generally not used as there are more specific methods available.
-    async fn make_request<T: Default + serde::de::DeserializeOwned>(
+    async fn make_request<T: Default + DeserializeOwned>(
         &self,
         endpoint: &str,
-        params: &std::collections::HashMap<&str, &str>,
+        params: &HashMap<&str, &str>,
     ) -> reqwest::Result<T> {
         let url = format!("{}{}", Self::API_ENDPOINT, endpoint);
 
@@ -59,7 +43,7 @@ impl FAUtil {
 
     /// Attempt to look up an image by its URL. Note that URLs should be https.
     pub async fn lookup_url(&self, url: &str) -> reqwest::Result<Vec<Lookup>> {
-        let mut params = std::collections::HashMap::new();
+        let mut params = HashMap::new();
         params.insert("url", url);
 
         self.make_request("url", &params).await
@@ -67,7 +51,7 @@ impl FAUtil {
 
     /// Attempt to look up an image by its original name on FA.
     pub async fn lookup_filename(&self, filename: &str) -> reqwest::Result<Vec<Lookup>> {
-        let mut params = std::collections::HashMap::new();
+        let mut params = HashMap::new();
         params.insert("file", filename);
 
         self.make_request("file", &params).await
@@ -81,10 +65,12 @@ impl FAUtil {
         data: Vec<u8>,
         exact: bool,
     ) -> reqwest::Result<Vec<ImageLookup>> {
+        use reqwest::multipart::{Part, Form};
+
         let url = format!("{}image", Self::API_ENDPOINT);
 
-        let part = reqwest::multipart::Part::bytes(data);
-        let form = reqwest::multipart::Form::new().part("image", part);
+        let part = Part::bytes(data);
+        let form = Form::new().part("image", part);
 
         let query = if exact {
             vec![("exact", "true")]
