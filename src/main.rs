@@ -636,10 +636,10 @@ impl MessageHandler {
             completed.clone(),
         );
 
-        let message = if let Some(reply_to_message) = message.reply_to_message {
-            *reply_to_message
+        let (reply_to_id, message) = if let Some(reply_to_message) = message.reply_to_message {
+            (message.message_id, *reply_to_message)
         } else {
-            message
+            (message.message_id, message)
         };
 
         let photo = match message.photo.clone() {
@@ -704,7 +704,7 @@ impl MessageHandler {
             chat_id: message.chat.id.into(),
             text: utils::get_message(&bundle, name, Some(args)).unwrap(),
             disable_web_page_preview: Some(result.distance > 5),
-            reply_to_message_id: Some(message.message_id),
+            reply_to_message_id: Some(reply_to_id),
             ..Default::default()
         };
 
@@ -728,10 +728,10 @@ impl MessageHandler {
             completed.clone(),
         );
 
-        let message = if let Some(reply_to_message) = message.reply_to_message {
-            *reply_to_message
+        let (reply_to_id, message) = if let Some(reply_to_message) = message.reply_to_message {
+            (message.message_id, *reply_to_message)
         } else {
-            message
+            (message.message_id, message)
         };
 
         let photo = match message.photo.clone() {
@@ -820,7 +820,7 @@ impl MessageHandler {
             text: s,
             disable_web_page_preview: Some(true),
             parse_mode: Some(ParseMode::Markdown),
-            reply_to_message_id: Some(message.message_id),
+            reply_to_message_id: Some(reply_to_id),
             ..Default::default()
         };
 
@@ -866,10 +866,10 @@ impl MessageHandler {
             completed.clone(),
         );
 
-        let message = if let Some(reply_to_message) = message.reply_to_message {
-            *reply_to_message
+        let (reply_to_id, message) = if let Some(reply_to_message) = message.reply_to_message {
+            (message.message_id, *reply_to_message)
         } else {
-            message
+            (message.message_id, message)
         };
 
         let links: Vec<_> = if let Some(text) = &message.text {
@@ -971,7 +971,7 @@ impl MessageHandler {
 
             let send_message = SendMessage {
                 chat_id: message.chat_id(),
-                reply_to_message_id: Some(message.message_id),
+                reply_to_message_id: Some(reply_to_id),
                 text: utils::get_message(&bundle, "mirror-missing", Some(args)).unwrap(),
                 disable_web_page_preview: Some(true),
                 ..Default::default()
