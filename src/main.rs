@@ -794,8 +794,11 @@ impl MessageHandler {
 
         completed.store(true, std::sync::atomic::Ordering::SeqCst);
 
+        let bundle = self.get_fluent_bundle(message.from.clone().unwrap().language_code.as_deref());
+
         let mut s = String::new();
-        s.push_str("Here are some possible alternate versions:\n\n");
+        s.push_str(&utils::get_message(&bundle, "alternate-title", None).unwrap());
+        s.push_str("\n\n");
 
         for item in items {
             let total_dist: usize = item.1.iter().map(|item| item.distance).sum();
@@ -803,31 +806,42 @@ impl MessageHandler {
                 continue;
             }
             let artist_name = item.1.first().unwrap().artist_name.to_string();
-            s.push_str(&format!(
-                "Posted by [{}](https://www.furaffinity.net/user/{}/)\n",
-                artist_name,
-                artist_name.replace("_", ""),
-            ));
+            let mut args = fluent::FluentArgs::new();
+            args.insert(
+                "name",
+                format!(
+                    "[{}](https://www.furaffinity.net/user/{}/)",
+                    artist_name,
+                    artist_name.replace("_", "")
+                )
+                .into(),
+            );
+            s.push_str(&utils::get_message(&bundle, "alternate-posted-by", Some(args)).unwrap());
+            s.push_str("\n");
             for sub in item.1 {
-                s.push_str(&format!(
-                    "· https://www.furaffinity.net/view/{}/ (distance of {})\n",
-                    sub.id, sub.distance
-                ));
+                let mut args = fluent::FluentArgs::new();
+                args.insert(
+                    "link",
+                    format!("https://www.furaffinity.net/view/{}/", sub.id).into(),
+                );
+                args.insert("distance", sub.distance.into());
+                s.push_str(&utils::get_message(&bundle, "alternate-distance", Some(args)).unwrap());
+                s.push_str("\n");
             }
             s.push_str("\n");
         }
 
-        s.push_str("Finding alternate images is an experimental feature, please use the keyboard below to let me know if it is working as expected.");
+        s.push_str(&utils::get_message(&bundle, "alternate-feedback", None).unwrap());
 
         let feedback_keyboard = InlineKeyboardMarkup {
             inline_keyboard: vec![vec![
                 InlineKeyboardButton {
-                    text: "Yes!".to_string(),
+                    text: utils::get_message(&bundle, "alternate-feedback-y", None).unwrap(),
                     callback_data: Some("alts,y".to_string()),
                     ..Default::default()
                 },
                 InlineKeyboardButton {
-                    text: "Nope :(".to_string(),
+                    text: utils::get_message(&bundle, "alternate-feedback-n", None).unwrap(),
                     callback_data: Some("alts,n".to_string()),
                     ..Default::default()
                 },

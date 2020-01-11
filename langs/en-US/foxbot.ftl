@@ -53,6 +53,14 @@ mirror-missing =
 # In-group sourcing
 source-no-photo = Sorry, I can't seem to find the photo here.
 
+# In-group alternates
+alternate-title = Here are some possible alternate versions:
+alternate-posted-by = Posted by { $name }
+alternate-distance = · { $link } (distance of { $distance })
+alternate-feedback = Finding alternate images is an experimental feature, please use the buttons below to let me know if it is working as expected.
+alternate-feedback-y = Looking good
+alternate-feedback-n = Not great :(
+
 # Error Messages
 error-generic = Oh no, something went wrong! Please send a message to my creator { -creatorName } if you continue having issues.
 error-uuid = Oh no, something went wrong! Please send a message to my creator { -creatorName } with this ID if you continue having issues: { $uuid }
