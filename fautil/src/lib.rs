@@ -34,7 +34,7 @@ impl FAUtil {
     async fn make_request<T: Default + DeserializeOwned>(
         &self,
         endpoint: &str,
-        params: &HashMap<&str, &str>,
+        params: &HashMap<&str, String>,
     ) -> reqwest::Result<T> {
         let url = format!("{}{}", Self::API_ENDPOINT, endpoint);
 
@@ -51,7 +51,7 @@ impl FAUtil {
     /// Attempt to look up an image by its URL. Note that URLs should be https.
     pub async fn lookup_url(&self, url: &str) -> reqwest::Result<Vec<Lookup>> {
         let mut params = HashMap::new();
-        params.insert("url", url);
+        params.insert("url", url.to_string());
 
         self.make_request("url", &params).await
     }
@@ -59,9 +59,24 @@ impl FAUtil {
     /// Attempt to look up an image by its original name on FA.
     pub async fn lookup_filename(&self, filename: &str) -> reqwest::Result<Vec<Lookup>> {
         let mut params = HashMap::new();
-        params.insert("file", filename);
+        params.insert("file", filename.to_string());
 
         self.make_request("file", &params).await
+    }
+
+    /// Attempt to lookup multiple hashes.
+    pub async fn lookup_hashes(&self, hashes: Vec<i64>) -> reqwest::Result<Vec<ImageHashLookup>> {
+        let mut params = HashMap::new();
+        params.insert(
+            "hashes",
+            hashes
+                .iter()
+                .map(|hash| hash.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+
+        self.make_request("hash", &params).await
     }
 
     /// Attempt to reverse image search.
@@ -69,19 +84,19 @@ impl FAUtil {
     /// Requiring an exact match will be faster, but potentially leave out results.
     pub async fn image_search(
         &self,
-        data: Vec<u8>,
-        exact: MatchType,
+        data: &[u8],
+        exact: MatchType
     ) -> reqwest::Result<Vec<ImageLookup>> {
         use reqwest::multipart::{Form, Part};
 
         let url = format!("{}image", Self::API_ENDPOINT);
 
-        let part = Part::bytes(data);
+        let part = Part::bytes(Vec::from(data));
         let form = Form::new().part("image", part);
 
         let query = match exact {
-            MatchType::Exact => vec![("exact", "true")],
-            MatchType::Force => vec![("exact", "force")],
+            MatchType::Exact => vec![("exact", "true".to_string())],
+            MatchType::Force => vec![("exact", "force".to_string())],
             _ => vec![],
         };
 

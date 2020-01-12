@@ -538,3 +538,25 @@ impl TelegramRequest for AnswerCallbackQuery {
         "answerCallbackQuery"
     }
 }
+
+#[derive(Default, Debug, Serialize)]
+pub struct EditMessageText {
+    pub chat_id: ChatID,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<i32>,
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parse_mode: Option<ParseMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disable_web_page_preview: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_markup: Option<ReplyMarkup>,
+}
+
+impl TelegramRequest for EditMessageText {
+    type Response = Message;
+
+    fn endpoint(&self) -> &str {
+        "editMessageText"
+    }
+}

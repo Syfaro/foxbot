@@ -664,7 +664,7 @@ impl MessageHandler {
 
         let matches = match self
             .fapi
-            .image_search(bytes, fautil::MatchType::Close)
+            .image_search(&bytes, fautil::MatchType::Close)
             .await
         {
             Ok(matches) => matches,
@@ -756,7 +756,7 @@ impl MessageHandler {
 
         let matches = match self
             .fapi
-            .image_search(bytes, fautil::MatchType::Force)
+            .image_search(&bytes, fautil::MatchType::Force)
             .await
         {
             Ok(matches) => matches,
@@ -774,6 +774,8 @@ impl MessageHandler {
             return;
         }
 
+        let has_multiple_matches = matches.len() > 1;
+
         let mut results: HashMap<i32, Vec<fautil::ImageLookup>> = HashMap::new();
 
         for m in matches {
@@ -781,83 +783,114 @@ impl MessageHandler {
             v.push(m);
         }
 
-        let mut items = results
+        let items = results
             .iter()
             .map(|item| (item.0, item.1))
             .collect::<Vec<_>>();
-        items.sort_by(|a, b| {
-            let a_distance: usize = a.1.iter().map(|item| item.distance).sum();
-            let b_distance: usize = b.1.iter().map(|item| item.distance).sum();
-
-            a_distance.partial_cmp(&b_distance).unwrap()
-        });
-
-        completed.store(true, std::sync::atomic::Ordering::SeqCst);
 
         let bundle = self.get_fluent_bundle(message.from.clone().unwrap().language_code.as_deref());
 
-        let mut s = String::new();
-        s.push_str(&utils::get_message(&bundle, "alternate-title", None).unwrap());
-        s.push_str("\n\n");
+        let (text, used_hashes) = utils::build_alternate_response(&bundle, items);
 
-        for item in items {
-            let total_dist: usize = item.1.iter().map(|item| item.distance).sum();
-            if total_dist > (7 * item.1.len()) {
-                continue;
-            }
-            let artist_name = item.1.first().unwrap().artist_name.to_string();
-            let mut args = fluent::FluentArgs::new();
-            args.insert(
-                "name",
-                format!(
-                    "[{}](https://www.furaffinity.net/user/{}/)",
-                    artist_name,
-                    artist_name.replace("_", "")
-                )
-                .into(),
-            );
-            s.push_str(&utils::get_message(&bundle, "alternate-posted-by", Some(args)).unwrap());
-            s.push_str("\n");
-            for sub in item.1 {
-                let mut args = fluent::FluentArgs::new();
-                args.insert(
-                    "link",
-                    format!("https://www.furaffinity.net/view/{}/", sub.id).into(),
-                );
-                args.insert("distance", sub.distance.into());
-                s.push_str(&utils::get_message(&bundle, "alternate-distance", Some(args)).unwrap());
-                s.push_str("\n");
-            }
-            s.push_str("\n");
-        }
-
-        s.push_str(&utils::get_message(&bundle, "alternate-feedback", None).unwrap());
-
-        let feedback_keyboard = InlineKeyboardMarkup {
-            inline_keyboard: vec![vec![
-                InlineKeyboardButton {
-                    text: utils::get_message(&bundle, "alternate-feedback-y", None).unwrap(),
-                    callback_data: Some("alts,y".to_string()),
-                    ..Default::default()
-                },
-                InlineKeyboardButton {
-                    text: utils::get_message(&bundle, "alternate-feedback-n", None).unwrap(),
-                    callback_data: Some("alts,n".to_string()),
-                    ..Default::default()
-                },
-            ]],
-        };
+        completed.store(true, std::sync::atomic::Ordering::SeqCst);
 
         let send_message = SendMessage {
-            chat_id: message.chat.id.into(),
-            text: s,
+            chat_id: message.chat_id(),
+            text: text.clone(),
             disable_web_page_preview: Some(true),
             parse_mode: Some(ParseMode::Markdown),
             reply_to_message_id: Some(reply_to_id),
-            reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(feedback_keyboard)),
+            reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(
+                utils::alternate_feedback_keyboard(&bundle),
+            )),
         };
 
-        if let Err(e) = self.bot.make_request(&send_message).await {
+        let sent = match self.bot.make_request(&send_message).await {
+            Ok(message) => message.message_id,
+            Err(e) => {
+                log::error!("Unable to make request: {:?}", e);
+                utils::with_user_scope(message.from.as_ref(), None, || {
+                    capture_fail(&e);
+                });
+                return;
+            }
+        };
+
+        if !has_multiple_matches {
+            return;
+        }
+
+        let completed = Arc::new(AtomicBool::new(false));
+        self.send_action(
+            12,
+            message.chat_id(),
+            message.from.clone(),
+            ChatAction::Typing,
+            completed.clone(),
+        );
+
+        let matches = match self.fapi.lookup_hashes(used_hashes).await {
+            Ok(matches) => matches,
+            Err(e) => {
+                log::error!("Unable to find matches: {:?}", e);
+                let tags = Some(vec![("command", "source".to_string())]);
+                self.report_error(&message, tags, || capture_fail(&e)).await;
+                return;
+            }
+        };
+
+        if matches.is_empty() {
+            self.send_generic_reply(&message, "reverse-no-results")
+                .await;
+            return;
+        }
+
+        let hash = utils::hash_image(&bytes);
+
+        for m in matches {
+            if let Some(artist) = results.get_mut(&m.artist_id) {
+                let bytes = m.hash.to_be_bytes();
+
+                artist.push(fautil::ImageLookup {
+                    id: m.id,
+                    distance: hamming::distance_fast(&bytes, &hash).unwrap(),
+                    hash: m.hash,
+                    url: m.url,
+                    filename: m.filename,
+                    artist_id: m.artist_id,
+                    artist_name: m.artist_name,
+                });
+            }
+        }
+
+        let items = results
+            .iter()
+            .map(|item| (item.0, item.1))
+            .collect::<Vec<_>>();
+
+        let bundle = self.get_fluent_bundle(message.from.clone().unwrap().language_code.as_deref());
+
+        let (updated_text, _used_hashes) = utils::build_alternate_response(&bundle, items);
+
+        completed.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        if text == updated_text {
+            return;
+        }
+
+        let edit = EditMessageText {
+            chat_id: message.chat_id(),
+            message_id: Some(sent),
+            text: updated_text,
+            disable_web_page_preview: Some(true),
+            parse_mode: Some(ParseMode::Markdown),
+            reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(
+                utils::alternate_feedback_keyboard(&bundle),
+            )),
+            ..Default::default()
+        };
+
+        if let Err(e) = self.bot.make_request(&edit).await {
             log::error!("Unable to make request: {:?}", e);
             utils::with_user_scope(message.from.as_ref(), None, || {
                 capture_fail(&e);
@@ -1412,7 +1445,7 @@ impl MessageHandler {
 
         let matches = match self
             .fapi
-            .image_search(photo, fautil::MatchType::Close)
+            .image_search(&photo, fautil::MatchType::Close)
             .await
         {
             Ok(matches) if !matches.is_empty() => matches,
