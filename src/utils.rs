@@ -1,4 +1,3 @@
-use linkify::Link;
 use sentry::integrations::failure::capture_fail;
 use std::time::Instant;
 
@@ -15,7 +14,7 @@ pub struct SiteCallback<'a> {
 
 pub async fn find_images<'a, C>(
     user: &telegram::User,
-    links: Vec<Link<'a>>,
+    links: Vec<&'a str>,
     sites: &mut [BoxedSite],
     callback: &mut C,
 ) -> Vec<&'a str>
@@ -25,15 +24,13 @@ where
     let mut missing = vec![];
 
     'link: for link in links {
-        let link_str = link.as_str();
-
         for site in sites.iter_mut() {
             let start = Instant::now();
 
-            if site.url_supported(link_str).await {
-                log::debug!("Link {} supported by {}", link_str, site.name());
+            if site.url_supported(link).await {
+                log::debug!("Link {} supported by {}", link, site.name());
 
-                match site.get_images(user.id, link_str).await {
+                match site.get_images(user.id, link).await {
                     // Got results successfully and there were results
                     // Execute callback with site info and results
                     Ok(results) if results.is_some() => {
@@ -41,7 +38,7 @@ where
                         log::debug!("Found images: {:?}", results);
                         callback(SiteCallback {
                             site: &site,
-                            link: link_str,
+                            link,
                             duration: start.elapsed().as_millis() as i64,
                             results,
                         });
@@ -49,12 +46,12 @@ where
                     // Got results successfully and there were NO results
                     // Continue onto next link
                     Ok(_) => {
-                        missing.push(link_str);
+                        missing.push(link);
                         continue 'link;
                     }
                     // Got error while processing, report and move onto next link
                     Err(e) => {
-                        missing.push(link_str);
+                        missing.push(link);
                         log::warn!("Unable to get results: {:?}", e);
                         with_user_scope(
                             Some(user),
@@ -214,4 +211,35 @@ pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (S
     s.push_str(&get_message(&bundle, "alternate-feedback", None).unwrap());
 
     (s, used_hashes)
+}
+
+pub fn parse_known_bots(message: &telegram::Message) -> Option<Vec<String>> {
+    let from = if let Some(ref forward_from) = message.forward_from {
+        Some(forward_from)
+    } else {
+        message.from.as_ref()
+    };
+
+    let from = match &from {
+        Some(from) => from,
+        None => return None,
+    };
+
+    log::trace!("evaluating if known bot: {}", from.id);
+
+    match from.id {
+        // FAwatchbot
+        190_600_517 => {
+            let urls = match message.entities {
+                Some(ref entities) => entities.iter().filter_map(|entity| {
+                    { entity.url.as_ref().map(|url| url.to_string()) }
+                        .filter(|url| url.contains("furaffinity.net/view/"))
+                }),
+                None => return None,
+            };
+
+            Some(urls.collect())
+        }
+        _ => None,
+    }
 }

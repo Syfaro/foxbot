@@ -62,6 +62,7 @@ alternate-distance = · { $link } (distance of { $distance })
 alternate-feedback = Finding alternate images is an experimental feature, please use the buttons below to let me know if it is working as expected.
 alternate-feedback-y = Looking good
 alternate-feedback-n = Not great :(
+alternate-multiple-photo = I can only find alternates for a single photo, sorry.
 
 # Error Messages
 error-generic = Oh no, something went wrong! Please send a message to my creator { -creatorName } if you continue having issues.

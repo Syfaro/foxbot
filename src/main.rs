@@ -455,6 +455,7 @@ impl MessageHandler {
         let influx = self.influx.clone();
         {
             let mut sites = self.sites.lock().await;
+            let links = links.iter().map(|link| link.as_str()).collect();
             utils::find_images(&inline.from, links, &mut sites, &mut |info| {
                 let influx = influx.clone();
                 let duration = info.duration;
@@ -761,23 +762,73 @@ impl MessageHandler {
             (message.message_id, message)
         };
 
-        let photo = match message.photo.clone() {
-            Some(photo) if !photo.is_empty() => photo,
-            _ => {
-                completed.store(true, std::sync::atomic::Ordering::SeqCst);
-                self.send_generic_reply(&message, "source-no-photo").await;
-                return;
+        let bytes = match message.photo.clone() {
+            Some(photo) => {
+                let best_photo = utils::find_best_photo(&photo).unwrap();
+                match utils::download_by_id(&self.bot, &best_photo.file_id).await {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        completed.store(true, std::sync::atomic::Ordering::SeqCst);
+                        log::error!("Unable to download file: {:?}", e);
+                        let tags = Some(vec![("command", "source".to_string())]);
+                        self.report_error(&message, tags, || capture_fail(&e)).await;
+                        return;
+                    }
+                }
             }
-        };
+            None => {
+                let mut links = vec![];
 
-        let best_photo = utils::find_best_photo(&photo).unwrap();
-        let bytes = match utils::download_by_id(&self.bot, &best_photo.file_id).await {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                log::error!("Unable to download file: {:?}", e);
-                let tags = Some(vec![("command", "source".to_string())]);
-                self.report_error(&message, tags, || capture_fail(&e)).await;
-                return;
+                if let Some(bot_links) = utils::parse_known_bots(&message) {
+                    log::trace!("is known bot, adding links");
+                    links.extend(bot_links);
+                } else if let Some(text) = &message.text {
+                    log::trace!("message had text, looking at links");
+                    links.extend(
+                        self.finder
+                            .links(&text)
+                            .map(|link| link.as_str().to_string()),
+                    );
+                }
+
+                if links.is_empty() {
+                    completed.store(true, std::sync::atomic::Ordering::SeqCst);
+                    self.send_generic_reply(&message, "source-no-photo").await;
+                    return;
+                } else if links.len() > 1 {
+                    completed.store(true, std::sync::atomic::Ordering::SeqCst);
+                    self.send_generic_reply(&message, "alternate-multiple-photo")
+                        .await;
+                    return;
+                }
+
+                let mut sites = self.sites.lock().await;
+                let links = links.iter().map(|link| link.as_str()).collect();
+                let mut link = None;
+                utils::find_images(
+                    &message.from.clone().unwrap(),
+                    links,
+                    &mut sites,
+                    &mut |info| {
+                        link = info.results.into_iter().next();
+                    },
+                )
+                .await;
+
+                match link {
+                    Some(link) => reqwest::get(&link.url)
+                        .await
+                        .unwrap()
+                        .bytes()
+                        .await
+                        .unwrap()
+                        .to_vec(),
+                    None => {
+                        completed.store(true, std::sync::atomic::Ordering::SeqCst);
+                        self.send_generic_reply(&message, "source-no-photo").await;
+                        return;
+                    }
+                }
             }
         };
 
@@ -788,6 +839,7 @@ impl MessageHandler {
         {
             Ok(matches) => matches,
             Err(e) => {
+                completed.store(true, std::sync::atomic::Ordering::SeqCst);
                 log::error!("Unable to find matches: {:?}", e);
                 let tags = Some(vec![("command", "source".to_string())]);
                 self.report_error(&message, tags, || capture_fail(&e)).await;
@@ -796,6 +848,7 @@ impl MessageHandler {
         };
 
         if matches.is_empty() {
+            completed.store(true, std::sync::atomic::Ordering::SeqCst);
             self.send_generic_reply(&message, "reverse-no-results")
                 .await;
             return;
@@ -998,6 +1051,7 @@ impl MessageHandler {
 
         let missing = {
             let mut sites = self.sites.lock().await;
+            let links = links.iter().map(|link| link.as_str()).collect();
             utils::find_images(&from, links, &mut sites, &mut |info| {
                 results.extend(info.results);
             })
