@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::files::*;
 use crate::types::*;
@@ -539,6 +539,13 @@ impl TelegramRequest for AnswerCallbackQuery {
     }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum MessageOrBool {
+    Message(Message),
+    Bool(bool),
+}
+
 #[derive(Default, Debug, Serialize)]
 pub struct EditMessageText {
     pub chat_id: ChatID,
@@ -556,9 +563,51 @@ pub struct EditMessageText {
 }
 
 impl TelegramRequest for EditMessageText {
-    type Response = Message;
+    type Response = MessageOrBool;
 
     fn endpoint(&self) -> &str {
         "editMessageText"
+    }
+}
+
+#[derive(Default, Debug, Serialize)]
+pub struct EditMessageCaption {
+    pub chat_id: ChatID,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inline_message_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parse_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_markup: Option<ReplyMarkup>,
+}
+
+impl TelegramRequest for EditMessageCaption {
+    type Response = MessageOrBool;
+
+    fn endpoint(&self) -> &str {
+        "editMessageCaption"
+    }
+}
+
+#[derive(Default, Debug, Serialize)]
+pub struct EditMessageReplyMarkup {
+    pub chat_id: ChatID,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inline_message_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_markup: Option<ReplyMarkup>,
+}
+
+impl TelegramRequest for EditMessageReplyMarkup {
+    type Response = MessageOrBool;
+
+    fn endpoint(&self) -> &str {
+        "editMessageReplyMarkup"
     }
 }

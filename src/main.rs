@@ -147,18 +147,21 @@ async fn main() {
         .expect("Unable to fetch bot user");
 
     let handler = Arc::new(MessageHandler {
-        sites: Mutex::new(sites),
-        bot: bot.clone(),
         bot_user,
-        finder,
-        fapi,
-        db: RwLock::new(db),
-        consumer_key,
-        consumer_secret,
         langs,
         best_lang: RwLock::new(HashMap::new()),
+
+        bot: bot.clone(),
+        fapi,
         influx: Arc::new(influx),
+        finder,
+
+        sites: Mutex::new(sites),
+        consumer_key,
+        consumer_secret,
         use_proxy,
+
+        db: RwLock::new(db),
     });
 
     let use_webhooks: bool = std::env::var("USE_WEBHOOKS")
@@ -1240,6 +1243,10 @@ impl MessageHandler {
             }
         } else if let Some(callback_data) = update.callback_query {
             self.handle_callback(callback_data).await;
+        } else if let Some(channel_post) = update.channel_post {
+            if channel_post.photo.is_some() {
+                self.process_channel_photo(channel_post).await;
+            }
         }
     }
 
@@ -1626,6 +1633,87 @@ impl MessageHandler {
             utils::with_user_scope(message.from.as_ref(), None, || {
                 capture_fail(&e);
             });
+        }
+    }
+
+    async fn process_channel_photo(&self, message: Message) {
+        if message.forward_date.is_some() {
+            return;
+        }
+
+        let mut links = vec![];
+
+        if let Some(ref text) = message.text {
+            links.extend(self.finder.links(&text));
+        }
+
+        if let Some(ref caption) = message.caption {
+            links.extend(self.finder.links(&caption));
+        }
+
+        let sizes = message.photo.clone().unwrap();
+        let best_photo = utils::find_best_photo(&sizes).unwrap();
+        let bytes = utils::download_by_id(&self.bot, &best_photo.file_id)
+            .await
+            .unwrap();
+
+        let matches = match self
+            .fapi
+            .image_search(&bytes, fautil::MatchType::Close)
+            .await
+        {
+            Ok(matches) if !matches.is_empty() => matches,
+            _ => return,
+        };
+
+        let first = matches.first().unwrap();
+
+        if first.distance > 2 {
+            return;
+        }
+
+        let text = self
+            .get_fluent_bundle(None, |bundle| {
+                utils::get_message(&bundle, "inline-source", None).unwrap()
+            })
+            .await;
+
+        if message.media_group_id.is_some() {
+            let edit_caption_markup = EditMessageCaption {
+                chat_id: message.chat_id(),
+                message_id: Some(message.message_id),
+                caption: Some(format!("https://www.furaffinity.net/view/{}/", first.id)),
+                ..Default::default()
+            };
+
+            if let Err(e) = self.bot.make_request(&edit_caption_markup).await {
+                log::error!("Unable to edit channel caption: {:?}", e);
+                utils::with_user_scope(None, None, || {
+                    capture_fail(&e);
+                });
+            }
+        } else {
+            let markup = InlineKeyboardMarkup {
+                inline_keyboard: vec![vec![InlineKeyboardButton {
+                    text,
+                    url: Some(format!("https://www.furaffinity.net/view/{}/", first.id)),
+                    ..Default::default()
+                }]],
+            };
+
+            let edit_reply_markup = EditMessageReplyMarkup {
+                chat_id: message.chat_id(),
+                message_id: Some(message.message_id),
+                reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(markup)),
+                ..Default::default()
+            };
+
+            if let Err(e) = self.bot.make_request(&edit_reply_markup).await {
+                log::error!("Unable to edit channel reply markup: {:?}", e);
+                utils::with_user_scope(None, None, || {
+                    capture_fail(&e);
+                });
+            }
         }
     }
 }
