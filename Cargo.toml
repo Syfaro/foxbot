@@ -28,7 +28,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 egg-mode = "0.13.0"
-tokio = { version = "0.2.0", features = ["macros", "time", "stream"] }
+tokio = { version = "0.2.0", features = ["macros", "time", "stream", "sync"] }
 futures = "0.3.1"
 futures-util = "0.3.1"
 tokio01 = { version = "0.1", package = "tokio" }

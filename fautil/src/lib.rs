@@ -85,7 +85,7 @@ impl FAUtil {
     pub async fn image_search(
         &self,
         data: &[u8],
-        exact: MatchType
+        exact: MatchType,
     ) -> reqwest::Result<Vec<ImageLookup>> {
         use reqwest::multipart::{Form, Part};
 

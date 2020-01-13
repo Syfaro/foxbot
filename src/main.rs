@@ -5,7 +5,7 @@ use sites::{PostInfo, Site};
 use std::collections::HashMap;
 use std::sync::{atomic::AtomicBool, Arc};
 use telegram::*;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tokio01::runtime::current_thread::block_on_all;
 use unic_langid::LanguageIdentifier;
 
@@ -146,20 +146,20 @@ async fn main() {
         .await
         .expect("Unable to fetch bot user");
 
-    let handler = Arc::new(Mutex::new(MessageHandler {
-        sites,
+    let handler = Arc::new(MessageHandler {
+        sites: Mutex::new(sites),
         bot: bot.clone(),
         bot_user,
         finder,
         fapi,
-        db,
+        db: RwLock::new(db),
         consumer_key,
         consumer_secret,
         langs,
-        best_lang: HashMap::new(),
+        best_lang: RwLock::new(HashMap::new()),
         influx: Arc::new(influx),
         use_proxy,
-    }));
+    });
 
     let use_webhooks: bool = std::env::var("USE_WEBHOOKS")
         .unwrap_or_else(|_| "false".to_string())
@@ -197,7 +197,7 @@ async fn main() {
 
 async fn handle_request(
     req: hyper::Request<hyper::Body>,
-    handler: Arc<Mutex<MessageHandler>>,
+    handler: Arc<MessageHandler>,
     secret: &str,
 ) -> hyper::Result<hyper::Response<hyper::Body>> {
     use hyper::{Body, Response, StatusCode};
@@ -222,26 +222,20 @@ async fn handle_request(
                 }
             };
 
-            {
-                let mut handler = handler.lock().await;
-                log::debug!("Got update: {:?}", update);
-                handler.handle_message(update).await;
+            log::debug!("Got update: {:?}", update);
+            handler.handle_message(update).await;
+
+            let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "http")
+                .add_field("duration", now.elapsed().as_millis() as i64);
+
+            if let Err(e) = handler.influx.query(&point).await {
+                let uuid = capture_fail(&e);
+                log::error!(
+                    "[{}]  Unable to send http request info to InfluxDB: {:?}",
+                    uuid,
+                    e
+                );
             }
-
-            tokio::spawn(async move {
-                let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "http")
-                    .add_field("duration", now.elapsed().as_millis() as i64);
-
-                let handler = handler.lock().await;
-                if let Err(e) = handler.influx.query(&point).await {
-                    let uuid = capture_fail(&e);
-                    log::error!(
-                        "[{}]  Unable to send http request info to InfluxDB: {:?}",
-                        uuid,
-                        e
-                    );
-                }
-            });
 
             Ok(Response::new(Body::from("✓")))
         }
@@ -253,7 +247,7 @@ async fn handle_request(
     }
 }
 
-async fn receive_webhook(handler: Arc<Mutex<MessageHandler>>) {
+async fn receive_webhook(handler: Arc<MessageHandler>) {
     let host = std::env::var("HTTP_HOST").expect("Missing HTTP_HOST");
     let addr = host.parse().expect("Invalid HTTP_HOST");
 
@@ -280,7 +274,7 @@ async fn receive_webhook(handler: Arc<Mutex<MessageHandler>>) {
     }
 }
 
-async fn poll_updates(bot: Arc<Telegram>, handler: Arc<Mutex<MessageHandler>>) {
+async fn poll_updates(bot: Arc<Telegram>, handler: Arc<MessageHandler>) {
     let mut update_req = GetUpdates::default();
     update_req.timeout = Some(30);
 
@@ -300,10 +294,7 @@ async fn poll_updates(bot: Arc<Telegram>, handler: Arc<Mutex<MessageHandler>>) {
 
             let handler = handler.clone();
 
-            tokio::spawn(async move {
-                let mut handler = handler.lock().await;
-                handler.handle_message(update).await
-            });
+            tokio::spawn(async move { handler.handle_message(update).await });
 
             update_req.offset = Some(id + 1);
         }
@@ -316,7 +307,7 @@ struct MessageHandler {
     // State
     bot_user: User,
     langs: HashMap<LanguageIdentifier, Vec<String>>,
-    best_lang: HashMap<String, fluent::FluentBundle<fluent::FluentResource>>,
+    best_lang: RwLock<HashMap<String, fluent::FluentBundle<fluent::FluentResource>>>,
 
     // API clients
     bot: Arc<Telegram>,
@@ -325,20 +316,20 @@ struct MessageHandler {
     finder: linkify::LinkFinder,
 
     // Configuration
-    sites: Vec<BoxedSite>,
+    sites: Mutex<Vec<BoxedSite>>, // We always need mutable access, no reason to use a RwLock
     consumer_key: String,
     consumer_secret: String,
     use_proxy: bool,
 
     // Storage
-    db: pickledb::PickleDb,
+    db: RwLock<pickledb::PickleDb>,
 }
 
 impl MessageHandler {
-    fn get_fluent_bundle(
-        &mut self,
-        requested: Option<&str>,
-    ) -> &fluent::FluentBundle<fluent::FluentResource> {
+    async fn get_fluent_bundle<C, R>(&self, requested: Option<&str>, callback: C) -> R
+    where
+        C: FnOnce(&fluent::FluentBundle<fluent::FluentResource>) -> R,
+    {
         let requested = if let Some(requested) = requested {
             requested
         } else {
@@ -347,11 +338,12 @@ impl MessageHandler {
 
         log::trace!("Looking up language bundle for {}", requested);
 
-        if self.best_lang.contains_key(requested) {
-            return self
-                .best_lang
-                .get(requested)
-                .expect("Should have contained");
+        {
+            let lock = self.best_lang.read().await;
+            if lock.contains_key(requested) {
+                let bundle = lock.get(requested).expect("Should have contained");
+                return callback(bundle);
+            }
         }
 
         log::info!("Got new language {}, building bundle", requested);
@@ -390,14 +382,18 @@ impl MessageHandler {
 
         bundle.set_use_isolating(false);
 
-        self.best_lang.insert(requested.to_string(), bundle);
-        self.best_lang
-            .get(requested)
-            .expect("Value just inserted is missing")
+        {
+            let mut lock = self.best_lang.write().await;
+            lock.insert(requested.to_string(), bundle);
+        }
+
+        let lock = self.best_lang.read().await;
+        let bundle = lock.get(requested).expect("Value just inserted is missing");
+        callback(bundle)
     }
 
     async fn report_error<C>(
-        &mut self,
+        &self,
         message: &Message,
         tags: Option<Vec<(&str, String)>>,
         callback: C,
@@ -411,18 +407,21 @@ impl MessageHandler {
             .clone()
             .map(|from| from.language_code)
             .flatten();
-        let bundle = self.get_fluent_bundle(lang_code.as_deref());
 
-        let msg = if u.is_nil() {
-            utils::get_message(&bundle, "error-generic", None)
-        } else {
-            let f = format!("`{}`", u.to_string());
+        let msg = self
+            .get_fluent_bundle(lang_code.as_deref(), |bundle| {
+                if u.is_nil() {
+                    utils::get_message(&bundle, "error-generic", None)
+                } else {
+                    let f = format!("`{}`", u.to_string());
 
-            let mut args = fluent::FluentArgs::new();
-            args.insert("uuid", fluent::FluentValue::from(f));
+                    let mut args = fluent::FluentArgs::new();
+                    args.insert("uuid", fluent::FluentValue::from(f));
 
-            utils::get_message(&bundle, "error-uuid", Some(args))
-        };
+                    utils::get_message(&bundle, "error-uuid", Some(args))
+                }
+            })
+            .await;
 
         let send_message = SendMessage {
             chat_id: message.chat_id(),
@@ -440,7 +439,7 @@ impl MessageHandler {
         }
     }
 
-    async fn handle_inline(&mut self, inline: InlineQuery) {
+    async fn handle_inline(&self, inline: InlineQuery) {
         let links: Vec<_> = self.finder.links(&inline.query).collect();
         let mut results: Vec<PostInfo> = Vec::new();
 
@@ -448,44 +447,50 @@ impl MessageHandler {
         log::debug!("Found links: {:?}", links);
 
         let influx = self.influx.clone();
-        utils::find_images(&inline.from, links, &mut self.sites, &mut |info| {
-            let influx = influx.clone();
-            let duration = info.duration;
-            let count = info.results.len();
-            let name = info.site.name();
+        {
+            let mut sites = self.sites.lock().await;
+            utils::find_images(&inline.from, links, &mut sites, &mut |info| {
+                let influx = influx.clone();
+                let duration = info.duration;
+                let count = info.results.len();
+                let name = info.site.name();
 
-            tokio::spawn(async move {
-                let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "inline")
-                    .add_tag("site", name.replace(" ", "_"))
-                    .add_field("count", count as i32)
-                    .add_field("duration", duration);
+                tokio::spawn(async move {
+                    let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "inline")
+                        .add_tag("site", name.replace(" ", "_"))
+                        .add_field("count", count as i32)
+                        .add_field("duration", duration);
 
-                influx.query(&point).await
-            });
+                    influx.query(&point).await
+                });
 
-            results.extend(info.results);
-        })
-        .await;
+                results.extend(info.results);
+            })
+            .await;
+        }
 
         let personal = results.iter().any(|result| result.personal);
 
-        let mut responses: Vec<InlineQueryResult> = results
-            .iter()
-            .map(|result| self.process_result(result, &inline.from))
-            .filter_map(|result| result)
-            .flatten()
-            .collect();
+        let mut responses: Vec<InlineQueryResult> = vec![];
 
-        if responses.is_empty() {
-            let bundle = self.get_fluent_bundle(inline.from.language_code.as_deref());
-
-            if !inline.query.is_empty() {
-                responses.push(InlineQueryResult::article(
-                    generate_id(),
-                    utils::get_message(&bundle, "inline-no-results-title", None).unwrap(),
-                    utils::get_message(&bundle, "inline-no-results-body", None).unwrap(),
-                ));
+        for result in results {
+            if let Some(items) = self.process_result(&result, &inline.from).await {
+                responses.extend(items);
             }
+        }
+
+        if responses.is_empty() && !inline.query.is_empty() {
+            let article = self
+                .get_fluent_bundle(inline.from.language_code.as_deref(), |bundle| {
+                    InlineQueryResult::article(
+                        generate_id(),
+                        utils::get_message(&bundle, "inline-no-results-title", None).unwrap(),
+                        utils::get_message(&bundle, "inline-no-results-body", None).unwrap(),
+                    )
+                })
+                .await;
+
+            responses.push(article);
         }
 
         let mut answer_inline = AnswerInlineQuery {
@@ -508,7 +513,7 @@ impl MessageHandler {
         }
     }
 
-    async fn handle_command(&mut self, message: Message) {
+    async fn handle_command(&self, message: Message) {
         let now = std::time::Instant::now();
 
         let command = match message.get_command() {
@@ -549,17 +554,22 @@ impl MessageHandler {
         }
     }
 
-    async fn handle_welcome(&mut self, message: Message, command: &str) {
+    async fn handle_welcome(&self, message: Message, command: &str) {
         use rand::seq::SliceRandom;
 
         let from = message.from.clone().unwrap();
-        let bundle = self.get_fluent_bundle(from.language_code.as_deref());
 
         let random_artwork = *STARTING_ARTWORK.choose(&mut rand::thread_rng()).unwrap();
 
+        let try_me = self
+            .get_fluent_bundle(from.language_code.as_deref(), |bundle| {
+                utils::get_message(&bundle, "welcome-try-me", None).unwrap()
+            })
+            .await;
+
         let reply_markup = ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
             inline_keyboard: vec![vec![InlineKeyboardButton {
-                text: "Try Me!".to_string(),
+                text: try_me,
                 switch_inline_query_current_chat: Some(random_artwork.to_string()),
                 ..Default::default()
             }]],
@@ -571,9 +581,15 @@ impl MessageHandler {
             "welcome"
         };
 
+        let welcome = self
+            .get_fluent_bundle(from.language_code.as_deref(), |bundle| {
+                utils::get_message(&bundle, &name, None).unwrap()
+            })
+            .await;
+
         let send_message = SendMessage {
             chat_id: message.chat_id(),
-            text: utils::get_message(&bundle, &name, None).unwrap(),
+            text: welcome,
             reply_markup: Some(reply_markup),
             ..Default::default()
         };
@@ -626,7 +642,7 @@ impl MessageHandler {
         });
     }
 
-    async fn handle_source(&mut self, message: Message) {
+    async fn handle_source(&self, message: Message) {
         let completed = Arc::new(AtomicBool::new(false));
         self.send_action(
             12,
@@ -685,8 +701,6 @@ impl MessageHandler {
             }
         };
 
-        let bundle = self.get_fluent_bundle(message.from.clone().unwrap().language_code.as_deref());
-
         let name = if result.distance < 5 {
             "reverse-good-result"
         } else {
@@ -700,9 +714,16 @@ impl MessageHandler {
             fluent::FluentValue::from(format!("https://www.furaffinity.net/view/{}/", result.id)),
         );
 
+        let text = self
+            .get_fluent_bundle(
+                message.from.clone().unwrap().language_code.as_deref(),
+                |bundle| utils::get_message(&bundle, name, Some(args)).unwrap(),
+            )
+            .await;
+
         let send_message = SendMessage {
             chat_id: message.chat.id.into(),
-            text: utils::get_message(&bundle, name, Some(args)).unwrap(),
+            text,
             disable_web_page_preview: Some(result.distance > 5),
             reply_to_message_id: Some(reply_to_id),
             ..Default::default()
@@ -718,7 +739,7 @@ impl MessageHandler {
         }
     }
 
-    async fn handle_alts(&mut self, message: Message) {
+    async fn handle_alts(&self, message: Message) {
         let completed = Arc::new(AtomicBool::new(false));
         self.send_action(
             12,
@@ -788,9 +809,17 @@ impl MessageHandler {
             .map(|item| (item.0, item.1))
             .collect::<Vec<_>>();
 
-        let bundle = self.get_fluent_bundle(message.from.clone().unwrap().language_code.as_deref());
-
-        let (text, used_hashes) = utils::build_alternate_response(&bundle, items);
+        let ((text, used_hashes), alternate) = self
+            .get_fluent_bundle(
+                message.from.clone().unwrap().language_code.as_deref(),
+                |bundle| {
+                    (
+                        utils::build_alternate_response(&bundle, items),
+                        utils::alternate_feedback_keyboard(&bundle),
+                    )
+                },
+            )
+            .await;
 
         completed.store(true, std::sync::atomic::Ordering::SeqCst);
 
@@ -800,9 +829,7 @@ impl MessageHandler {
             disable_web_page_preview: Some(true),
             parse_mode: Some(ParseMode::Markdown),
             reply_to_message_id: Some(reply_to_id),
-            reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(
-                utils::alternate_feedback_keyboard(&bundle),
-            )),
+            reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(alternate)),
         };
 
         let sent = match self.bot.make_request(&send_message).await {
@@ -868,9 +895,17 @@ impl MessageHandler {
             .map(|item| (item.0, item.1))
             .collect::<Vec<_>>();
 
-        let bundle = self.get_fluent_bundle(message.from.clone().unwrap().language_code.as_deref());
-
-        let (updated_text, _used_hashes) = utils::build_alternate_response(&bundle, items);
+        let ((updated_text, _used_hashes), alternate) = self
+            .get_fluent_bundle(
+                message.from.clone().unwrap().language_code.as_deref(),
+                |bundle| {
+                    (
+                        utils::build_alternate_response(&bundle, items),
+                        utils::alternate_feedback_keyboard(&bundle),
+                    )
+                },
+            )
+            .await;
 
         completed.store(true, std::sync::atomic::Ordering::SeqCst);
 
@@ -884,9 +919,7 @@ impl MessageHandler {
             text: updated_text,
             disable_web_page_preview: Some(true),
             parse_mode: Some(ParseMode::Markdown),
-            reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(
-                utils::alternate_feedback_keyboard(&bundle),
-            )),
+            reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(alternate)),
             ..Default::default()
         };
 
@@ -898,17 +931,22 @@ impl MessageHandler {
         }
     }
 
-    async fn send_generic_reply(&mut self, message: &Message, name: &str) {
+    async fn send_generic_reply(&self, message: &Message, name: &str) {
         let language_code = match &message.from {
             Some(from) => &from.language_code,
             None => return,
         };
 
-        let bundle = self.get_fluent_bundle(language_code.as_deref());
+        let text = self
+            .get_fluent_bundle(language_code.as_deref(), |bundle| {
+                utils::get_message(&bundle, name, None).unwrap()
+            })
+            .await;
+
         let send_message = SendMessage {
             chat_id: message.chat_id(),
             reply_to_message_id: Some(message.message_id),
-            text: utils::get_message(&bundle, name, None).unwrap(),
+            text,
             ..Default::default()
         };
 
@@ -920,7 +958,7 @@ impl MessageHandler {
         }
     }
 
-    async fn handle_mirror(&mut self, message: Message) {
+    async fn handle_mirror(&self, message: Message) {
         let from = message.from.clone().unwrap();
 
         let completed = Arc::new(AtomicBool::new(false));
@@ -952,10 +990,13 @@ impl MessageHandler {
 
         let mut results: Vec<PostInfo> = Vec::with_capacity(links.len());
 
-        let missing = utils::find_images(&from, links, &mut self.sites, &mut |info| {
-            results.extend(info.results);
-        })
-        .await;
+        let missing = {
+            let mut sites = self.sites.lock().await;
+            utils::find_images(&from, links, &mut sites, &mut |info| {
+                results.extend(info.results);
+            })
+            .await
+        };
 
         if results.is_empty() {
             self.send_generic_reply(&message, "mirror-no-results").await;
@@ -1030,15 +1071,20 @@ impl MessageHandler {
         }
 
         if !missing.is_empty() {
-            let bundle = self.get_fluent_bundle(from.language_code.as_deref());
             let links: Vec<String> = missing.iter().map(|item| format!("· {}", item)).collect();
             let mut args = fluent::FluentArgs::new();
             args.insert("links", fluent::FluentValue::from(links.join("\n")));
 
+            let text = self
+                .get_fluent_bundle(from.language_code.as_deref(), |bundle| {
+                    utils::get_message(&bundle, "mirror-missing", Some(args)).unwrap()
+                })
+                .await;
+
             let send_message = SendMessage {
                 chat_id: message.chat_id(),
                 reply_to_message_id: Some(reply_to_id),
-                text: utils::get_message(&bundle, "mirror-missing", Some(args)).unwrap(),
+                text,
                 disable_web_page_preview: Some(true),
                 ..Default::default()
             };
@@ -1052,7 +1098,7 @@ impl MessageHandler {
         }
     }
 
-    async fn handle_text(&mut self, message: Message) {
+    async fn handle_text(&self, message: Message) {
         let now = std::time::Instant::now();
 
         let text = message.text.clone().unwrap(); // only here because this existed
@@ -1065,9 +1111,13 @@ impl MessageHandler {
 
         log::trace!("Checking if message was Twitter code");
 
-        let data: (String, String) = match self.db.get(&format!("authenticate:{}", from.id)) {
-            Some(data) => data,
-            None => return,
+        let data: (String, String) = {
+            let lock = self.db.read().await;
+
+            match lock.get(&format!("authenticate:{}", from.id)) {
+                Some(data) => data,
+                None => return,
+            }
         };
 
         log::trace!("We had waiting Twitter code");
@@ -1100,34 +1150,42 @@ impl MessageHandler {
 
         log::trace!("Got access token");
 
-        if let Err(e) = self.db.set(
-            &format!("credentials:{}", from.id),
-            &(access.key, access.secret),
-        ) {
-            log::warn!("Unable to save user credentials: {:?}", e);
+        {
+            let mut lock = self.db.write().await;
 
-            self.report_error(
-                &message,
-                Some(vec![("command", "twitter_auth".to_string())]),
-                || {
-                    sentry::integrations::failure::capture_error(&format_err!(
-                        "Unable to save to Twitter database: {}",
-                        e
-                    ))
-                },
-            )
-            .await;
-            return;
+            if let Err(e) = lock.set(
+                &format!("credentials:{}", from.id),
+                &(access.key, access.secret),
+            ) {
+                log::warn!("Unable to save user credentials: {:?}", e);
+
+                self.report_error(
+                    &message,
+                    Some(vec![("command", "twitter_auth".to_string())]),
+                    || {
+                        sentry::integrations::failure::capture_error(&format_err!(
+                            "Unable to save to Twitter database: {}",
+                            e
+                        ))
+                    },
+                )
+                .await;
+                return;
+            }
         }
 
         let mut args = fluent::FluentArgs::new();
         args.insert("userName", fluent::FluentValue::from(token.2));
 
-        let bundle = self.get_fluent_bundle(from.language_code.as_deref());
+        let text = self
+            .get_fluent_bundle(from.language_code.as_deref(), |bundle| {
+                utils::get_message(&bundle, "twitter-welcome", Some(args)).unwrap()
+            })
+            .await;
 
         let message = SendMessage {
             chat_id: from.id.into(),
-            text: utils::get_message(&bundle, "twitter-welcome", Some(args)).unwrap(),
+            text,
             reply_to_message_id: Some(message.message_id),
             ..Default::default()
         };
@@ -1151,7 +1209,7 @@ impl MessageHandler {
         }
     }
 
-    async fn handle_message(&mut self, update: Update) {
+    async fn handle_message(&self, update: Update) {
         if let Some(inline) = update.inline_query {
             self.handle_inline(inline).await;
         } else if let Some(message) = update.message {
@@ -1182,7 +1240,7 @@ impl MessageHandler {
         }
     }
 
-    async fn handle_callback(&mut self, callback_data: CallbackQuery) {
+    async fn handle_callback(&self, callback_data: CallbackQuery) {
         let mut answer = AnswerCallbackQuery {
             callback_query_id: callback_data.id,
             ..Default::default()
@@ -1225,7 +1283,7 @@ impl MessageHandler {
         }
     }
 
-    async fn authenticate_twitter(&mut self, message: Message) {
+    async fn authenticate_twitter(&self, message: Message) {
         let now = std::time::Instant::now();
 
         if message.chat.chat_type != ChatType::Private {
@@ -1258,24 +1316,28 @@ impl MessageHandler {
             }
         };
 
-        if let Err(e) = self.db.set(
-            &format!("authenticate:{}", user.id),
-            &(request_token.key.clone(), request_token.secret.clone()),
-        ) {
-            log::warn!("Unable to save authenticate: {:?}", e);
+        {
+            let mut lock = self.db.write().await;
 
-            self.report_error(
-                &message,
-                Some(vec![("command", "twitter".to_string())]),
-                || {
-                    sentry::integrations::failure::capture_error(&format_err!(
-                        "Unable to save to Twitter database: {}",
-                        e
-                    ))
-                },
-            )
-            .await;
-            return;
+            if let Err(e) = lock.set(
+                &format!("authenticate:{}", user.id),
+                &(request_token.key.clone(), request_token.secret.clone()),
+            ) {
+                log::warn!("Unable to save authenticate: {:?}", e);
+
+                self.report_error(
+                    &message,
+                    Some(vec![("command", "twitter".to_string())]),
+                    || {
+                        sentry::integrations::failure::capture_error(&format_err!(
+                            "Unable to save to Twitter database: {}",
+                            e
+                        ))
+                    },
+                )
+                .await;
+                return;
+            }
         }
 
         let url = egg_mode::authorize_url(&request_token);
@@ -1283,11 +1345,15 @@ impl MessageHandler {
         let mut args = fluent::FluentArgs::new();
         args.insert("link", fluent::FluentValue::from(url));
 
-        let bundle = self.get_fluent_bundle(user.language_code.as_deref());
+        let text = self
+            .get_fluent_bundle(user.language_code.as_deref(), |bundle| {
+                utils::get_message(&bundle, "twitter-oob", Some(args)).unwrap()
+            })
+            .await;
 
         let send_message = SendMessage {
             chat_id: message.chat_id(),
-            text: utils::get_message(&bundle, "twitter-oob", Some(args)).unwrap(),
+            text,
             reply_markup: Some(ReplyMarkup::ForceReply(ForceReply::selective())),
             reply_to_message_id: Some(message.message_id),
             ..Default::default()
@@ -1312,11 +1378,22 @@ impl MessageHandler {
         }
     }
 
-    fn process_result(&mut self, result: &PostInfo, from: &User) -> Option<Vec<InlineQueryResult>> {
-        let bundle = self.get_fluent_bundle(from.language_code.as_deref());
+    async fn process_result(
+        &self,
+        result: &PostInfo,
+        from: &User,
+    ) -> Option<Vec<InlineQueryResult>> {
+        let (direct, source) = self
+            .get_fluent_bundle(from.language_code.as_deref(), |bundle| {
+                (
+                    utils::get_message(&bundle, "inline-direct", None).unwrap(),
+                    utils::get_message(&bundle, "inline-source", None).unwrap(),
+                )
+            })
+            .await;
 
         let mut row = vec![InlineKeyboardButton {
-            text: utils::get_message(&bundle, "inline-direct", None).unwrap(),
+            text: direct,
             url: Some(result.url.clone()),
             callback_data: None,
             ..Default::default()
@@ -1324,7 +1401,7 @@ impl MessageHandler {
 
         if let Some(source_link) = &result.source_link {
             row.push(InlineKeyboardButton {
-                text: utils::get_message(&bundle, "inline-source", None).unwrap(),
+                text: source,
                 url: Some(source_link.clone()),
                 callback_data: None,
                 ..Default::default()
@@ -1415,7 +1492,7 @@ impl MessageHandler {
         }
     }
 
-    async fn process_photo(&mut self, message: Message) {
+    async fn process_photo(&self, message: Message) {
         let now = std::time::Instant::now();
 
         if message.chat.chat_type != ChatType::Private {
@@ -1450,12 +1527,16 @@ impl MessageHandler {
         {
             Ok(matches) if !matches.is_empty() => matches,
             Ok(_matches) => {
-                let bundle =
-                    self.get_fluent_bundle(message.from.clone().unwrap().language_code.as_deref());
+                let text = self
+                    .get_fluent_bundle(
+                        message.from.clone().unwrap().language_code.as_deref(),
+                        |bundle| utils::get_message(&bundle, "reverse-no-results", None).unwrap(),
+                    )
+                    .await;
 
                 let send_message = SendMessage {
                     chat_id: message.chat_id(),
-                    text: utils::get_message(&bundle, "reverse-no-results", None).unwrap(),
+                    text,
                     reply_to_message_id: Some(message.message_id),
                     ..Default::default()
                 };
@@ -1495,8 +1576,6 @@ impl MessageHandler {
         let first = matches.get(0).unwrap();
         log::debug!("Match has distance of {}", first.distance);
 
-        let bundle = self.get_fluent_bundle(message.from.clone().unwrap().language_code.as_deref());
-
         let name = if first.distance < 5 {
             "reverse-good-result"
         } else {
@@ -1510,9 +1589,16 @@ impl MessageHandler {
             fluent::FluentValue::from(format!("https://www.furaffinity.net/view/{}/", first.id)),
         );
 
+        let text = self
+            .get_fluent_bundle(
+                message.from.clone().unwrap().language_code.as_deref(),
+                |bundle| utils::get_message(&bundle, name, Some(args)).unwrap(),
+            )
+            .await;
+
         let send_message = SendMessage {
             chat_id: message.chat_id(),
-            text: utils::get_message(&bundle, name, Some(args)).unwrap(),
+            text,
             disable_web_page_preview: Some(first.distance > 5),
             reply_to_message_id: Some(message.message_id),
             ..Default::default()

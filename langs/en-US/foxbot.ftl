@@ -22,6 +22,8 @@ welcome-group =
     · /mirror - I'll look at all the links in your message or the message you're replying to and mirror them
     · /source - I'll attempt to find if the photo you're replying to has been posted on FurAffinity
 
+welcome-try-me = Try Me!
+
 # Inline Keyboard
 inline-direct = Direct Link
 inline-source = Source

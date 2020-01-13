@@ -11,7 +11,7 @@ const USER_AGENT: &str = concat!(
     " developed by @Syfaro"
 );
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PostInfo {
     /// File type, as a standard file extension (png, jpg, etc.)
     pub file_type: String,

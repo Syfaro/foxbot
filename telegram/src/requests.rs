@@ -544,6 +544,8 @@ pub struct EditMessageText {
     pub chat_id: ChatID,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message_id: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inline_message_id: Option<String>,
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parse_mode: Option<ParseMode>,
