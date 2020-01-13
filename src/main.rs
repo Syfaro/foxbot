@@ -222,8 +222,11 @@ async fn handle_request(
                 }
             };
 
-            log::debug!("Got update: {:?}", update);
-            handler.handle_message(update).await;
+            let handler_clone = handler.clone();
+            tokio::spawn(async move {
+                log::debug!("Got update: {:?}", update);
+                handler_clone.handle_message(update).await;
+            });
 
             let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "http")
                 .add_field("duration", now.elapsed().as_millis() as i64);
