@@ -33,7 +33,7 @@ impl<T> Into<Result<T, Error>> for Response<T> {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Update {
     pub update_id: i32,
     pub message: Option<Message>,
@@ -175,7 +175,7 @@ pub struct PhotoSize {
     pub file_size: Option<i32>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct CallbackQuery {
     pub id: String,
     pub data: Option<String>,

@@ -1,5 +1,6 @@
 #![feature(try_trait)]
 
+use async_trait::async_trait;
 use sentry::integrations::failure::capture_fail;
 use sites::{PostInfo, Site};
 use std::collections::HashMap;
@@ -12,6 +13,7 @@ use unic_langid::LanguageIdentifier;
 #[macro_use]
 extern crate failure;
 
+mod handlers;
 mod sites;
 mod utils;
 
@@ -146,10 +148,13 @@ async fn main() {
         .await
         .expect("Unable to fetch bot user");
 
+    let handlers: Vec<Box<dyn Handler + Send + Sync>> = vec![Box::new(handlers::InlineHandler {})];
+
     let handler = Arc::new(MessageHandler {
         bot_user,
         langs,
         best_lang: RwLock::new(HashMap::new()),
+        handlers,
 
         bot: bot.clone(),
         fapi,
@@ -309,30 +314,47 @@ async fn poll_updates(bot: Arc<Telegram>, handler: Arc<MessageHandler>) {
 
 // MARK: Handling updates
 
-struct MessageHandler {
+pub struct MessageHandler {
     // State
-    bot_user: User,
+    pub bot_user: User,
     langs: HashMap<LanguageIdentifier, Vec<String>>,
     best_lang: RwLock<HashMap<String, fluent::FluentBundle<fluent::FluentResource>>>,
+    handlers: Vec<Box<dyn Handler + Send + Sync>>,
 
     // API clients
-    bot: Arc<Telegram>,
-    fapi: Arc<fautil::FAUtil>,
-    influx: Arc<influxdb::Client>,
-    finder: linkify::LinkFinder,
+    pub bot: Arc<Telegram>,
+    pub fapi: Arc<fautil::FAUtil>,
+    pub influx: Arc<influxdb::Client>,
+    pub finder: linkify::LinkFinder,
 
     // Configuration
-    sites: Mutex<Vec<BoxedSite>>, // We always need mutable access, no reason to use a RwLock
-    consumer_key: String,
-    consumer_secret: String,
-    use_proxy: bool,
+    pub sites: Mutex<Vec<BoxedSite>>, // We always need mutable access, no reason to use a RwLock
+    pub consumer_key: String,
+    pub consumer_secret: String,
+    pub use_proxy: bool,
 
     // Storage
-    db: RwLock<pickledb::PickleDb>,
+    pub db: RwLock<pickledb::PickleDb>,
+}
+
+#[async_trait]
+pub trait Handler: Send + Sync {
+    /// Name of the handler, for debugging/logging uses.
+    fn name(&self) -> &'static str;
+
+    /// Method called for every update received.
+    ///
+    /// Returns if the update should be absorbed and not passed to the next handler.
+    /// Errors are logged to log::error and reported to Sentry, if enabled.
+    async fn handle(
+        &self,
+        handler: &MessageHandler,
+        update: Update,
+    ) -> Result<bool, Box<dyn std::error::Error>>;
 }
 
 impl MessageHandler {
-    async fn get_fluent_bundle<C, R>(&self, requested: Option<&str>, callback: C) -> R
+    pub async fn get_fluent_bundle<C, R>(&self, requested: Option<&str>, callback: C) -> R
     where
         C: FnOnce(&fluent::FluentBundle<fluent::FluentResource>) -> R,
     {
@@ -398,7 +420,7 @@ impl MessageHandler {
         callback(bundle)
     }
 
-    async fn report_error<C>(
+    pub async fn report_error<C>(
         &self,
         message: &Message,
         tags: Option<Vec<(&str, String)>>,
@@ -442,81 +464,6 @@ impl MessageHandler {
             utils::with_user_scope(message.from.as_ref(), None, || {
                 capture_fail(&e);
             });
-        }
-    }
-
-    async fn handle_inline(&self, inline: InlineQuery) {
-        let links: Vec<_> = self.finder.links(&inline.query).collect();
-        let mut results: Vec<PostInfo> = Vec::new();
-
-        log::info!("Got query: {}", inline.query);
-        log::debug!("Found links: {:?}", links);
-
-        let influx = self.influx.clone();
-        {
-            let mut sites = self.sites.lock().await;
-            let links = links.iter().map(|link| link.as_str()).collect();
-            utils::find_images(&inline.from, links, &mut sites, &mut |info| {
-                let influx = influx.clone();
-                let duration = info.duration;
-                let count = info.results.len();
-                let name = info.site.name();
-
-                tokio::spawn(async move {
-                    let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "inline")
-                        .add_tag("site", name.replace(" ", "_"))
-                        .add_field("count", count as i32)
-                        .add_field("duration", duration);
-
-                    influx.query(&point).await
-                });
-
-                results.extend(info.results);
-            })
-            .await;
-        }
-
-        let personal = results.iter().any(|result| result.personal);
-
-        let mut responses: Vec<InlineQueryResult> = vec![];
-
-        for result in results {
-            if let Some(items) = self.process_result(&result, &inline.from).await {
-                responses.extend(items);
-            }
-        }
-
-        if responses.is_empty() && !inline.query.is_empty() {
-            let article = self
-                .get_fluent_bundle(inline.from.language_code.as_deref(), |bundle| {
-                    InlineQueryResult::article(
-                        generate_id(),
-                        utils::get_message(&bundle, "inline-no-results-title", None).unwrap(),
-                        utils::get_message(&bundle, "inline-no-results-body", None).unwrap(),
-                    )
-                })
-                .await;
-
-            responses.push(article);
-        }
-
-        let mut answer_inline = AnswerInlineQuery {
-            inline_query_id: inline.id,
-            results: responses,
-            is_personal: Some(personal),
-            ..Default::default()
-        };
-
-        if inline.query.is_empty() {
-            answer_inline.switch_pm_text = Some("Help".to_string());
-            answer_inline.switch_pm_parameter = Some("help".to_string());
-        }
-
-        if let Err(e) = self.bot.make_request(&answer_inline).await {
-            utils::with_user_scope(Some(&inline.from), None, || {
-                capture_fail(&e);
-            });
-            log::error!("Unable to respond to inline: {:?}", e);
         }
     }
 
@@ -1270,38 +1217,51 @@ impl MessageHandler {
     }
 
     async fn handle_message(&self, update: Update) {
-        if let Some(inline) = update.inline_query {
-            self.handle_inline(inline).await;
-        } else if let Some(message) = update.message {
-            if message.photo.is_some() {
-                self.process_photo(message).await;
-            } else if message.entities.is_some() {
-                self.handle_command(message).await;
-            } else if message.text.is_some() {
-                self.handle_text(message).await;
-            } else if let Some(new_members) = &message.new_chat_members {
-                if new_members
-                    .iter()
-                    .any(|member| member.id == self.bot_user.id)
-                {
-                    self.handle_welcome(message, "group-add").await;
+        for handler in &self.handlers {
+            match handler.handle(&self, update.clone()).await {
+                Ok(absorb) => {
+                    if absorb {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    log::error!("Error handling update: {:#?}", e);
                 }
             }
-        } else if let Some(chosen_result) = update.chosen_inline_result {
-            let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "chosen")
-                .add_field("user_id", chosen_result.from.id);
-
-            if let Err(e) = self.influx.query(&point).await {
-                log::error!("Unable to send chosen inline result to InfluxDB: {:?}", e);
-                capture_fail(&e);
-            }
-        } else if let Some(callback_data) = update.callback_query {
-            self.handle_callback(callback_data).await;
-        } else if let Some(channel_post) = update.channel_post {
-            if channel_post.photo.is_some() {
-                self.process_channel_photo(channel_post).await;
-            }
         }
+
+        // if let Some(inline) = update.inline_query {
+        //     self.handle_inline(inline).await;
+        // } else if let Some(message) = update.message {
+        //     if message.photo.is_some() {
+        //         self.process_photo(message).await;
+        //     } else if message.entities.is_some() {
+        //         self.handle_command(message).await;
+        //     } else if message.text.is_some() {
+        //         self.handle_text(message).await;
+        //     } else if let Some(new_members) = &message.new_chat_members {
+        //         if new_members
+        //             .iter()
+        //             .any(|member| member.id == self.bot_user.id)
+        //         {
+        //             self.handle_welcome(message, "group-add").await;
+        //         }
+        //     }
+        // } else if let Some(chosen_result) = update.chosen_inline_result {
+        //     let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "chosen")
+        //         .add_field("user_id", chosen_result.from.id);
+
+        //     if let Err(e) = self.influx.query(&point).await {
+        //         log::error!("Unable to send chosen inline result to InfluxDB: {:?}", e);
+        //         capture_fail(&e);
+        //     }
+        // } else if let Some(callback_data) = update.callback_query {
+        //     self.handle_callback(callback_data).await;
+        // } else if let Some(channel_post) = update.channel_post {
+        //     if channel_post.photo.is_some() {
+        //         self.process_channel_photo(channel_post).await;
+        //     }
+        // }
     }
 
     async fn handle_callback(&self, callback_data: CallbackQuery) {
@@ -1439,120 +1399,6 @@ impl MessageHandler {
             utils::with_user_scope(Some(&user), None, || {
                 capture_fail(&e);
             });
-        }
-    }
-
-    async fn process_result(
-        &self,
-        result: &PostInfo,
-        from: &User,
-    ) -> Option<Vec<InlineQueryResult>> {
-        let (direct, source) = self
-            .get_fluent_bundle(from.language_code.as_deref(), |bundle| {
-                (
-                    utils::get_message(&bundle, "inline-direct", None).unwrap(),
-                    utils::get_message(&bundle, "inline-source", None).unwrap(),
-                )
-            })
-            .await;
-
-        let mut row = vec![InlineKeyboardButton {
-            text: direct,
-            url: Some(result.url.clone()),
-            callback_data: None,
-            ..Default::default()
-        }];
-
-        if let Some(source_link) = &result.source_link {
-            row.push(InlineKeyboardButton {
-                text: source,
-                url: Some(source_link.clone()),
-                callback_data: None,
-                ..Default::default()
-            })
-        }
-
-        let keyboard = InlineKeyboardMarkup {
-            inline_keyboard: vec![row],
-        };
-
-        let thumb_url = result.thumb.clone().unwrap_or_else(|| result.url.clone());
-
-        match result.file_type.as_ref() {
-            "png" | "jpeg" | "jpg" => {
-                let (full_url, thumb_url) = if self.use_proxy {
-                    (
-                        format!("https://images.weserv.nl/?url={}&output=jpg", result.url),
-                        format!(
-                            "https://images.weserv.nl/?url={}&output=jpg&w=300",
-                            thumb_url
-                        ),
-                    )
-                } else {
-                    (result.url.clone(), thumb_url)
-                };
-
-                let mut photo = InlineQueryResult::photo(
-                    generate_id(),
-                    full_url.to_owned(),
-                    thumb_url.to_owned(),
-                );
-                photo.reply_markup = Some(keyboard.clone());
-
-                let mut results = vec![photo];
-
-                if let Some(message) = &result.extra_caption {
-                    let mut photo = InlineQueryResult::photo(generate_id(), full_url, thumb_url);
-                    photo.reply_markup = Some(keyboard);
-
-                    if let InlineQueryType::Photo(ref mut result) = photo.content {
-                        result.caption = Some(message.to_string());
-                    }
-
-                    results.push(photo);
-                };
-
-                Some(results)
-            }
-            "gif" => {
-                let (full_url, thumb_url) = if self.use_proxy {
-                    (
-                        format!("https://images.weserv.nl/?url={}&output=gif", result.url),
-                        format!(
-                            "https://images.weserv.nl/?url={}&output=gif&w=300",
-                            thumb_url
-                        ),
-                    )
-                } else {
-                    (result.url.clone(), thumb_url)
-                };
-
-                let mut gif = InlineQueryResult::gif(
-                    generate_id(),
-                    full_url.to_owned(),
-                    thumb_url.to_owned(),
-                );
-                gif.reply_markup = Some(keyboard.clone());
-
-                let mut results = vec![gif];
-
-                if let Some(message) = &result.extra_caption {
-                    let mut gif = InlineQueryResult::gif(generate_id(), full_url, thumb_url);
-                    gif.reply_markup = Some(keyboard);
-
-                    if let InlineQueryType::GIF(ref mut result) = gif.content {
-                        result.caption = Some(message.to_string());
-                    }
-
-                    results.push(gif);
-                };
-
-                Some(results)
-            }
-            other => {
-                log::warn!("Got unusable type: {}", other);
-                None
-            }
         }
     }
 
