@@ -190,6 +190,7 @@ pub enum InlineQueryType {
     Article(InlineQueryResultArticle),
     Photo(InlineQueryResultPhoto),
     GIF(InlineQueryResultGIF),
+    Video(InlineQueryResultVideo),
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -213,6 +214,16 @@ pub struct InlineQueryResultPhoto {
 pub struct InlineQueryResultGIF {
     pub gif_url: String,
     pub thumb_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct InlineQueryResultVideo {
+    pub video_url: String,
+    pub mime_type: String,
+    pub thumb_url: String,
+    pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub caption: Option<String>,
 }
@@ -255,6 +266,21 @@ impl InlineQueryResult {
             content: InlineQueryType::GIF(InlineQueryResultGIF {
                 gif_url,
                 thumb_url,
+                caption: None,
+            }),
+        }
+    }
+
+    pub fn video(id: String, video_url: String, mime_type: String, thumb_url: String, title: String) -> InlineQueryResult {
+        InlineQueryResult {
+            result_type: "video".into(),
+            id,
+            reply_markup: None,
+            content: InlineQueryType::Video(InlineQueryResultVideo {
+                video_url,
+                mime_type,
+                thumb_url,
+                title,
                 caption: None,
             }),
         }

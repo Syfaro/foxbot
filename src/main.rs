@@ -1549,6 +1549,39 @@ impl MessageHandler {
 
                 Some(results)
             }
+            "mp4" => {
+                let mut video = InlineQueryResult::video(
+                    generate_id(),
+                    result.url.to_owned(),
+                    "video/mp4".to_owned(),
+                    thumb_url.to_owned(),
+                    result.title.clone().unwrap(),
+                );
+                video.reply_markup = Some(keyboard.clone());
+
+                let mut results = vec![video];
+
+                if let Some(message) = &result.extra_caption {
+                    let title = format!("{} (with tweet text)", result.title.clone().unwrap());
+
+                    let mut video = InlineQueryResult::video(
+                        generate_id(),
+                        result.url.clone(),
+                        "video/mp4".to_owned(),
+                        thumb_url,
+                        title,
+                    );
+                    video.reply_markup = Some(keyboard);
+
+                    if let InlineQueryType::Video(ref mut result) = video.content {
+                        result.caption = Some(message.to_string());
+                    }
+
+                    results.push(video);
+                };
+
+                Some(results)
+            }
             other => {
                 log::warn!("Got unusable type: {}", other);
                 None
