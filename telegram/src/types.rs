@@ -130,7 +130,7 @@ pub struct Message {
 
 /// Command represents information obtained from the BotCommand MessageEntity.
 pub struct Command {
-    pub command: String,
+    pub name: String,
     pub entity: MessageEntity,
     pub username: Option<String>,
 }
@@ -160,7 +160,7 @@ impl Message {
         let username = command_parts.next().map(|part| part.to_string());
 
         Some(Command {
-            command,
+            name: command,
             entity: entity.clone(),
             username,
         })

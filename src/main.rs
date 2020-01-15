@@ -20,6 +20,7 @@ mod utils;
 // MARK: Statics and types
 
 type BoxedSite = Box<dyn Site + Send + Sync>;
+type BoxedHandler = Box<dyn Handler + Send + Sync>;
 
 fn generate_id() -> String {
     use rand::Rng;
@@ -148,7 +149,7 @@ async fn main() {
         .await
         .expect("Unable to fetch bot user");
 
-    let handlers: Vec<Box<dyn Handler + Send + Sync>> = vec![Box::new(handlers::InlineHandler {})];
+    let handlers: Vec<BoxedHandler> = vec![Box::new(handlers::InlineHandler {})];
 
     let handler = Arc::new(MessageHandler {
         bot_user,
@@ -233,7 +234,7 @@ async fn handle_request(
             let handler_clone = handler.clone();
             tokio::spawn(async move {
                 log::debug!("Got update: {:?}", update);
-                handler_clone.handle_message(update).await;
+                handler_clone.handle_update(update).await;
             });
 
             let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "http")
@@ -305,7 +306,7 @@ async fn poll_updates(bot: Arc<Telegram>, handler: Arc<MessageHandler>) {
 
             let handler = handler.clone();
 
-            tokio::spawn(async move { handler.handle_message(update).await });
+            tokio::spawn(async move { handler.handle_update(update).await });
 
             update_req.offset = Some(id + 1);
         }
@@ -319,7 +320,7 @@ pub struct MessageHandler {
     pub bot_user: User,
     langs: HashMap<LanguageIdentifier, Vec<String>>,
     best_lang: RwLock<HashMap<String, fluent::FluentBundle<fluent::FluentResource>>>,
-    handlers: Vec<Box<dyn Handler + Send + Sync>>,
+    handlers: Vec<BoxedHandler>,
 
     // API clients
     pub bot: Arc<Telegram>,
@@ -483,21 +484,21 @@ impl MessageHandler {
             }
         }
 
-        log::debug!("Got command: {}", command.command);
+        log::debug!("Got command: {}", command.name);
 
         let from = message.from.clone();
 
-        match command.command.as_ref() {
-            "/help" | "/start" => self.handle_welcome(message, &command.command).await,
+        match command.name.as_ref() {
+            "/help" | "/start" => self.handle_welcome(message, &command.name).await,
             "/twitter" => self.authenticate_twitter(message).await,
             "/mirror" => self.handle_mirror(message).await,
             "/source" => self.handle_source(message).await,
             "/alts" => self.handle_alts(message).await,
-            _ => log::info!("Unknown command: {}", command.command),
+            _ => log::info!("Unknown command: {}", command.name),
         };
 
         let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "command")
-            .add_tag("command", command.command)
+            .add_tag("command", command.name)
             .add_field("duration", now.elapsed().as_millis() as i64);
 
         if let Err(e) = self.influx.query(&point).await {
@@ -1216,7 +1217,7 @@ impl MessageHandler {
         }
     }
 
-    async fn handle_message(&self, update: Update) {
+    async fn handle_update(&self, update: Update) {
         for handler in &self.handlers {
             match handler.handle(&self, update.clone()).await {
                 Ok(absorb) => {
