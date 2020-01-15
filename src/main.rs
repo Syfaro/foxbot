@@ -1067,36 +1067,63 @@ impl MessageHandler {
         if results.len() == 1 {
             let result = results.get(0).unwrap();
 
-            let photo = SendPhoto {
-                chat_id: message.chat_id(),
-                caption: if let Some(source_link) = &result.source_link {
-                    Some(source_link.to_owned())
-                } else {
-                    None
-                },
-                photo: FileType::URL(result.url.clone()),
-                reply_to_message_id: Some(message.message_id),
-                ..Default::default()
-            };
+            if result.file_type == "mp4" {
+                let video = SendVideo {
+                    chat_id: message.chat_id(),
+                    caption: if let Some(source_link) = &result.source_link {
+                        Some(source_link.to_owned())
+                    } else {
+                        None
+                    },
+                    video: FileType::URL(result.url.clone()),
+                    reply_to_message_id: Some(message.message_id),
+                    ..Default::default()
+                };
 
-            completed.store(true, std::sync::atomic::Ordering::SeqCst);
+                completed.store(true, std::sync::atomic::Ordering::SeqCst);
 
-            if let Err(e) = self.bot.make_request(&photo).await {
-                log::error!("Unable to make request: {:?}", e);
-                self.report_error(
-                    &message,
-                    Some(vec![("command", "mirror".to_string())]),
-                    || capture_fail(&e),
-                )
-                .await;
-                return;
+                if let Err(e) = self.bot.make_request(&video).await {
+                    log::error!("Unable to make request: {:?}", e);
+                    self.report_error(
+                        &message,
+                        Some(vec![("command", "mirror".to_string())]),
+                        || capture_fail(&e),
+                    )
+                    .await;
+                    return;
+                }
+            } else {
+                let photo = SendPhoto {
+                    chat_id: message.chat_id(),
+                    caption: if let Some(source_link) = &result.source_link {
+                        Some(source_link.to_owned())
+                    } else {
+                        None
+                    },
+                    photo: FileType::URL(result.url.clone()),
+                    reply_to_message_id: Some(message.message_id),
+                    ..Default::default()
+                };
+
+                completed.store(true, std::sync::atomic::Ordering::SeqCst);
+
+                if let Err(e) = self.bot.make_request(&photo).await {
+                    log::error!("Unable to make request: {:?}", e);
+                    self.report_error(
+                        &message,
+                        Some(vec![("command", "mirror".to_string())]),
+                        || capture_fail(&e),
+                    )
+                    .await;
+                    return;
+                }
             }
         } else {
             for chunk in results.chunks(10) {
                 let media = chunk
                     .iter()
-                    .map(|result| {
-                        InputMedia::Photo(InputMediaPhoto {
+                    .map(|result| match result.file_type.as_ref() {
+                        "mp4" => InputMedia::Video(InputMediaVideo {
                             media: FileType::URL(result.url.to_owned()),
                             caption: if let Some(source_link) = &result.source_link {
                                 Some(source_link.to_owned())
@@ -1104,7 +1131,16 @@ impl MessageHandler {
                                 None
                             },
                             ..Default::default()
-                        })
+                        }),
+                        _ => InputMedia::Photo(InputMediaPhoto {
+                            media: FileType::URL(result.url.to_owned()),
+                            caption: if let Some(source_link) = &result.source_link {
+                                Some(source_link.to_owned())
+                            } else {
+                                None
+                            },
+                            ..Default::default()
+                        }),
                     })
                     .collect();
 

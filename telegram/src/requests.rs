@@ -140,6 +140,16 @@ pub struct InputMediaVideo {
     pub caption: Option<String>,
 }
 
+impl Default for InputMediaVideo {
+    fn default() -> Self {
+        Self {
+            media_type: "video".to_string(),
+            media: Default::default(),
+            caption: None,
+        }
+    }
+}
+
 #[derive(Serialize)]
 #[serde(untagged)]
 pub enum InputMedia {
@@ -430,6 +440,36 @@ impl TelegramRequest for SendPhoto {
         // is safe because `needs_upload` only returns true when it exists.
         if self.photo.needs_upload() {
             Some(vec![("photo".to_owned(), self.photo.file().unwrap())])
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Serialize, Debug, Default)]
+pub struct SendVideo {
+    pub chat_id: ChatID,
+    #[serde(skip_serializing_if = "FileType::needs_upload")]
+    pub video: FileType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to_message_id: Option<i32>,
+}
+
+impl TelegramRequest for SendVideo {
+    type Response = Message;
+
+    fn endpoint(&self) -> &str {
+        "sendVideo"
+    }
+
+    fn files(&self) -> Option<Vec<(String, reqwest::multipart::Part)>> {
+        // Check if the photo needs to be uploaded. If the photo does need to
+        // be uploaded, we specify the field name and get the file. This unwrap
+        // is safe because `needs_upload` only returns true when it exists.
+        if self.video.needs_upload() {
+            Some(vec![("photo".to_owned(), self.video.file().unwrap())])
         } else {
             None
         }
