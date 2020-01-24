@@ -1,36 +1,66 @@
 use serde::{Deserialize, Serialize};
 
-/// Lookup is information returned when attempting to search for a file by
-/// url or filename. It contains no additional information about the image
-/// besides its ID on FurAffinity.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct Lookup {
-    pub id: usize,
-    pub url: String,
-    pub filename: String,
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "site", content = "site_info")]
+pub enum SiteInfo {
+    FurAffinity(FurAffinityFile),
+    #[serde(rename = "e621")]
+    E621(E621File),
+    Twitter,
 }
 
-/// ImageLookup is information returned when attempting to reverse image search.
-/// It includes a distance, which is the hamming distance between the provided
-/// image and the image in the database.
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct ImageLookup {
-    pub id: usize,
-    pub distance: u64,
-    pub hash: i64,
-    pub url: String,
-    pub filename: String,
-    pub artist_id: i32,
-    pub artist_name: String,
+pub struct FurAffinityFile {
+    pub file_id: i32,
 }
 
-/// ImageHashLookup is information returned when attempting to lookup a hash.
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct ImageHashLookup {
-    pub id: usize,
-    pub hash: i64,
+pub struct E621File {
+    pub file_md5: String,
+    pub sources: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct File {
+    pub id: i64,
     pub url: String,
     pub filename: String,
-    pub artist_id: i32,
-    pub artist_name: String,
+    pub artists: Option<Vec<String>>,
+    pub hash: Option<i64>,
+    pub distance: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(flatten)]
+    pub site_info: Option<SiteInfo>,
+}
+
+impl File {
+    pub fn site_name(&self) -> &'static str {
+        match &self.site_info {
+            Some(SiteInfo::Twitter) => "Twitter",
+            Some(SiteInfo::FurAffinity(_)) => "FurAffinity",
+            Some(SiteInfo::E621(_)) => "e621",
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn url(&self) -> String {
+        match &self.site_info {
+            Some(SiteInfo::Twitter) => format!(
+                "https://twitter.com/{}/status/{}",
+                self.artists.as_ref().unwrap().iter().next().unwrap(),
+                self.id
+            ),
+            Some(SiteInfo::FurAffinity(_)) => {
+                format!("https://www.furaffinity.net/view/{}/", self.id)
+            }
+            Some(SiteInfo::E621(_)) => format!("https://e621.net/post/show/{}", self.id),
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct Matches {
+    pub hash: i64,
+    pub matches: Vec<File>,
 }

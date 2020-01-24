@@ -690,7 +690,7 @@ impl MessageHandler {
             .image_search(&bytes, fautil::MatchType::Close)
             .await
         {
-            Ok(matches) => matches,
+            Ok(matches) => matches.matches,
             Err(e) => {
                 log::error!("Unable to find matches: {:?}", e);
                 let tags = Some(vec![("command", "source".to_string())]);
@@ -708,18 +708,18 @@ impl MessageHandler {
             }
         };
 
-        let name = if result.distance < 5 {
+        let name = if result.distance.unwrap() < 5 {
             "reverse-good-result"
         } else {
             "reverse-bad-result"
         };
 
         let mut args = fluent::FluentArgs::new();
-        args.insert("distance", fluent::FluentValue::from(result.distance));
         args.insert(
-            "link",
-            fluent::FluentValue::from(format!("https://www.furaffinity.net/view/{}/", result.id)),
+            "distance",
+            fluent::FluentValue::from(result.distance.unwrap()),
         );
+        args.insert("link", fluent::FluentValue::from(result.url()));
 
         let text = self
             .get_fluent_bundle(
@@ -731,7 +731,7 @@ impl MessageHandler {
         let send_message = SendMessage {
             chat_id: message.chat.id.into(),
             text,
-            disable_web_page_preview: Some(result.distance > 5),
+            disable_web_page_preview: Some(result.distance.unwrap() > 5),
             reply_to_message_id: Some(reply_to_id),
             ..Default::default()
         };
@@ -837,7 +837,7 @@ impl MessageHandler {
             .image_search(&bytes, fautil::MatchType::Force)
             .await
         {
-            Ok(matches) => matches,
+            Ok(matches) => matches.matches,
             Err(e) => {
                 completed.store(true, std::sync::atomic::Ordering::SeqCst);
                 log::error!("Unable to find matches: {:?}", e);
@@ -856,10 +856,26 @@ impl MessageHandler {
 
         let has_multiple_matches = matches.len() > 1;
 
-        let mut results: HashMap<i32, Vec<fautil::ImageLookup>> = HashMap::new();
+        let mut results: HashMap<Vec<String>, Vec<fautil::File>> = HashMap::new();
+
+        let matches: Vec<fautil::File> = matches
+            .into_iter()
+            .map(|m| fautil::File {
+                artists: Some(
+                    m.artists
+                        .unwrap_or_else(|| vec![])
+                        .iter()
+                        .map(|artist| artist.to_lowercase())
+                        .collect(),
+                ),
+                ..m
+            })
+            .collect();
 
         for m in matches {
-            let v = results.entry(m.artist_id).or_default();
+            let v = results
+                .entry(m.artists.clone().unwrap_or_else(|| vec![]))
+                .or_default();
             v.push(m);
         }
 
@@ -868,15 +884,10 @@ impl MessageHandler {
             .map(|item| (item.0, item.1))
             .collect::<Vec<_>>();
 
-        let ((text, used_hashes), alternate) = self
+        let (text, used_hashes) = self
             .get_fluent_bundle(
                 message.from.clone().unwrap().language_code.as_deref(),
-                |bundle| {
-                    (
-                        utils::build_alternate_response(&bundle, items),
-                        utils::alternate_feedback_keyboard(&bundle),
-                    )
-                },
+                |bundle| utils::build_alternate_response(&bundle, items),
             )
             .await;
 
@@ -886,9 +897,8 @@ impl MessageHandler {
             chat_id: message.chat_id(),
             text: text.clone(),
             disable_web_page_preview: Some(true),
-            parse_mode: Some(ParseMode::Markdown),
             reply_to_message_id: Some(reply_to_id),
-            reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(alternate)),
+            ..Default::default()
         };
 
         let sent = match self.bot.make_request(&send_message).await {
@@ -934,17 +944,17 @@ impl MessageHandler {
         let hash = utils::hash_image(&bytes);
 
         for m in matches {
-            if let Some(artist) = results.get_mut(&m.artist_id) {
-                let bytes = m.hash.to_be_bytes();
+            if let Some(artist) = results.get_mut(&m.artists.clone().unwrap()) {
+                let bytes = m.hash.unwrap().to_be_bytes();
 
-                artist.push(fautil::ImageLookup {
+                artist.push(fautil::File {
                     id: m.id,
-                    distance: hamming::distance_fast(&bytes, &hash).unwrap(),
+                    distance: Some(hamming::distance_fast(&bytes, &hash).unwrap()),
                     hash: m.hash,
                     url: m.url,
                     filename: m.filename,
-                    artist_id: m.artist_id,
-                    artist_name: m.artist_name,
+                    artists: m.artists.clone(),
+                    site_info: None,
                 });
             }
         }
@@ -954,15 +964,10 @@ impl MessageHandler {
             .map(|item| (item.0, item.1))
             .collect::<Vec<_>>();
 
-        let ((updated_text, _used_hashes), alternate) = self
+        let (updated_text, _used_hashes) = self
             .get_fluent_bundle(
                 message.from.clone().unwrap().language_code.as_deref(),
-                |bundle| {
-                    (
-                        utils::build_alternate_response(&bundle, items),
-                        utils::alternate_feedback_keyboard(&bundle),
-                    )
-                },
+                |bundle| utils::build_alternate_response(&bundle, items),
             )
             .await;
 
@@ -977,8 +982,6 @@ impl MessageHandler {
             message_id: Some(sent),
             text: updated_text,
             disable_web_page_preview: Some(true),
-            parse_mode: Some(ParseMode::Markdown),
-            reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(alternate)),
             ..Default::default()
         };
 
@@ -1658,7 +1661,7 @@ impl MessageHandler {
             .image_search(&photo, fautil::MatchType::Close)
             .await
         {
-            Ok(matches) if !matches.is_empty() => matches,
+            Ok(matches) if !matches.matches.is_empty() => matches.matches,
             Ok(_matches) => {
                 let text = self
                     .get_fluent_bundle(
@@ -1707,20 +1710,34 @@ impl MessageHandler {
         };
 
         let first = matches.get(0).unwrap();
-        log::debug!("Match has distance of {}", first.distance);
+        let similar: Vec<&fautil::File> = matches
+            .iter()
+            .skip(1)
+            .take_while(|m| m.distance.unwrap() == first.distance.unwrap())
+            .collect();
+        log::debug!("Match has distance of {}", first.distance.unwrap());
 
-        let name = if first.distance < 5 {
+        let name = if first.distance.unwrap() < 5 {
             "reverse-good-result"
         } else {
             "reverse-bad-result"
         };
 
         let mut args = fluent::FluentArgs::new();
-        args.insert("distance", fluent::FluentValue::from(first.distance));
         args.insert(
-            "link",
-            fluent::FluentValue::from(format!("https://www.furaffinity.net/view/{}/", first.id)),
+            "distance",
+            fluent::FluentValue::from(first.distance.unwrap()),
         );
+
+        if similar.is_empty() {
+            args.insert("link", fluent::FluentValue::from(first.url()));
+        } else {
+            let mut links = vec![format!("· {}", first.url())];
+            links.extend(similar.iter().map(|s| format!("· {}", s.url())));
+            let mut s = "\n".to_string();
+            s.push_str(&links.join("\n"));
+            args.insert("link", fluent::FluentValue::from(s));
+        }
 
         let text = self
             .get_fluent_bundle(
@@ -1732,7 +1749,7 @@ impl MessageHandler {
         let send_message = SendMessage {
             chat_id: message.chat_id(),
             text,
-            disable_web_page_preview: Some(first.distance > 5),
+            disable_web_page_preview: Some(first.distance.unwrap() > 5),
             reply_to_message_id: Some(message.message_id),
             ..Default::default()
         };
@@ -1747,7 +1764,7 @@ impl MessageHandler {
         }
 
         let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "source")
-            .add_tag("good", first.distance < 5)
+            .add_tag("good", first.distance.unwrap() < 5)
             .add_field("matches", matches.len() as i64)
             .add_field("duration", now.elapsed().as_millis() as i64);
 
@@ -1785,13 +1802,13 @@ impl MessageHandler {
             .image_search(&bytes, fautil::MatchType::Close)
             .await
         {
-            Ok(matches) if !matches.is_empty() => matches,
+            Ok(matches) if !matches.matches.is_empty() => matches.matches,
             _ => return,
         };
 
         let first = matches.first().unwrap();
 
-        if first.distance > 2 {
+        if first.distance.unwrap() > 2 {
             return;
         }
 
@@ -1819,7 +1836,7 @@ impl MessageHandler {
             let markup = InlineKeyboardMarkup {
                 inline_keyboard: vec![vec![InlineKeyboardButton {
                     text,
-                    url: Some(format!("https://www.furaffinity.net/view/{}/", first.id)),
+                    url: Some(first.url()),
                     ..Default::default()
                 }]],
             };

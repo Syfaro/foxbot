@@ -101,7 +101,7 @@ impl Direct {
         Self { fautil, client }
     }
 
-    async fn reverse_search(&self, url: &str) -> Option<fautil::ImageLookup> {
+    async fn reverse_search(&self, url: &str) -> Option<fautil::File> {
         let image = self.client.get(url).send().await;
 
         let image = match image {
@@ -117,7 +117,7 @@ impl Direct {
         let results = self.fautil.image_search(&body, MatchType::Exact).await;
 
         match results {
-            Ok(results) => results.into_iter().next(),
+            Ok(results) => results.matches.into_iter().next(),
             Err(_) => None,
         }
     }
@@ -174,7 +174,7 @@ impl Site for Direct {
             log::trace!("Got result from reverse search");
             if let Some(post) = result {
                 log::debug!("Found ID of post matching: {}", post.id);
-                source_link = Some(format!("https://www.furaffinity.net/view/{}/", post.id));
+                source_link = Some(post.url());
             } else {
                 log::trace!("No posts matched");
             }
@@ -421,7 +421,7 @@ impl FurAffinity {
             url.to_string()
         };
 
-        let sub: fautil::Lookup = match self.fapi.lookup_url(&url).await {
+        let sub: fautil::File = match self.fapi.lookup_url(&url).await {
             Ok(mut results) if !results.is_empty() => results.remove(0),
             _ => {
                 return Ok(Some(PostInfo {
@@ -435,7 +435,7 @@ impl FurAffinity {
         Ok(Some(PostInfo {
             file_type: get_file_ext(&sub.filename).unwrap().to_string(),
             url: sub.url.clone(),
-            source_link: Some(format!("https://www.furaffinity.net/view/{}/", sub.id)),
+            source_link: Some(sub.url()),
             ..Default::default()
         }))
     }
