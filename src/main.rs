@@ -949,6 +949,7 @@ impl MessageHandler {
 
                 artist.push(fautil::File {
                     id: m.id,
+                    site_id: m.site_id,
                     distance: Some(hamming::distance_fast(&bytes, &hash).unwrap()),
                     hash: m.hash,
                     url: m.url,

@@ -16,13 +16,13 @@ pub struct FurAffinityFile {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct E621File {
-    pub file_md5: String,
     pub sources: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct File {
-    pub id: i64,
+    pub id: i32,
+    pub site_id: i64,
     pub url: String,
     pub filename: String,
     pub artists: Option<Vec<String>>,
@@ -48,12 +48,12 @@ impl File {
             Some(SiteInfo::Twitter) => format!(
                 "https://twitter.com/{}/status/{}",
                 self.artists.as_ref().unwrap().iter().next().unwrap(),
-                self.id
+                self.site_id
             ),
             Some(SiteInfo::FurAffinity(_)) => {
-                format!("https://www.furaffinity.net/view/{}/", self.id)
+                format!("https://www.furaffinity.net/view/{}/", self.site_id)
             }
-            Some(SiteInfo::E621(_)) => format!("https://e621.net/post/show/{}", self.id),
+            Some(SiteInfo::E621(_)) => format!("https://e621.net/post/show/{}", self.site_id),
             _ => unreachable!(),
         }
     }
