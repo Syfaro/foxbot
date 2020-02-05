@@ -50,6 +50,7 @@ fn configure_tracing() {
         exporter::trace::jaeger,
         sdk::Config,
     };
+    use std::net::ToSocketAddrs;
     use tracing_subscriber::layer::SubscriberExt;
 
     let env = if cfg!(debug_assertions) {
@@ -58,8 +59,15 @@ fn configure_tracing() {
         "release"
     };
 
+    let addr = std::env::var("JAEGER_COLLECTOR")
+        .expect("Missing JAEGER_COLLECTOR")
+        .to_socket_addrs()
+        .expect("Unable to resolve JAEGER_COLLECTOR")
+        .next()
+        .expect("Unable to find JAEGER_COLLECTOR");
+
     let exporter = jaeger::Exporter::builder()
-        .with_collector_endpoint(std::env::var("JAEGER_COLLECTOR").unwrap().parse().unwrap())
+        .with_collector_endpoint(addr)
         .with_process(jaeger::Process {
             service_name: "foxbot",
             tags: vec![
