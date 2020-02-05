@@ -171,15 +171,15 @@ impl Site for Direct {
         if let Ok(result) =
             tokio::time::timeout(std::time::Duration::from_secs(4), self.reverse_search(&u)).await
         {
-            log::trace!("Got result from reverse search");
+            tracing::trace!("got result from reverse search");
             if let Some(post) = result {
-                log::debug!("Found ID of post matching: {}", post.id);
+                tracing::debug!("found ID of post matching: {}", post.id);
                 source_link = Some(post.url());
             } else {
-                log::trace!("No posts matched");
+                tracing::trace!("no posts matched");
             }
         } else {
-            log::debug!("Reverse search timed out");
+            tracing::debug!("reverse search timed out");
         }
 
         Ok(Some(vec![PostInfo {
@@ -307,8 +307,8 @@ impl Site for Twitter {
         let captures = self.matcher.captures(url).unwrap();
         let id = captures["id"].to_owned().parse::<u64>().unwrap();
 
-        log::trace!(
-            "Attempting to find saved credentials for {}",
+        tracing::trace!(
+            "attempting to find saved credentials for {}",
             &format!("credentials:{}", user_id)
         );
 
@@ -327,7 +327,7 @@ impl Site for Twitter {
         });
 
         let saved: Option<(String, String)> = db.get(&format!("credentials:{}", user_id));
-        log::debug!("User saved Twitter credentials: {:?}", saved);
+        tracing::debug!("user saved Twitter credentials: {:?}", saved);
         let token = match saved {
             Some(token) => egg_mode::Token::Access {
                 consumer: self.consumer.clone(),
@@ -335,8 +335,6 @@ impl Site for Twitter {
             },
             _ => self.token.clone(),
         };
-
-        log::debug!("token: {:?}", token);
 
         let tweet = match block_on_all(egg_mode::tweet::show(id, &token)) {
             Ok(tweet) => tweet.response,
@@ -349,8 +347,6 @@ impl Site for Twitter {
             Some(entity) => entity.media,
             None => return Ok(None),
         };
-
-        log::trace!("{:#?}", media);
 
         let text = tweet.text.clone();
 

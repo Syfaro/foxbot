@@ -11,7 +11,7 @@ pub struct FAUtil {
     client: reqwest::Client,
 }
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum MatchType {
     Close,
     Exact,
@@ -49,6 +49,7 @@ impl FAUtil {
     }
 
     /// Attempt to look up an image by its URL. Note that URLs should be https.
+    #[cfg_attr(feature = "trace", tracing::instrument(skip(self)))]
     pub async fn lookup_url(&self, url: &str) -> reqwest::Result<Vec<File>> {
         let mut params = HashMap::new();
         params.insert("url", url.to_string());
@@ -57,6 +58,7 @@ impl FAUtil {
     }
 
     /// Attempt to look up an image by its original name on FA.
+    #[cfg_attr(feature = "trace", tracing::instrument(skip(self)))]
     pub async fn lookup_filename(&self, filename: &str) -> reqwest::Result<Vec<File>> {
         let mut params = HashMap::new();
         params.insert("name", filename.to_string());
@@ -65,6 +67,7 @@ impl FAUtil {
     }
 
     /// Attempt to lookup multiple hashes.
+    #[cfg_attr(feature = "trace", tracing::instrument(skip(self)))]
     pub async fn lookup_hashes(&self, hashes: Vec<i64>) -> reqwest::Result<Vec<File>> {
         let mut params = HashMap::new();
         params.insert(
@@ -82,6 +85,7 @@ impl FAUtil {
     /// Attempt to reverse image search.
     ///
     /// Requiring an exact match will be faster, but potentially leave out results.
+    #[cfg_attr(feature = "trace", tracing::instrument(skip(self, data)))]
     pub async fn image_search(&self, data: &[u8], exact: MatchType) -> reqwest::Result<Matches> {
         use reqwest::multipart::{Form, Part};
 

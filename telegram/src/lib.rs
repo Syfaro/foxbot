@@ -3,6 +3,11 @@ pub use files::*;
 pub use requests::*;
 pub use types::*;
 
+#[cfg(not(feature = "trace"))]
+use log::{debug, warn};
+#[cfg(feature = "trace")]
+use tracing::{debug, warn};
+
 #[macro_use]
 extern crate failure;
 
@@ -13,7 +18,7 @@ mod types;
 
 /// A trait for all Telegram requests. It has as many default methods as
 /// possible but still requires some additions.
-pub trait TelegramRequest: serde::Serialize {
+pub trait TelegramRequest: serde::Serialize + std::fmt::Debug {
     /// Response is the type used when Deserializing Telegram's result field.
     ///
     /// For convenience of debugging, it must implement [Debug](std::fmt::Debug).
@@ -49,6 +54,7 @@ impl Telegram {
 
     /// Make a request for a [TelegramRequest] item and parse the response
     /// into the requested output type if the request succeeded.
+    #[cfg_attr(feature = "trace", tracing::instrument(skip(self)))]
     pub async fn make_request<T>(&self, request: &T) -> Result<T::Response, Error>
     where
         T: TelegramRequest,
@@ -58,7 +64,11 @@ impl Telegram {
         let url = format!("https://api.telegram.org/bot{}/{}", self.api_key, endpoint);
         let values = request.values()?;
 
-        log::debug!("Making request to {} with data {:?}", endpoint, values);
+        if cfg!(feature = "trace") {
+            debug!("Making request");
+        } else {
+            debug!("Making request to {} with data {:?}", endpoint, values);
+        }
 
         let resp: Response<T::Response> = if let Some(files) = request.files() {
             // If our request has a file that needs to be uploaded, use
@@ -76,7 +86,7 @@ impl Telegram {
                         if let Ok(value) = serde_json::to_string(value) {
                             form.text(name.to_owned(), value)
                         } else {
-                            log::warn!("Skipping field {} due to invalid data: {:?}", name, value);
+                            warn!("Skipping field {} due to invalid data: {:?}", name, value);
                             form
                         }
                     });
@@ -86,8 +96,6 @@ impl Telegram {
                 .fold(form, |form, (name, part)| form.part(name, part));
 
             let resp = self.client.post(&url).multipart(form).send().await?;
-
-            log::trace!("Got response from {} with data {:?}", endpoint, resp);
 
             resp.json().await?
         } else {
@@ -103,7 +111,11 @@ impl Telegram {
                 .await?
         };
 
-        log::debug!("Got response from {} with data {:?}", endpoint, resp);
+        if cfg!(feature = "trace") {
+            debug!("Got response with data {:?}", resp);
+        } else {
+            debug!("Got response from {} with data {:?}", endpoint, resp);
+        }
 
         resp.into()
     }
@@ -111,6 +123,7 @@ impl Telegram {
     /// Download a file from Telegram's servers.
     ///
     /// It requires a file path which can be obtained with [GetFile].
+    #[cfg_attr(feature = "trace", tracing::instrument(skip(self)))]
     pub async fn download_file(&self, file_path: String) -> Result<Vec<u8>, Error> {
         let url = format!(
             "https://api.telegram.org/file/bot{}/{}",

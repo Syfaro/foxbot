@@ -112,7 +112,7 @@ pub enum ChatAction {
     UploadPhoto,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Debug, Serialize, Clone)]
 pub struct InputMediaPhoto {
     #[serde(rename = "type")]
     pub media_type: String,
@@ -131,7 +131,7 @@ impl Default for InputMediaPhoto {
     }
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Debug, Serialize, Clone)]
 pub struct InputMediaVideo {
     #[serde(rename = "type")]
     pub media_type: String,
@@ -150,7 +150,7 @@ impl Default for InputMediaVideo {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum InputMedia {
     Photo(InputMediaPhoto),
@@ -281,7 +281,13 @@ impl InlineQueryResult {
         }
     }
 
-    pub fn video(id: String, video_url: String, mime_type: String, thumb_url: String, title: String) -> InlineQueryResult {
+    pub fn video(
+        id: String,
+        video_url: String,
+        mime_type: String,
+        thumb_url: String,
+        title: String,
+    ) -> InlineQueryResult {
         InlineQueryResult {
             result_type: "video".into(),
             id,
@@ -495,7 +501,7 @@ impl TelegramRequest for GetFile {
     }
 }
 
-#[derive(Serialize, Default)]
+#[derive(Debug, Serialize, Default)]
 pub struct SendMediaGroup {
     pub chat_id: ChatID,
     #[serde(serialize_with = "clean_input_media")]
@@ -540,7 +546,7 @@ impl TelegramRequest for SendMediaGroup {
     }
 }
 
-#[derive(Serialize, Default)]
+#[derive(Debug, Serialize, Default)]
 pub struct AnswerInlineQuery {
     pub inline_query_id: String,
     pub results: Vec<InlineQueryResult>,
