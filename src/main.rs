@@ -85,7 +85,9 @@ fn configure_tracing() {
         })
         .build();
 
-    let tracer = provider.get_tracer("telegram");
+    opentelemetry::global::set_provider(provider);
+
+    let tracer = opentelemetry::global::trace_provider().get_tracer("telegram");
 
     let telem_layer = tracing_opentelemetry::OpentelemetryLayer::with_tracer(tracer);
     let fmt_layer = tracing_subscriber::fmt::Layer::default();

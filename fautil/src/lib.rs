@@ -38,14 +38,15 @@ impl FAUtil {
     ) -> reqwest::Result<T> {
         let url = format!("{}{}", Self::API_ENDPOINT, endpoint);
 
-        self.client
+        let req = self
+            .client
             .get(&url)
             .header("X-Api-Key", self.api_key.as_bytes())
-            .query(params)
-            .send()
-            .await?
-            .json()
-            .await
+            .query(params);
+
+        let req = FAUtil::trace_headers(req);
+
+        req.send().await?.json().await
     }
 
     /// Attempt to look up an image by its URL. Note that URLs should be https.
@@ -100,15 +101,65 @@ impl FAUtil {
             _ => vec![("type", "close".to_string())],
         };
 
-        self.client
+        let req = self
+            .client
             .post(&url)
             .query(&query)
             .header("X-Api-Key", self.api_key.as_bytes())
-            .multipart(form)
-            .send()
-            .await?
-            .json()
-            .await
+            .multipart(form);
+
+        let req = FAUtil::trace_headers(req);
+
+        req.send().await?.json().await
+    }
+
+    fn trace_headers(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if cfg!(feature = "trace") {
+            use opentelemetry::api::{trace::span::Span, HttpTextFormat};
+            let mut headers = std::collections::HashMap::new();
+
+            let propagator = opentelemetry::api::distributed_context::http_trace_context_propagator::HTTPTraceContextPropagator::new();
+
+            let span = tracing::Span::current();
+
+            let context: Option<opentelemetry::api::SpanContext> = span
+                .with_subscriber(|(id, dispatch)| {
+                    use tracing_subscriber::registry::LookupSpan;
+
+                    let sub = match dispatch.downcast_ref::<tracing_subscriber::Registry>() {
+                        Some(sub) => sub,
+                        None => return None,
+                    };
+
+                    let span = match sub.span(id) {
+                        Some(span) => span,
+                        None => return None,
+                    };
+
+                    let context = match span.extensions().get::<opentelemetry::global::BoxedSpan>()
+                    {
+                        Some(boxed) => boxed.get_context(),
+                        None => return None,
+                    };
+
+                    Some(context)
+                })
+                .flatten();
+
+            if let Some(context) = context {
+                propagator.inject(context, &mut headers);
+            }
+
+            let mut req = req;
+
+            for (header, value) in headers {
+                req = req.header(header, value);
+            }
+
+            req
+        } else {
+            req
+        }
     }
 }
 
