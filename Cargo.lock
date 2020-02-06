@@ -578,7 +578,7 @@ dependencies = [
  "tokio 0.2.11 (registry+https://github.com/rust-lang/crates.io-index)",
  "tracing 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)",
  "tracing-futures 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "tracing-opentelemetry 0.1.0 (git+https://github.com/jtescher/tracing-opentelemetry)",
+ "tracing-opentelemetry 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "tracing-subscriber 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "unic-langid 0.7.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "uuid 0.7.4 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2547,17 +2547,6 @@ dependencies = [
 [[package]]
 name = "tracing-opentelemetry"
 version = "0.1.0"
-source = "git+https://github.com/jtescher/tracing-opentelemetry#6177beec421f0aa25685b5000f511b434f69a8c0"
-dependencies = [
- "opentelemetry 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
- "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "tracing-core 0.1.9 (registry+https://github.com/rust-lang/crates.io-index)",
- "tracing-subscriber 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
-name = "tracing-opentelemetry"
-version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "opentelemetry 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -3214,7 +3203,6 @@ dependencies = [
 "checksum tracing-core 0.1.9 (registry+https://github.com/rust-lang/crates.io-index)" = "13a46f11e372b8bd4b4398ea54353412fdd7fd42a8370c7e543e218cf7661978"
 "checksum tracing-futures 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "33848db47a7c848ab48b66aab3293cb9c61ea879a3586ecfcd17302fcea0baf1"
 "checksum tracing-log 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "5e0f8c7178e13481ff6765bd169b33e8d554c5d2bbede5e32c356194be02b9b9"
-"checksum tracing-opentelemetry 0.1.0 (git+https://github.com/jtescher/tracing-opentelemetry)" = "<none>"
 "checksum tracing-opentelemetry 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "94651cc1896a2d9e2264e5fc95651b041f4d67245087dcb763523db3bc48185a"
 "checksum tracing-serde 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "d65dea8255e378ab7db9db2077a90cb3e051515e18eaa819a405c4eb129b9beb"
 "checksum tracing-subscriber 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "25dc36e47794112347ccb9ae8a05b5ec4fab45f01545e4929323cdb1a543a8f4"

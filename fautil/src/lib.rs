@@ -142,6 +142,8 @@ impl FAUtil {
                         None => return None,
                     };
 
+                    tracing::trace!("passing context to fuzzysearch: {:?}", context);
+
                     Some(context)
                 })
                 .flatten();
