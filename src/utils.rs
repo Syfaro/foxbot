@@ -278,6 +278,6 @@ pub fn continuous_action(
 impl Drop for ContinuousAction {
     fn drop(&mut self) {
         let tx = std::mem::replace(&mut self.tx, None);
-        tx.unwrap().send(true).unwrap();
+        tx.map(|tx| tx.send(true).unwrap());
     }
 }
