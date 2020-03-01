@@ -11,7 +11,7 @@ const USER_AGENT: &str = concat!(
     " developed by @Syfaro"
 );
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct PostInfo {
     /// File type, as a standard file extension (png, jpg, etc.)
     pub file_type: String,
@@ -25,10 +25,15 @@ pub struct PostInfo {
     pub source_link: Option<String>,
     /// Additional caption to add as a second result for the provided query
     pub extra_caption: Option<String>,
+    /// Title for video results
+    pub title: Option<String>,
 }
 
 fn get_file_ext(name: &str) -> Option<&str> {
-    name.split('.').last()
+    name.split('.')
+        .last()
+        .map(|ext| ext.split('?').next())
+        .flatten()
 }
 
 #[derive(Fail, Debug)]
@@ -96,7 +101,7 @@ impl Direct {
         Self { fautil, client }
     }
 
-    async fn reverse_search(&self, url: &str) -> Option<fautil::ImageLookup> {
+    async fn reverse_search(&self, url: &str) -> Option<fautil::File> {
         let image = self.client.get(url).send().await;
 
         let image = match image {
@@ -112,7 +117,7 @@ impl Direct {
         let results = self.fautil.image_search(&body, MatchType::Exact).await;
 
         match results {
-            Ok(results) => results.into_iter().next(),
+            Ok(results) => results.matches.into_iter().next(),
             Err(_) => None,
         }
     }
@@ -166,24 +171,22 @@ impl Site for Direct {
         if let Ok(result) =
             tokio::time::timeout(std::time::Duration::from_secs(4), self.reverse_search(&u)).await
         {
-            log::trace!("Got result from reverse search");
+            tracing::trace!("got result from reverse search");
             if let Some(post) = result {
-                log::debug!("Found ID of post matching: {}", post.id);
-                source_link = Some(format!("https://www.furaffinity.net/view/{}/", post.id));
+                tracing::debug!("found ID of post matching: {}", post.id);
+                source_link = Some(post.url());
             } else {
-                log::trace!("No posts matched");
+                tracing::trace!("no posts matched");
             }
         } else {
-            log::debug!("Reverse search timed out");
+            tracing::debug!("reverse search timed out");
         }
 
         Ok(Some(vec![PostInfo {
             file_type: get_file_ext(url).unwrap().to_string(),
             url: u.clone(),
-            thumb: None,
             source_link,
-            extra_caption: None,
-            personal: false,
+            ..Default::default()
         }]))
     }
 }
@@ -255,8 +258,7 @@ impl Site for E621 {
             url: resp.file_url,
             thumb: Some(resp.preview_url),
             source_link: Some(format!("https://e621.net/post/show/{}", resp.id)),
-            extra_caption: None,
-            personal: false,
+            ..Default::default()
         }]))
     }
 }
@@ -305,8 +307,8 @@ impl Site for Twitter {
         let captures = self.matcher.captures(url).unwrap();
         let id = captures["id"].to_owned().parse::<u64>().unwrap();
 
-        log::trace!(
-            "Attempting to find saved credentials for {}",
+        tracing::trace!(
+            "attempting to find saved credentials for {}",
             &format!("credentials:{}", user_id)
         );
 
@@ -325,7 +327,7 @@ impl Site for Twitter {
         });
 
         let saved: Option<(String, String)> = db.get(&format!("credentials:{}", user_id));
-        log::debug!("User saved Twitter credentials: {:?}", saved);
+        tracing::debug!("user saved Twitter credentials: {:?}", saved);
         let token = match saved {
             Some(token) => egg_mode::Token::Access {
                 consumer: self.consumer.clone(),
@@ -334,8 +336,6 @@ impl Site for Twitter {
             _ => self.token.clone(),
         };
 
-        log::debug!("token: {:?}", token);
-
         let tweet = match block_on_all(egg_mode::tweet::show(id, &token)) {
             Ok(tweet) => tweet.response,
             Err(e) => return Err(e.into()),
@@ -343,30 +343,54 @@ impl Site for Twitter {
 
         let user = tweet.user.unwrap();
 
-        let screen_name = user.screen_name.to_owned();
-        let tweet_id = tweet.id;
-
         let media = match tweet.extended_entities {
             Some(entity) => entity.media,
             None => return Ok(None),
         };
 
-        let link = format!("https://twitter.com/{}/status/{}", screen_name, tweet_id);
+        let text = tweet.text.clone();
 
         Ok(Some(
             media
                 .into_iter()
-                .map(|item| PostInfo {
-                    file_type: get_file_ext(&item.media_url_https).unwrap().to_owned(),
-                    url: item.media_url_https.clone(),
-                    thumb: Some(format!("{}:thumb", item.media_url_https.clone())),
-                    source_link: Some(link.clone()),
-                    extra_caption: None,
-                    personal: user.protected,
+                .map(|item| match get_best_video(&item) {
+                    Some(video_url) => PostInfo {
+                        file_type: get_file_ext(video_url).unwrap().to_owned(),
+                        url: video_url.to_string(),
+                        thumb: Some(format!("{}:thumb", item.media_url_https.clone())),
+                        source_link: Some(item.expanded_url),
+                        personal: user.protected,
+                        title: Some(user.screen_name.clone()),
+                        extra_caption: Some(text.clone()),
+                        ..Default::default()
+                    },
+                    None => PostInfo {
+                        file_type: get_file_ext(&item.media_url_https).unwrap().to_owned(),
+                        url: item.media_url_https.clone(),
+                        thumb: Some(format!("{}:thumb", item.media_url_https.clone())),
+                        source_link: Some(item.expanded_url),
+                        personal: user.protected,
+                        ..Default::default()
+                    },
                 })
                 .collect(),
         ))
     }
+}
+
+fn get_best_video(media: &egg_mode::entities::MediaEntity) -> Option<&str> {
+    let video_info = match &media.video_info {
+        Some(video_info) => video_info,
+        None => return None,
+    };
+
+    let highest_bitrate = video_info
+        .variants
+        .iter()
+        .max_by_key(|video| video.bitrate.unwrap_or(0))
+        .unwrap();
+
+    Some(&highest_bitrate.url)
 }
 
 pub struct FurAffinity {
@@ -393,16 +417,13 @@ impl FurAffinity {
             url.to_string()
         };
 
-        let sub: fautil::Lookup = match self.fapi.lookup_url(&url).await {
+        let sub: fautil::File = match self.fapi.lookup_url(&url).await {
             Ok(mut results) if !results.is_empty() => results.remove(0),
             _ => {
                 return Ok(Some(PostInfo {
                     file_type: get_file_ext(&url).unwrap().to_string(),
                     url: url.clone(),
-                    thumb: None,
-                    source_link: None,
-                    extra_caption: None,
-                    personal: false,
+                    ..Default::default()
                 }));
             }
         };
@@ -410,10 +431,8 @@ impl FurAffinity {
         Ok(Some(PostInfo {
             file_type: get_file_ext(&sub.filename).unwrap().to_string(),
             url: sub.url.clone(),
-            thumb: None,
-            source_link: Some(format!("https://www.furaffinity.net/view/{}/", sub.id)),
-            extra_caption: None,
-            personal: false,
+            source_link: Some(sub.url()),
+            ..Default::default()
         }))
     }
 
@@ -445,10 +464,8 @@ impl FurAffinity {
         Ok(Some(PostInfo {
             file_type: get_file_ext(&image_url).unwrap().to_string(),
             url: image_url.clone(),
-            thumb: None,
             source_link: Some(url.to_string()),
-            extra_caption: None,
-            personal: false,
+            ..Default::default()
         }))
     }
 }
@@ -580,8 +597,7 @@ impl Site for Mastodon {
                     url: media.url.clone(),
                     thumb: Some(media.preview_url.clone()),
                     source_link: Some(json.url.clone()),
-                    extra_caption: None,
-                    personal: false,
+                    ..Default::default()
                 })
                 .collect(),
         ))
@@ -663,8 +679,7 @@ impl Site for Weasyl {
                         url: sub_url.clone(),
                         thumb: Some(thumb_url),
                         source_link: Some(url.to_string()),
-                        extra_caption: None,
-                        personal: false,
+                        ..Default::default()
                     }
                 })
                 .collect(),

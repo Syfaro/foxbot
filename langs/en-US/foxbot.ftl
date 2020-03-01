@@ -59,9 +59,6 @@ source-no-photo = Sorry, I can't seem to find the photo here.
 alternate-title = Here are some possible alternate versions:
 alternate-posted-by = Posted by { $name }
 alternate-distance = · { $link } (distance of { $distance })
-alternate-feedback = Finding alternate images is an experimental feature, please use the buttons below to let me know if it is working as expected.
-alternate-feedback-y = Looking good
-alternate-feedback-n = Not great :(
 alternate-multiple-photo = I can only find alternates for a single photo, sorry.
 
 # Error Messages

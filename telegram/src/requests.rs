@@ -112,7 +112,7 @@ pub enum ChatAction {
     UploadPhoto,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Debug, Serialize, Clone)]
 pub struct InputMediaPhoto {
     #[serde(rename = "type")]
     pub media_type: String,
@@ -131,7 +131,7 @@ impl Default for InputMediaPhoto {
     }
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Debug, Serialize, Clone)]
 pub struct InputMediaVideo {
     #[serde(rename = "type")]
     pub media_type: String,
@@ -140,7 +140,17 @@ pub struct InputMediaVideo {
     pub caption: Option<String>,
 }
 
-#[derive(Serialize)]
+impl Default for InputMediaVideo {
+    fn default() -> Self {
+        Self {
+            media_type: "video".to_string(),
+            media: Default::default(),
+            caption: None,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum InputMedia {
     Photo(InputMediaPhoto),
@@ -190,6 +200,7 @@ pub enum InlineQueryType {
     Article(InlineQueryResultArticle),
     Photo(InlineQueryResultPhoto),
     GIF(InlineQueryResultGIF),
+    Video(InlineQueryResultVideo),
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -213,6 +224,16 @@ pub struct InlineQueryResultPhoto {
 pub struct InlineQueryResultGIF {
     pub gif_url: String,
     pub thumb_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct InlineQueryResultVideo {
+    pub video_url: String,
+    pub mime_type: String,
+    pub thumb_url: String,
+    pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub caption: Option<String>,
 }
@@ -255,6 +276,27 @@ impl InlineQueryResult {
             content: InlineQueryType::GIF(InlineQueryResultGIF {
                 gif_url,
                 thumb_url,
+                caption: None,
+            }),
+        }
+    }
+
+    pub fn video(
+        id: String,
+        video_url: String,
+        mime_type: String,
+        thumb_url: String,
+        title: String,
+    ) -> InlineQueryResult {
+        InlineQueryResult {
+            result_type: "video".into(),
+            id,
+            reply_markup: None,
+            content: InlineQueryType::Video(InlineQueryResultVideo {
+                video_url,
+                mime_type,
+                thumb_url,
+                title,
                 caption: None,
             }),
         }
@@ -410,6 +452,36 @@ impl TelegramRequest for SendPhoto {
     }
 }
 
+#[derive(Serialize, Debug, Default)]
+pub struct SendVideo {
+    pub chat_id: ChatID,
+    #[serde(skip_serializing_if = "FileType::needs_upload")]
+    pub video: FileType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to_message_id: Option<i32>,
+}
+
+impl TelegramRequest for SendVideo {
+    type Response = Message;
+
+    fn endpoint(&self) -> &str {
+        "sendVideo"
+    }
+
+    fn files(&self) -> Option<Vec<(String, reqwest::multipart::Part)>> {
+        // Check if the photo needs to be uploaded. If the photo does need to
+        // be uploaded, we specify the field name and get the file. This unwrap
+        // is safe because `needs_upload` only returns true when it exists.
+        if self.video.needs_upload() {
+            Some(vec![("photo".to_owned(), self.video.file().unwrap())])
+        } else {
+            None
+        }
+    }
+}
+
 /// GetFile retrieves information about a file.
 ///
 /// This will not download the file! It only returns a [File] containing
@@ -429,7 +501,7 @@ impl TelegramRequest for GetFile {
     }
 }
 
-#[derive(Serialize, Default)]
+#[derive(Debug, Serialize, Default)]
 pub struct SendMediaGroup {
     pub chat_id: ChatID,
     #[serde(serialize_with = "clean_input_media")]
@@ -474,7 +546,7 @@ impl TelegramRequest for SendMediaGroup {
     }
 }
 
-#[derive(Serialize, Default)]
+#[derive(Debug, Serialize, Default)]
 pub struct AnswerInlineQuery {
     pub inline_query_id: String,
     pub results: Vec<InlineQueryResult>,

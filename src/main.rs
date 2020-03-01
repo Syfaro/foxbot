@@ -4,10 +4,11 @@ use async_trait::async_trait;
 use sentry::integrations::failure::capture_fail;
 use sites::{PostInfo, Site};
 use std::collections::HashMap;
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::Arc;
 use telegram::*;
 use tokio::sync::{Mutex, RwLock};
 use tokio01::runtime::current_thread::block_on_all;
+use tracing_futures::Instrument;
 use unic_langid::LanguageIdentifier;
 
 #[macro_use]
@@ -22,6 +23,9 @@ mod utils;
 type BoxedSite = Box<dyn Site + Send + Sync>;
 type BoxedHandler = Box<dyn Handler + Send + Sync>;
 
+/// Generates a random 24 character alphanumeric string.
+///
+/// Not cryptographically secure but unique enough for Telegram's unique IDs.
 fn generate_id() -> String {
     use rand::Rng;
     let rng = rand::thread_rng();
@@ -31,6 +35,7 @@ fn generate_id() -> String {
         .collect()
 }
 
+/// Artwork used for examples throughout the bot.
 static STARTING_ARTWORK: &[&str] = &[
     "https://www.furaffinity.net/view/33742297/",
     "https://www.furaffinity.net/view/33166216/",
@@ -46,11 +51,70 @@ static L10N_LANGS: &[&str] = &["en-US"];
 
 // MARK: Initialization
 
+/// Configure tracing with Jaeger.
+fn configure_tracing() {
+    use opentelemetry::{
+        api::{KeyValue, Provider, Sampler},
+        exporter::trace::jaeger,
+        sdk::Config,
+    };
+    use std::net::ToSocketAddrs;
+    use tracing_subscriber::layer::SubscriberExt;
+
+    let env = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+
+    let addr = std::env::var("JAEGER_COLLECTOR")
+        .expect("Missing JAEGER_COLLECTOR")
+        .to_socket_addrs()
+        .expect("Unable to resolve JAEGER_COLLECTOR")
+        .next()
+        .expect("Unable to find JAEGER_COLLECTOR");
+
+    let exporter = jaeger::Exporter::builder()
+        .with_collector_endpoint(addr)
+        .with_process(jaeger::Process {
+            service_name: "foxbot",
+            tags: vec![
+                KeyValue::new("environment", env),
+                KeyValue::new("version", env!("CARGO_PKG_VERSION")),
+            ],
+        })
+        .init();
+
+    let provider = opentelemetry::sdk::Provider::builder()
+        .with_exporter(exporter)
+        .with_config(Config {
+            default_sampler: Sampler::Always,
+            ..Default::default()
+        })
+        .build();
+
+    opentelemetry::global::set_provider(provider);
+
+    let tracer = opentelemetry::global::trace_provider().get_tracer("telegram");
+
+    let telem_layer = tracing_opentelemetry::OpentelemetryLayer::with_tracer(tracer);
+    let fmt_layer = tracing_subscriber::fmt::Layer::default();
+
+    let subscriber = tracing_subscriber::Registry::default()
+        .with(telem_layer)
+        .with(fmt_layer);
+
+    tracing::subscriber::set_global_default(subscriber)
+        .expect("Unable to set default tracing subscriber");
+}
+
 #[tokio::main]
 async fn main() {
     use pickledb::{PickleDb, PickleDbDumpPolicy, SerializationMethod};
 
     pretty_env_logger::init();
+
+    configure_tracing();
 
     let (fa_a, fa_b) = (
         std::env::var("FA_A").expect("Missing FA token a"),
@@ -145,11 +209,14 @@ async fn main() {
         .unwrap_or(false);
 
     let bot_user = bot
-        .make_request(&GetMe {})
+        .make_request(&GetMe)
         .await
         .expect("Unable to fetch bot user");
 
-    let handlers: Vec<BoxedHandler> = vec![Box::new(handlers::InlineHandler {})];
+    let handlers: Vec<BoxedHandler> = vec![
+        Box::new(handlers::InlineHandler),
+        Box::new(handlers::ChosenInlineHandler),
+    ];
 
     let handler = Arc::new(MessageHandler {
         bot_user,
@@ -189,14 +256,14 @@ async fn main() {
         };
         if let Err(e) = bot.make_request(&set_webhook).await {
             capture_fail(&e);
-            log::error!("Unable to set webhook: {:?}", e);
+            tracing::error!("unable to set webhook: {:?}", e);
         }
         receive_webhook(handler).await;
     } else {
         let delete_webhook = DeleteWebhook {};
         if let Err(e) = bot.make_request(&delete_webhook).await {
             capture_fail(&e);
-            log::error!("Unable to clear webhook: {:?}", e);
+            tracing::error!("unable to clear webhook: {:?}", e);
         }
         poll_updates(bot, handler).await;
     }
@@ -204,6 +271,10 @@ async fn main() {
 
 // MARK: Get Bot API updates
 
+/// Handle an incoming HTTP POST request to /{token}.
+///
+/// It spawns a handler for each request.
+#[tracing::instrument(skip(req, handler, secret))]
 async fn handle_request(
     req: hyper::Request<hyper::Body>,
     handler: Arc<MessageHandler>,
@@ -213,11 +284,11 @@ async fn handle_request(
 
     let now = std::time::Instant::now();
 
-    log::trace!("Got HTTP request: {} {}", req.method(), req.uri().path());
+    tracing::trace!("got HTTP request: {} {}", req.method(), req.uri().path());
 
     match (req.method(), req.uri().path()) {
         (&hyper::Method::POST, path) if path == secret => {
-            log::trace!("Handling update");
+            tracing::trace!("handling update");
             let body = req.into_body();
             let bytes = hyper::body::to_bytes(body)
                 .await
@@ -232,21 +303,21 @@ async fn handle_request(
             };
 
             let handler_clone = handler.clone();
-            tokio::spawn(async move {
-                log::debug!("Got update: {:?}", update);
-                handler_clone.handle_update(update).await;
-            });
+            tokio::spawn(
+                async move {
+                    tracing::debug!("got update: {:?}", update);
+                    handler_clone.handle_update(update).await;
+                    tracing::event!(tracing::Level::DEBUG, "finished handling message");
+                }
+                .in_current_span(),
+            );
 
             let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "http")
                 .add_field("duration", now.elapsed().as_millis() as i64);
 
             if let Err(e) = handler.influx.query(&point).await {
-                let uuid = capture_fail(&e);
-                log::error!(
-                    "[{}]  Unable to send http request info to InfluxDB: {:?}",
-                    uuid,
-                    e
-                );
+                capture_fail(&e);
+                tracing::error!("unable to send http request info to InfluxDB: {:?}", e);
             }
 
             Ok(Response::new(Body::from("✓")))
@@ -259,6 +330,7 @@ async fn handle_request(
     }
 }
 
+/// Start a web server to handle webhooks and pass updates to [handle_request].
 async fn receive_webhook(handler: Arc<MessageHandler>) {
     let host = std::env::var("HTTP_HOST").expect("Missing HTTP_HOST");
     let addr = host.parse().expect("Invalid HTTP_HOST");
@@ -279,13 +351,14 @@ async fn receive_webhook(handler: Arc<MessageHandler>) {
 
     let server = hyper::Server::bind(&addr).serve(make_svc);
 
-    log::info!("Listening on http://{}", addr);
+    tracing::info!("listening on http://{}", addr);
 
     if let Err(e) = server.await {
-        log::error!("Server error: {:?}", e);
+        tracing::error!("server error: {:?}", e);
     }
 }
 
+/// Start polling updates using Bot API long polling.
 async fn poll_updates(bot: Arc<Telegram>, handler: Arc<MessageHandler>) {
     let mut update_req = GetUpdates::default();
     update_req.timeout = Some(30);
@@ -295,7 +368,7 @@ async fn poll_updates(bot: Arc<Telegram>, handler: Arc<MessageHandler>) {
             Ok(updates) => updates,
             Err(e) => {
                 capture_fail(&e);
-                log::error!("Unable to get updates: {:?}", e);
+                tracing::error!("unable to get updates: {:?}", e);
                 std::thread::sleep(std::time::Duration::from_secs(5));
                 continue;
             }
@@ -306,7 +379,10 @@ async fn poll_updates(bot: Arc<Telegram>, handler: Arc<MessageHandler>) {
 
             let handler = handler.clone();
 
-            tokio::spawn(async move { handler.handle_update(update).await });
+            tokio::spawn(async move {
+                handler.handle_update(update).await;
+                tracing::event!(tracing::Level::DEBUG, "finished handling update");
+            });
 
             update_req.offset = Some(id + 1);
         }
@@ -351,11 +427,13 @@ pub trait Handler: Send + Sync {
         &self,
         handler: &MessageHandler,
         update: Update,
+        command: Option<Command>,
     ) -> Result<bool, Box<dyn std::error::Error>>;
 }
 
 impl MessageHandler {
-    pub async fn get_fluent_bundle<C, R>(&self, requested: Option<&str>, callback: C) -> R
+    #[tracing::instrument(skip(self, callback))]
+    async fn get_fluent_bundle<C, R>(&self, requested: Option<&str>, callback: C) -> R
     where
         C: FnOnce(&fluent::FluentBundle<fluent::FluentResource>) -> R,
     {
@@ -365,7 +443,7 @@ impl MessageHandler {
             "en-US"
         };
 
-        log::trace!("Looking up language bundle for {}", requested);
+        tracing::trace!("looking up language bundle for {}", requested);
 
         {
             let lock = self.best_lang.read().await;
@@ -375,7 +453,7 @@ impl MessageHandler {
             }
         }
 
-        log::info!("Got new language {}, building bundle", requested);
+        tracing::info!("got new language {}, building bundle", requested);
 
         let requested_locale = requested
             .parse::<LanguageIdentifier>()
@@ -461,13 +539,14 @@ impl MessageHandler {
         };
 
         if let Err(e) = self.bot.make_request(&send_message).await {
-            log::error!("Unable to send error message to user: {:?}", e);
+            tracing::error!("unable to send error message to user: {:?}", e);
             utils::with_user_scope(message.from.as_ref(), None, || {
                 capture_fail(&e);
             });
         }
     }
 
+    #[tracing::instrument(skip(self))]
     async fn handle_command(&self, message: Message) {
         let now = std::time::Instant::now();
 
@@ -479,12 +558,12 @@ impl MessageHandler {
         if let Some(username) = command.username {
             let bot_username = self.bot_user.username.as_ref().unwrap();
             if &username != bot_username {
-                log::debug!("Got command for other bot: {}", username);
+                tracing::debug!("got command for other bot: {}", username);
                 return;
             }
         }
 
-        log::debug!("Got command: {}", command.name);
+        tracing::debug!("got command {}", command.name);
 
         let from = message.from.clone();
 
@@ -494,7 +573,7 @@ impl MessageHandler {
             "/mirror" => self.handle_mirror(message).await,
             "/source" => self.handle_source(message).await,
             "/alts" => self.handle_alts(message).await,
-            _ => log::info!("Unknown command: {}", command.name),
+            _ => tracing::info!("unknown command: {}", command.name),
         };
 
         let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "command")
@@ -502,13 +581,14 @@ impl MessageHandler {
             .add_field("duration", now.elapsed().as_millis() as i64);
 
         if let Err(e) = self.influx.query(&point).await {
-            log::error!("Unable to send command to InfluxDB: {:?}", e);
+            tracing::error!("unable to send command to InfluxDB: {:?}", e);
             utils::with_user_scope(from.as_ref(), None, || {
                 capture_fail(&e);
             });
         }
     }
 
+    #[tracing::instrument(skip(self, message))]
     async fn handle_welcome(&self, message: Message, command: &str) {
         use rand::seq::SliceRandom;
 
@@ -550,61 +630,20 @@ impl MessageHandler {
         };
 
         if let Err(e) = self.bot.make_request(&send_message).await {
-            log::error!("Unable to send help message: {:?}", e);
+            tracing::error!("unable to send help message: {:?}", e);
             let tags = Some(vec![("command", command.to_string())]);
             utils::with_user_scope(message.from.as_ref(), tags, || capture_fail(&e));
         }
     }
 
-    fn send_action(
-        &self,
-        max: usize,
-        chat_id: ChatID,
-        user: Option<User>,
-        action: ChatAction,
-        completed: Arc<AtomicBool>,
-    ) {
-        use futures_util::stream::StreamExt;
-        use std::{sync::atomic::Ordering::SeqCst, time::Duration};
-
-        let bot = self.bot.clone();
-
-        tokio::spawn(async move {
-            let chat_action = SendChatAction { chat_id, action };
-
-            let mut count: usize = 0;
-
-            tokio::time::interval(Duration::from_secs(5))
-                .take_while(|_| {
-                    let completed = completed.load(SeqCst);
-                    count += 1;
-                    log::trace!(
-                        "Evaluating if should send action, completed: {}, count: {}",
-                        completed,
-                        count
-                    );
-                    futures::future::ready(!completed && count < max)
-                })
-                .for_each(|_| async {
-                    if let Err(e) = bot.make_request(&chat_action).await {
-                        log::warn!("Unable to send chat action: {:?}", e);
-                        utils::with_user_scope(user.as_ref(), None, || {
-                            capture_fail(&e);
-                        });
-                    }
-                })
-                .await;
-        });
-    }
-
+    #[tracing::instrument(skip(self, message))]
     async fn handle_source(&self, message: Message) {
-        let completed = Arc::new(AtomicBool::new(false));
-        self.send_action(
+        let _action = utils::continuous_action(
+            self.bot.clone(),
             12,
             message.chat_id(),
             message.from.clone(),
             ChatAction::Typing,
-            completed.clone(),
         );
 
         let (reply_to_id, message) = if let Some(reply_to_message) = message.reply_to_message {
@@ -616,7 +655,6 @@ impl MessageHandler {
         let photo = match message.photo.clone() {
             Some(photo) if !photo.is_empty() => photo,
             _ => {
-                completed.store(true, std::sync::atomic::Ordering::SeqCst);
                 self.send_generic_reply(&message, "source-no-photo").await;
                 return;
             }
@@ -626,7 +664,7 @@ impl MessageHandler {
         let bytes = match utils::download_by_id(&self.bot, &best_photo.file_id).await {
             Ok(bytes) => bytes,
             Err(e) => {
-                log::error!("Unable to download file: {:?}", e);
+                tracing::error!("unable to download file: {:?}", e);
                 let tags = Some(vec![("command", "source".to_string())]);
                 self.report_error(&message, tags, || capture_fail(&e)).await;
                 return;
@@ -638,9 +676,9 @@ impl MessageHandler {
             .image_search(&bytes, fautil::MatchType::Close)
             .await
         {
-            Ok(matches) => matches,
+            Ok(matches) => matches.matches,
             Err(e) => {
-                log::error!("Unable to find matches: {:?}", e);
+                tracing::error!("unable to find matches: {:?}", e);
                 let tags = Some(vec![("command", "source".to_string())]);
                 self.report_error(&message, tags, || capture_fail(&e)).await;
                 return;
@@ -656,18 +694,18 @@ impl MessageHandler {
             }
         };
 
-        let name = if result.distance < 5 {
+        let name = if result.distance.unwrap() < 5 {
             "reverse-good-result"
         } else {
             "reverse-bad-result"
         };
 
         let mut args = fluent::FluentArgs::new();
-        args.insert("distance", fluent::FluentValue::from(result.distance));
         args.insert(
-            "link",
-            fluent::FluentValue::from(format!("https://www.furaffinity.net/view/{}/", result.id)),
+            "distance",
+            fluent::FluentValue::from(result.distance.unwrap()),
         );
+        args.insert("link", fluent::FluentValue::from(result.url()));
 
         let text = self
             .get_fluent_bundle(
@@ -679,29 +717,27 @@ impl MessageHandler {
         let send_message = SendMessage {
             chat_id: message.chat.id.into(),
             text,
-            disable_web_page_preview: Some(result.distance > 5),
+            disable_web_page_preview: Some(result.distance.unwrap() > 5),
             reply_to_message_id: Some(reply_to_id),
             ..Default::default()
         };
 
-        completed.store(true, std::sync::atomic::Ordering::SeqCst);
-
         if let Err(e) = self.bot.make_request(&send_message).await {
-            log::error!("Unable to make request: {:?}", e);
+            tracing::error!("Unable to make request: {:?}", e);
             utils::with_user_scope(message.from.as_ref(), None, || {
                 capture_fail(&e);
             });
         }
     }
 
+    #[tracing::instrument(skip(self, message))]
     async fn handle_alts(&self, message: Message) {
-        let completed = Arc::new(AtomicBool::new(false));
-        self.send_action(
+        let _action = utils::continuous_action(
+            self.bot.clone(),
             12,
             message.chat_id(),
             message.from.clone(),
             ChatAction::Typing,
-            completed.clone(),
         );
 
         let (reply_to_id, message) = if let Some(reply_to_message) = message.reply_to_message {
@@ -716,8 +752,7 @@ impl MessageHandler {
                 match utils::download_by_id(&self.bot, &best_photo.file_id).await {
                     Ok(bytes) => bytes,
                     Err(e) => {
-                        completed.store(true, std::sync::atomic::Ordering::SeqCst);
-                        log::error!("Unable to download file: {:?}", e);
+                        tracing::error!("unable to download file: {:?}", e);
                         let tags = Some(vec![("command", "source".to_string())]);
                         self.report_error(&message, tags, || capture_fail(&e)).await;
                         return;
@@ -728,10 +763,10 @@ impl MessageHandler {
                 let mut links = vec![];
 
                 if let Some(bot_links) = utils::parse_known_bots(&message) {
-                    log::trace!("is known bot, adding links");
+                    tracing::trace!("is known bot, adding links");
                     links.extend(bot_links);
                 } else if let Some(text) = &message.text {
-                    log::trace!("message had text, looking at links");
+                    tracing::trace!("message had text, looking at links");
                     links.extend(
                         self.finder
                             .links(&text)
@@ -740,11 +775,9 @@ impl MessageHandler {
                 }
 
                 if links.is_empty() {
-                    completed.store(true, std::sync::atomic::Ordering::SeqCst);
                     self.send_generic_reply(&message, "source-no-photo").await;
                     return;
                 } else if links.len() > 1 {
-                    completed.store(true, std::sync::atomic::Ordering::SeqCst);
                     self.send_generic_reply(&message, "alternate-multiple-photo")
                         .await;
                     return;
@@ -772,7 +805,6 @@ impl MessageHandler {
                         .unwrap()
                         .to_vec(),
                     None => {
-                        completed.store(true, std::sync::atomic::Ordering::SeqCst);
                         self.send_generic_reply(&message, "source-no-photo").await;
                         return;
                     }
@@ -787,27 +819,43 @@ impl MessageHandler {
         {
             Ok(matches) => matches,
             Err(e) => {
-                completed.store(true, std::sync::atomic::Ordering::SeqCst);
-                log::error!("Unable to find matches: {:?}", e);
+                tracing::error!("unable to find matches: {:?}", e);
                 let tags = Some(vec![("command", "source".to_string())]);
                 self.report_error(&message, tags, || capture_fail(&e)).await;
                 return;
             }
         };
 
-        if matches.is_empty() {
-            completed.store(true, std::sync::atomic::Ordering::SeqCst);
+        if matches.matches.is_empty() {
             self.send_generic_reply(&message, "reverse-no-results")
                 .await;
             return;
         }
 
-        let has_multiple_matches = matches.len() > 1;
+        let hash = matches.hash.to_be_bytes();
+        let has_multiple_matches = matches.matches.len() > 1;
 
-        let mut results: HashMap<i32, Vec<fautil::ImageLookup>> = HashMap::new();
+        let mut results: HashMap<Vec<String>, Vec<fautil::File>> = HashMap::new();
+
+        let matches: Vec<fautil::File> = matches
+            .matches
+            .into_iter()
+            .map(|m| fautil::File {
+                artists: Some(
+                    m.artists
+                        .unwrap_or_else(|| vec![])
+                        .iter()
+                        .map(|artist| artist.to_lowercase())
+                        .collect(),
+                ),
+                ..m
+            })
+            .collect();
 
         for m in matches {
-            let v = results.entry(m.artist_id).or_default();
+            let v = results
+                .entry(m.artists.clone().unwrap_or_else(|| vec![]))
+                .or_default();
             v.push(m);
         }
 
@@ -816,33 +864,27 @@ impl MessageHandler {
             .map(|item| (item.0, item.1))
             .collect::<Vec<_>>();
 
-        let ((text, used_hashes), alternate) = self
+        let (text, used_hashes) = self
             .get_fluent_bundle(
                 message.from.clone().unwrap().language_code.as_deref(),
-                |bundle| {
-                    (
-                        utils::build_alternate_response(&bundle, items),
-                        utils::alternate_feedback_keyboard(&bundle),
-                    )
-                },
+                |bundle| utils::build_alternate_response(&bundle, items),
             )
             .await;
 
-        completed.store(true, std::sync::atomic::Ordering::SeqCst);
+        drop(_action);
 
         let send_message = SendMessage {
             chat_id: message.chat_id(),
             text: text.clone(),
             disable_web_page_preview: Some(true),
-            parse_mode: Some(ParseMode::Markdown),
             reply_to_message_id: Some(reply_to_id),
-            reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(alternate)),
+            ..Default::default()
         };
 
         let sent = match self.bot.make_request(&send_message).await {
             Ok(message) => message.message_id,
             Err(e) => {
-                log::error!("Unable to make request: {:?}", e);
+                tracing::error!("unable to make request: {:?}", e);
                 utils::with_user_scope(message.from.as_ref(), None, || {
                     capture_fail(&e);
                 });
@@ -854,19 +896,18 @@ impl MessageHandler {
             return;
         }
 
-        let completed = Arc::new(AtomicBool::new(false));
-        self.send_action(
+        let _action = utils::continuous_action(
+            self.bot.clone(),
             12,
             message.chat_id(),
             message.from.clone(),
             ChatAction::Typing,
-            completed.clone(),
         );
 
         let matches = match self.fapi.lookup_hashes(used_hashes).await {
             Ok(matches) => matches,
             Err(e) => {
-                log::error!("Unable to find matches: {:?}", e);
+                tracing::error!("unable to find matches: {:?}", e);
                 let tags = Some(vec![("command", "source".to_string())]);
                 self.report_error(&message, tags, || capture_fail(&e)).await;
                 return;
@@ -879,20 +920,19 @@ impl MessageHandler {
             return;
         }
 
-        let hash = utils::hash_image(&bytes);
-
         for m in matches {
-            if let Some(artist) = results.get_mut(&m.artist_id) {
-                let bytes = m.hash.to_be_bytes();
+            if let Some(artist) = results.get_mut(&m.artists.clone().unwrap()) {
+                let bytes = m.hash.unwrap().to_be_bytes();
 
-                artist.push(fautil::ImageLookup {
+                artist.push(fautil::File {
                     id: m.id,
-                    distance: hamming::distance_fast(&bytes, &hash).unwrap(),
+                    site_id: m.site_id,
+                    distance: Some(hamming::distance_fast(&bytes, &hash).unwrap()),
                     hash: m.hash,
                     url: m.url,
                     filename: m.filename,
-                    artist_id: m.artist_id,
-                    artist_name: m.artist_name,
+                    artists: m.artists.clone(),
+                    site_info: None,
                 });
             }
         }
@@ -902,19 +942,12 @@ impl MessageHandler {
             .map(|item| (item.0, item.1))
             .collect::<Vec<_>>();
 
-        let ((updated_text, _used_hashes), alternate) = self
+        let (updated_text, _used_hashes) = self
             .get_fluent_bundle(
                 message.from.clone().unwrap().language_code.as_deref(),
-                |bundle| {
-                    (
-                        utils::build_alternate_response(&bundle, items),
-                        utils::alternate_feedback_keyboard(&bundle),
-                    )
-                },
+                |bundle| utils::build_alternate_response(&bundle, items),
             )
             .await;
-
-        completed.store(true, std::sync::atomic::Ordering::SeqCst);
 
         if text == updated_text {
             return;
@@ -925,19 +958,18 @@ impl MessageHandler {
             message_id: Some(sent),
             text: updated_text,
             disable_web_page_preview: Some(true),
-            parse_mode: Some(ParseMode::Markdown),
-            reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(alternate)),
             ..Default::default()
         };
 
         if let Err(e) = self.bot.make_request(&edit).await {
-            log::error!("Unable to make request: {:?}", e);
+            tracing::error!("unable to make request: {:?}", e);
             utils::with_user_scope(message.from.as_ref(), None, || {
                 capture_fail(&e);
             });
         }
     }
 
+    #[tracing::instrument(skip(self, message))]
     async fn send_generic_reply(&self, message: &Message, name: &str) {
         let language_code = match &message.from {
             Some(from) => &from.language_code,
@@ -958,23 +990,23 @@ impl MessageHandler {
         };
 
         if let Err(e) = self.bot.make_request(&send_message).await {
-            log::error!("Unable to make request: {:?}", e);
+            tracing::error!("unable to make request: {:?}", e);
             utils::with_user_scope(message.from.as_ref(), None, || {
                 capture_fail(&e);
             });
         }
     }
 
+    #[tracing::instrument(skip(self, message))]
     async fn handle_mirror(&self, message: Message) {
         let from = message.from.clone().unwrap();
 
-        let completed = Arc::new(AtomicBool::new(false));
-        self.send_action(
+        let _action = utils::continuous_action(
+            self.bot.clone(),
             6,
             message.chat_id(),
             message.from.clone(),
-            ChatAction::UploadPhoto,
-            completed.clone(),
+            ChatAction::Typing,
         );
 
         let (reply_to_id, message) = if let Some(reply_to_message) = message.reply_to_message {
@@ -991,7 +1023,6 @@ impl MessageHandler {
 
         if links.is_empty() {
             self.send_generic_reply(&message, "mirror-no-links").await;
-            completed.store(true, std::sync::atomic::Ordering::SeqCst);
             return;
         }
 
@@ -1008,43 +1039,65 @@ impl MessageHandler {
 
         if results.is_empty() {
             self.send_generic_reply(&message, "mirror-no-results").await;
-            completed.store(true, std::sync::atomic::Ordering::SeqCst);
             return;
         }
 
         if results.len() == 1 {
             let result = results.get(0).unwrap();
 
-            let photo = SendPhoto {
-                chat_id: message.chat_id(),
-                caption: if let Some(source_link) = &result.source_link {
-                    Some(source_link.to_owned())
-                } else {
-                    None
-                },
-                photo: FileType::URL(result.url.clone()),
-                reply_to_message_id: Some(message.message_id),
-                ..Default::default()
-            };
+            if result.file_type == "mp4" {
+                let video = SendVideo {
+                    chat_id: message.chat_id(),
+                    caption: if let Some(source_link) = &result.source_link {
+                        Some(source_link.to_owned())
+                    } else {
+                        None
+                    },
+                    video: FileType::URL(result.url.clone()),
+                    reply_to_message_id: Some(message.message_id),
+                    ..Default::default()
+                };
 
-            completed.store(true, std::sync::atomic::Ordering::SeqCst);
+                if let Err(e) = self.bot.make_request(&video).await {
+                    tracing::error!("unable to make request: {:?}", e);
+                    self.report_error(
+                        &message,
+                        Some(vec![("command", "mirror".to_string())]),
+                        || capture_fail(&e),
+                    )
+                    .await;
+                    return;
+                }
+            } else {
+                let photo = SendPhoto {
+                    chat_id: message.chat_id(),
+                    caption: if let Some(source_link) = &result.source_link {
+                        Some(source_link.to_owned())
+                    } else {
+                        None
+                    },
+                    photo: FileType::URL(result.url.clone()),
+                    reply_to_message_id: Some(message.message_id),
+                    ..Default::default()
+                };
 
-            if let Err(e) = self.bot.make_request(&photo).await {
-                log::error!("Unable to make request: {:?}", e);
-                self.report_error(
-                    &message,
-                    Some(vec![("command", "mirror".to_string())]),
-                    || capture_fail(&e),
-                )
-                .await;
-                return;
+                if let Err(e) = self.bot.make_request(&photo).await {
+                    tracing::error!("unable to make request: {:?}", e);
+                    self.report_error(
+                        &message,
+                        Some(vec![("command", "mirror".to_string())]),
+                        || capture_fail(&e),
+                    )
+                    .await;
+                    return;
+                }
             }
         } else {
             for chunk in results.chunks(10) {
                 let media = chunk
                     .iter()
-                    .map(|result| {
-                        InputMedia::Photo(InputMediaPhoto {
+                    .map(|result| match result.file_type.as_ref() {
+                        "mp4" => InputMedia::Video(InputMediaVideo {
                             media: FileType::URL(result.url.to_owned()),
                             caption: if let Some(source_link) = &result.source_link {
                                 Some(source_link.to_owned())
@@ -1052,7 +1105,16 @@ impl MessageHandler {
                                 None
                             },
                             ..Default::default()
-                        })
+                        }),
+                        _ => InputMedia::Photo(InputMediaPhoto {
+                            media: FileType::URL(result.url.to_owned()),
+                            caption: if let Some(source_link) = &result.source_link {
+                                Some(source_link.to_owned())
+                            } else {
+                                None
+                            },
+                            ..Default::default()
+                        }),
                     })
                     .collect();
 
@@ -1064,7 +1126,7 @@ impl MessageHandler {
                 };
 
                 if let Err(e) = self.bot.make_request(&media_group).await {
-                    log::error!("Unable to make request: {:?}", e);
+                    tracing::error!("unable to make request: {:?}", e);
                     self.report_error(
                         &message,
                         Some(vec![("command", "mirror".to_string())]),
@@ -1074,8 +1136,6 @@ impl MessageHandler {
                     return;
                 }
             }
-
-            completed.store(true, std::sync::atomic::Ordering::SeqCst);
         }
 
         if !missing.is_empty() {
@@ -1098,7 +1158,7 @@ impl MessageHandler {
             };
 
             if let Err(e) = self.bot.make_request(&send_message).await {
-                log::error!("Unable to make request: {:?}", e);
+                tracing::error!("unable to make request: {:?}", e);
                 utils::with_user_scope(message.from.as_ref(), None, || {
                     capture_fail(&e);
                 });
@@ -1106,6 +1166,7 @@ impl MessageHandler {
         }
     }
 
+    #[tracing::instrument(skip(self, message))]
     async fn handle_text(&self, message: Message) {
         let now = std::time::Instant::now();
 
@@ -1113,11 +1174,11 @@ impl MessageHandler {
         let from = message.from.clone().unwrap();
 
         if text.trim().parse::<i32>().is_err() {
-            log::trace!("Got text that wasn't OOB, ignoring");
+            tracing::trace!("got text that wasn't oob, ignoring");
             return;
         }
 
-        log::trace!("Checking if message was Twitter code");
+        tracing::trace!("checking if message was Twitter code");
 
         let data: (String, String) = {
             let lock = self.db.read().await;
@@ -1128,7 +1189,7 @@ impl MessageHandler {
             }
         };
 
-        log::trace!("We had waiting Twitter code");
+        tracing::trace!("we had waiting Twitter code");
 
         let request_token = egg_mode::KeyPair::new(data.0, data.1);
         let con_token =
@@ -1136,7 +1197,7 @@ impl MessageHandler {
 
         let token = match block_on_all(egg_mode::access_token(con_token, &request_token, text)) {
             Err(e) => {
-                log::warn!("User was unable to verify OOB: {:?}", e);
+                tracing::warn!("user was unable to verify OOB: {:?}", e);
 
                 self.report_error(
                     &message,
@@ -1149,14 +1210,14 @@ impl MessageHandler {
             Ok(token) => token,
         };
 
-        log::trace!("Got token");
+        tracing::trace!("got token");
 
         let access = match token.0 {
             egg_mode::Token::Access { access, .. } => access,
             _ => unimplemented!(),
         };
 
-        log::trace!("Got access token");
+        tracing::trace!("got access token");
 
         {
             let mut lock = self.db.write().await;
@@ -1165,7 +1226,7 @@ impl MessageHandler {
                 &format!("credentials:{}", from.id),
                 &(access.key, access.secret),
             ) {
-                log::warn!("Unable to save user credentials: {:?}", e);
+                tracing::warn!("unable to save user credentials: {:?}", e);
 
                 self.report_error(
                     &message,
@@ -1199,7 +1260,7 @@ impl MessageHandler {
         };
 
         if let Err(e) = self.bot.make_request(&message).await {
-            log::warn!("Unable to send message: {:?}", e);
+            tracing::warn!("unable to send message: {:?}", e);
             utils::with_user_scope(Some(&from), None, || {
                 capture_fail(&e);
             });
@@ -1210,16 +1271,23 @@ impl MessageHandler {
             .add_field("duration", now.elapsed().as_millis() as i64);
 
         if let Err(e) = self.influx.query(&point).await {
-            log::error!("Unable to send command to InfluxDB: {:?}", e);
+            tracing::error!("unable to send command to InfluxDB: {:?}", e);
             utils::with_user_scope(Some(&from), None, || {
                 capture_fail(&e);
             });
         }
     }
 
+    #[tracing::instrument(skip(self, update))]
     async fn handle_update(&self, update: Update) {
         for handler in &self.handlers {
-            match handler.handle(&self, update.clone()).await {
+            let command = update
+                .message
+                .as_ref()
+                .map(|message| message.get_command())
+                .flatten();
+
+            match handler.handle(&self, update.clone(), command.clone()).await {
                 Ok(absorb) => {
                     if absorb {
                         break;
@@ -1265,6 +1333,7 @@ impl MessageHandler {
         // }
     }
 
+    #[tracing::instrument(skip(self, callback_data))]
     async fn handle_callback(&self, callback_data: CallbackQuery) {
         let mut answer = AnswerCallbackQuery {
             callback_query_id: callback_data.id,
@@ -1282,7 +1351,7 @@ impl MessageHandler {
                                 .add_field("dummy", 0)
                                 .add_tag("feedback", feedback);
                         if let Err(e) = self.influx.query(&point).await {
-                            log::error!("Unable to log alts feedback: {:?}", e);
+                            tracing::error!("unable to log alts feedback: {:?}", e);
                             capture_fail(&e);
                         }
 
@@ -1292,22 +1361,23 @@ impl MessageHandler {
                                 answer.text = Some("I'm sorry to hear that. Please contact my creator @Syfaro if you have feedback.".to_string());
                                 answer.show_alert = Some(true);
                             }
-                            _ => log::warn!("Got weird alts feedback: {}", feedback),
+                            _ => tracing::warn!("got weird alts feedback: {}", feedback),
                         }
                     }
                 }
                 part => {
-                    log::info!("Got unexpected callback query text: {:?}", part);
+                    tracing::info!("got unexpected callback query text: {:?}", part);
                 }
             }
         }
 
         if let Err(e) = self.bot.make_request(&answer).await {
-            log::error!("Unable to answer callback query: {:?}", e);
+            tracing::error!("unable to answer callback query: {:?}", e);
             capture_fail(&e);
         }
     }
 
+    #[tracing::instrument(skip(self, message))]
     async fn authenticate_twitter(&self, message: Message) {
         let now = std::time::Instant::now();
 
@@ -1324,7 +1394,7 @@ impl MessageHandler {
         let request_token = match block_on_all(egg_mode::request_token(&con_token, "oob")) {
             Ok(req) => req,
             Err(e) => {
-                log::warn!("Unable to get request token: {:?}", e);
+                tracing::warn!("unable to get request token: {:?}", e);
 
                 self.report_error(
                     &message,
@@ -1348,7 +1418,7 @@ impl MessageHandler {
                 &format!("authenticate:{}", user.id),
                 &(request_token.key.clone(), request_token.secret.clone()),
             ) {
-                log::warn!("Unable to save authenticate: {:?}", e);
+                tracing::warn!("unable to save authenticate: {:?}", e);
 
                 self.report_error(
                     &message,
@@ -1385,7 +1455,7 @@ impl MessageHandler {
         };
 
         if let Err(e) = self.bot.make_request(&send_message).await {
-            log::warn!("Unable to send message: {:?}", e);
+            tracing::warn!("unable to send message: {:?}", e);
             utils::with_user_scope(Some(&user), None, || {
                 capture_fail(&e);
             });
@@ -1396,13 +1466,14 @@ impl MessageHandler {
             .add_field("duration", now.elapsed().as_millis() as i64);
 
         if let Err(e) = self.influx.query(&point).await {
-            log::error!("Unable to send command to InfluxDB: {:?}", e);
+            tracing::error!("unable to send command to InfluxDB: {:?}", e);
             utils::with_user_scope(Some(&user), None, || {
                 capture_fail(&e);
             });
         }
     }
 
+    #[tracing::instrument(skip(self, message))]
     async fn process_photo(&self, message: Message) {
         let now = std::time::Instant::now();
 
@@ -1410,13 +1481,12 @@ impl MessageHandler {
             return;
         }
 
-        let completed = Arc::new(AtomicBool::new(false));
-        self.send_action(
+        let _action = utils::continuous_action(
+            self.bot.clone(),
             12,
             message.chat_id(),
             message.from.clone(),
             ChatAction::Typing,
-            completed.clone(),
         );
 
         let photos = message.photo.clone().unwrap();
@@ -1424,7 +1494,7 @@ impl MessageHandler {
         let photo = match utils::download_by_id(&self.bot, &best_photo.file_id).await {
             Ok(photo) => photo,
             Err(e) => {
-                log::error!("Unable to download file: {:?}", e);
+                tracing::error!("unable to download file: {:?}", e);
                 let tags = Some(vec![("command", "photo".to_string())]);
                 self.report_error(&message, tags, || capture_fail(&e)).await;
                 return;
@@ -1436,7 +1506,7 @@ impl MessageHandler {
             .image_search(&photo, fautil::MatchType::Close)
             .await
         {
-            Ok(matches) if !matches.is_empty() => matches,
+            Ok(matches) if !matches.matches.is_empty() => matches.matches,
             Ok(_matches) => {
                 let text = self
                     .get_fluent_bundle(
@@ -1452,10 +1522,8 @@ impl MessageHandler {
                     ..Default::default()
                 };
 
-                completed.store(true, std::sync::atomic::Ordering::SeqCst);
-
                 if let Err(e) = self.bot.make_request(&send_message).await {
-                    log::error!("Unable to respond to photo: {:?}", e);
+                    tracing::error!("unable to respond to photo: {:?}", e);
                     utils::with_user_scope(message.from.as_ref(), None, || {
                         capture_fail(&e);
                     });
@@ -1466,7 +1534,7 @@ impl MessageHandler {
                     .add_field("duration", now.elapsed().as_millis() as i64);
 
                 if let Err(e) = self.influx.query(&point).await {
-                    log::error!("Unable to send command to InfluxDB: {:?}", e);
+                    tracing::error!("unable to send command to InfluxDB: {:?}", e);
                     utils::with_user_scope(message.from.as_ref(), None, || {
                         capture_fail(&e);
                     });
@@ -1475,9 +1543,7 @@ impl MessageHandler {
                 return;
             }
             Err(e) => {
-                completed.store(true, std::sync::atomic::Ordering::SeqCst);
-
-                log::error!("Unable to reverse search image file: {:?}", e);
+                tracing::error!("unable to reverse search image file: {:?}", e);
                 let tags = Some(vec![("command", "photo".to_string())]);
                 self.report_error(&message, tags, || capture_fail(&e)).await;
                 return;
@@ -1485,20 +1551,34 @@ impl MessageHandler {
         };
 
         let first = matches.get(0).unwrap();
-        log::debug!("Match has distance of {}", first.distance);
+        let similar: Vec<&fautil::File> = matches
+            .iter()
+            .skip(1)
+            .take_while(|m| m.distance.unwrap() == first.distance.unwrap())
+            .collect();
+        tracing::debug!("match has distance of {}", first.distance.unwrap());
 
-        let name = if first.distance < 5 {
+        let name = if first.distance.unwrap() < 5 {
             "reverse-good-result"
         } else {
             "reverse-bad-result"
         };
 
         let mut args = fluent::FluentArgs::new();
-        args.insert("distance", fluent::FluentValue::from(first.distance));
         args.insert(
-            "link",
-            fluent::FluentValue::from(format!("https://www.furaffinity.net/view/{}/", first.id)),
+            "distance",
+            fluent::FluentValue::from(first.distance.unwrap()),
         );
+
+        if similar.is_empty() {
+            args.insert("link", fluent::FluentValue::from(first.url()));
+        } else {
+            let mut links = vec![format!("· {}", first.url())];
+            links.extend(similar.iter().map(|s| format!("· {}", s.url())));
+            let mut s = "\n".to_string();
+            s.push_str(&links.join("\n"));
+            args.insert("link", fluent::FluentValue::from(s));
+        }
 
         let text = self
             .get_fluent_bundle(
@@ -1510,33 +1590,32 @@ impl MessageHandler {
         let send_message = SendMessage {
             chat_id: message.chat_id(),
             text,
-            disable_web_page_preview: Some(first.distance > 5),
+            disable_web_page_preview: Some(first.distance.unwrap() > 5),
             reply_to_message_id: Some(message.message_id),
             ..Default::default()
         };
 
-        completed.store(true, std::sync::atomic::Ordering::SeqCst);
-
         if let Err(e) = self.bot.make_request(&send_message).await {
-            log::error!("Unable to respond to photo: {:?}", e);
+            tracing::error!("unable to respond to photo: {:?}", e);
             utils::with_user_scope(message.from.as_ref(), None, || {
                 capture_fail(&e);
             });
         }
 
         let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "source")
-            .add_tag("good", first.distance < 5)
+            .add_tag("good", first.distance.unwrap() < 5)
             .add_field("matches", matches.len() as i64)
             .add_field("duration", now.elapsed().as_millis() as i64);
 
         if let Err(e) = self.influx.query(&point).await {
-            log::error!("Unable to send command to InfluxDB: {:?}", e);
+            tracing::error!("unable to send command to InfluxDB: {:?}", e);
             utils::with_user_scope(message.from.as_ref(), None, || {
                 capture_fail(&e);
             });
         }
     }
 
+    #[tracing::instrument(skip(self, message))]
     async fn process_channel_photo(&self, message: Message) {
         if message.forward_date.is_some() {
             return;
@@ -1563,13 +1642,13 @@ impl MessageHandler {
             .image_search(&bytes, fautil::MatchType::Close)
             .await
         {
-            Ok(matches) if !matches.is_empty() => matches,
+            Ok(matches) if !matches.matches.is_empty() => matches.matches,
             _ => return,
         };
 
         let first = matches.first().unwrap();
 
-        if first.distance > 2 {
+        if first.distance.unwrap() > 2 {
             return;
         }
 
@@ -1588,7 +1667,7 @@ impl MessageHandler {
             };
 
             if let Err(e) = self.bot.make_request(&edit_caption_markup).await {
-                log::error!("Unable to edit channel caption: {:?}", e);
+                tracing::error!("unable to edit channel caption: {:?}", e);
                 utils::with_user_scope(None, None, || {
                     capture_fail(&e);
                 });
@@ -1597,7 +1676,7 @@ impl MessageHandler {
             let markup = InlineKeyboardMarkup {
                 inline_keyboard: vec![vec![InlineKeyboardButton {
                     text,
-                    url: Some(format!("https://www.furaffinity.net/view/{}/", first.id)),
+                    url: Some(first.url()),
                     ..Default::default()
                 }]],
             };
@@ -1610,7 +1689,7 @@ impl MessageHandler {
             };
 
             if let Err(e) = self.bot.make_request(&edit_reply_markup).await {
-                log::error!("Unable to edit channel reply markup: {:?}", e);
+                tracing::error!("unable to edit channel reply markup: {:?}", e);
                 utils::with_user_scope(None, None, || {
                     capture_fail(&e);
                 });

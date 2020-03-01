@@ -1,5 +1,7 @@
 use sentry::integrations::failure::capture_fail;
+use std::sync::Arc;
 use std::time::Instant;
+use tracing_futures::Instrument;
 
 use crate::BoxedSite;
 
@@ -12,6 +14,7 @@ pub struct SiteCallback<'a> {
     pub results: Vec<crate::PostInfo>,
 }
 
+#[tracing::instrument(skip(user, sites, callback))]
 pub async fn find_images<'a, C>(
     user: &telegram::User,
     links: Vec<&'a str>,
@@ -28,20 +31,21 @@ where
             let start = Instant::now();
 
             if site.url_supported(link).await {
-                log::debug!("Link {} supported by {}", link, site.name());
+                tracing::debug!("link {} supported by {}", link, site.name());
 
                 match site.get_images(user.id, link).await {
                     // Got results successfully and there were results
                     // Execute callback with site info and results
                     Ok(results) if results.is_some() => {
                         let results = results.unwrap(); // we know this is safe
-                        log::debug!("Found images: {:?}", results);
+                        tracing::debug!("found images: {:?}", results);
                         callback(SiteCallback {
                             site: &site,
                             link,
                             duration: start.elapsed().as_millis() as i64,
                             results,
                         });
+                        break 'link;
                     }
                     // Got results successfully and there were NO results
                     // Continue onto next link
@@ -52,7 +56,7 @@ where
                     // Got error while processing, report and move onto next link
                     Err(e) => {
                         missing.push(link);
-                        log::warn!("Unable to get results: {:?}", e);
+                        tracing::warn!("unable to get results: {:?}", e);
                         with_user_scope(
                             Some(user),
                             Some(vec![("site", site.name().to_string())]),
@@ -74,6 +78,7 @@ pub fn find_best_photo(sizes: &[telegram::PhotoSize]) -> Option<&telegram::Photo
     sizes.iter().max_by_key(|size| size.height * size.width)
 }
 
+#[tracing::instrument(skip(bot))]
 pub async fn download_by_id(
     bot: &telegram::Telegram,
     file_id: &str,
@@ -127,40 +132,14 @@ where
     )
 }
 
-pub fn hash_image(bytes: &[u8]) -> [u8; 8] {
-    let hasher = furaffinity_rs::get_hasher();
-    let image = image::load_from_memory(&bytes).unwrap();
-    let mut b: [u8; 8] = [0; 8];
-    let hash = hasher.hash_image(&image);
-    b.copy_from_slice(&hash.as_bytes());
-    b
-}
-
-pub fn alternate_feedback_keyboard(bundle: Bundle) -> telegram::InlineKeyboardMarkup {
-    telegram::InlineKeyboardMarkup {
-        inline_keyboard: vec![vec![
-            telegram::InlineKeyboardButton {
-                text: get_message(&bundle, "alternate-feedback-y", None).unwrap(),
-                callback_data: Some("alts,y".to_string()),
-                ..Default::default()
-            },
-            telegram::InlineKeyboardButton {
-                text: get_message(&bundle, "alternate-feedback-n", None).unwrap(),
-                callback_data: Some("alts,n".to_string()),
-                ..Default::default()
-            },
-        ]],
-    }
-}
-
-type AlternateItems<'a> = Vec<(&'a i32, &'a Vec<fautil::ImageLookup>)>;
+type AlternateItems<'a> = Vec<(&'a Vec<String>, &'a Vec<fautil::File>)>;
 
 pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (String, Vec<i64>) {
     let mut used_hashes = vec![];
 
     items.sort_by(|a, b| {
-        let a_distance: u64 = a.1.iter().map(|item| item.distance).sum();
-        let b_distance: u64 = b.1.iter().map(|item| item.distance).sum();
+        let a_distance: u64 = a.1.iter().map(|item| item.distance.unwrap()).sum();
+        let b_distance: u64 = b.1.iter().map(|item| item.distance.unwrap()).sum();
 
         a_distance.partial_cmp(&b_distance).unwrap()
     });
@@ -170,45 +149,39 @@ pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (S
     s.push_str("\n\n");
 
     for item in items {
-        let total_dist: u64 = item.1.iter().map(|item| item.distance).sum();
-        log::trace!("total distance: {}", total_dist);
+        let total_dist: u64 = item.1.iter().map(|item| item.distance.unwrap()).sum();
+        tracing::trace!("total distance: {}", total_dist);
         if total_dist > (7 * item.1.len() as u64) {
-            log::trace!("too high, aborting");
+            tracing::trace!("too high, aborting");
             continue;
         }
-        let artist_name = item.1.first().unwrap().artist_name.to_string();
+        let artist_name = item
+            .1
+            .first()
+            .unwrap()
+            .artists
+            .clone()
+            .unwrap_or_else(|| vec!["Unknown".to_string()])
+            .join(", ");
         let mut args = fluent::FluentArgs::new();
-        args.insert(
-            "name",
-            format!(
-                "[{}](https://www.furaffinity.net/user/{}/)",
-                artist_name,
-                artist_name.replace("_", "")
-            )
-            .into(),
-        );
+        args.insert("name", artist_name.into());
         s.push_str(&get_message(&bundle, "alternate-posted-by", Some(args)).unwrap());
         s.push_str("\n");
-        let mut subs: Vec<fautil::ImageLookup> = item.1.to_vec();
+        let mut subs: Vec<fautil::File> = item.1.to_vec();
         subs.sort_by(|a, b| a.id.partial_cmp(&b.id).unwrap());
         subs.dedup_by(|a, b| a.id == b.id);
         subs.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
         for sub in subs {
-            log::trace!("looking at {}", sub.id);
+            tracing::trace!("looking at {}-{}", sub.site_name(), sub.id);
             let mut args = fluent::FluentArgs::new();
-            args.insert(
-                "link",
-                format!("https://www.furaffinity.net/view/{}/", sub.id).into(),
-            );
-            args.insert("distance", sub.distance.into());
+            args.insert("link", sub.url().into());
+            args.insert("distance", sub.distance.unwrap().into());
             s.push_str(&get_message(&bundle, "alternate-distance", Some(args)).unwrap());
             s.push_str("\n");
-            used_hashes.push(sub.hash);
+            used_hashes.push(sub.hash.unwrap());
         }
         s.push_str("\n");
     }
-
-    s.push_str(&get_message(&bundle, "alternate-feedback", None).unwrap());
 
     (s, used_hashes)
 }
@@ -225,7 +198,7 @@ pub fn parse_known_bots(message: &telegram::Message) -> Option<Vec<String>> {
         None => return None,
     };
 
-    log::trace!("evaluating if known bot: {}", from.id);
+    tracing::trace!("evaluating if known bot: {}", from.id);
 
     match from.id {
         // FAwatchbot
@@ -241,5 +214,70 @@ pub fn parse_known_bots(message: &telegram::Message) -> Option<Vec<String>> {
             Some(urls.collect())
         }
         _ => None,
+    }
+}
+
+pub struct ContinuousAction {
+    tx: Option<tokio::sync::oneshot::Sender<bool>>,
+}
+
+#[tracing::instrument(skip(bot))]
+pub fn continuous_action(
+    bot: Arc<telegram::Telegram>,
+    max: usize,
+    chat_id: telegram::ChatID,
+    user: Option<telegram::User>,
+    action: telegram::ChatAction,
+) -> ContinuousAction {
+    use futures::future::FutureExt;
+    use futures_util::stream::StreamExt;
+    use std::time::Duration;
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+
+    tokio::spawn(
+        async move {
+            let chat_action = telegram::SendChatAction { chat_id, action };
+
+            let mut count: usize = 0;
+
+            let timer = Box::pin(
+                tokio::time::interval(Duration::from_secs(5))
+                    .take_while(|_| {
+                        tracing::trace!(count, "evaluating chat action");
+                        count += 1;
+                        futures::future::ready(count < max)
+                    })
+                    .for_each(|_| async {
+                        if let Err(e) = bot.make_request(&chat_action).await {
+                            tracing::warn!("unable to send chat action: {:?}", e);
+                            with_user_scope(user.as_ref(), None, || {
+                                capture_fail(&e);
+                            });
+                        }
+                    }),
+            )
+            .fuse();
+
+            let was_ended = if let futures::future::Either::Right(_) =
+                futures::future::select(timer, rx).await
+            {
+                true
+            } else {
+                false
+            };
+
+            tracing::trace!(count, was_ended, "chat action ended");
+        }
+        .in_current_span(),
+    );
+
+    ContinuousAction { tx: Some(tx) }
+}
+
+impl Drop for ContinuousAction {
+    fn drop(&mut self) {
+        let tx = std::mem::replace(&mut self.tx, None);
+        tx.map(|tx| tx.send(true).unwrap());
     }
 }

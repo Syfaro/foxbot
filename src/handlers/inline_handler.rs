@@ -17,6 +17,7 @@ impl crate::Handler for InlineHandler {
         &self,
         handler: &crate::MessageHandler,
         update: Update,
+        _command: Option<Command>,
     ) -> Result<bool, Box<dyn std::error::Error>> {
         let inline = match update.inline_query {
             Some(inline) => inline,

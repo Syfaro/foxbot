@@ -128,6 +128,7 @@ pub struct Message {
     pub reply_markup: Option<InlineKeyboardMarkup>,
 }
 
+#[derive(Clone, Debug)]
 /// Command represents information obtained from the BotCommand MessageEntity.
 pub struct Command {
     pub name: String,
