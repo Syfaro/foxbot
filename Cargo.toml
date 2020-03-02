@@ -36,6 +36,7 @@ pickledb = "0.4"
 
 telegram = { path = "./telegram", features = ["trace"] }
 fautil = { path = "./fautil", features = ["trace"] }
+cfscrape = { git = "https://git.huefox.com/syfaro/cfscrape-rust.git" }
 
 tracing = "0.1"
 tracing-subscriber = "0.2"

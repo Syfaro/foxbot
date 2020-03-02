@@ -1,6 +1,6 @@
 FROM rustlang/rust:nightly-slim AS builder
 WORKDIR /src
-RUN apt-get update -y && apt-get install pkg-config libssl-dev -y
+RUN apt-get update -y && apt-get install pkg-config libssl-dev python3 python3-dev -y
 COPY . .
 RUN cargo install --root / --path .
 
@@ -10,5 +10,5 @@ EXPOSE 8080
 WORKDIR /app
 COPY --from=builder /src/langs ./langs
 COPY --from=builder /bin/foxbot /bin/foxbot
-RUN apt-get update -y && apt-get install libssl-dev ca-certificates -y
+RUN apt-get update -y && apt-get install libssl-dev ca-certificates python3 python3-pip -y && pip3 install cfscrape
 CMD ["/bin/foxbot"]
