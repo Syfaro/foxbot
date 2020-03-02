@@ -173,7 +173,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "cfscrape"
 version = "0.1.0"
-source = "git+https://git.huefox.com/syfaro/cfscrape-rust.git#781a390c3d5db32f72b1d15e0fbedd02801edb00"
+source = "git+https://git.huefox.com/syfaro/cfscrape-rust.git#631f3a35bd4b9af77916f5cdb9a1b80924efa8fb"
 dependencies = [
  "pyo3 0.9.0-alpha.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
