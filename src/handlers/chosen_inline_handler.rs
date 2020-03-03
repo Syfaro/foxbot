@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use sentry::integrations::failure::capture_fail;
 use telegram::*;
+
 pub struct ChosenInlineHandler;
 
 #[async_trait]
