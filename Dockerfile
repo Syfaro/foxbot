@@ -10,5 +10,5 @@ EXPOSE 8080
 WORKDIR /app
 COPY --from=builder /src/langs ./langs
 COPY --from=builder /bin/foxbot /bin/foxbot
-RUN apt-get update -y && apt-get install libssl-dev ca-certificates python3 python3-pip -y && pip3 install cfscrape
+RUN apt-get update -y && apt-get install libssl-dev ca-certificates python3 python3-pip nodejs -y && pip3 install cfscrape
 CMD ["/bin/foxbot"]
