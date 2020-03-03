@@ -46,6 +46,8 @@ pub enum SiteError {
     Missing(std::option::NoneError),
     #[fail(display = "twitter error")]
     Twitter(egg_mode::error::Error),
+    #[fail(display = "python error")]
+    Python(String),
 }
 
 impl From<reqwest::Error> for SiteError {
@@ -69,6 +71,14 @@ impl From<egg_mode::error::Error> for SiteError {
 impl From<std::option::NoneError> for SiteError {
     fn from(e: std::option::NoneError) -> Self {
         SiteError::Missing(e)
+    }
+}
+
+impl From<cfscrape::Error> for SiteError {
+    fn from(e: cfscrape::Error) -> Self {
+        SiteError::Python(match e {
+            cfscrape::Error::Python(err) => format!("{:?}", err),
+        })
     }
 }
 
@@ -394,7 +404,7 @@ fn get_best_video(media: &egg_mode::entities::MediaEntity) -> Option<&str> {
 }
 
 pub struct FurAffinity {
-    cookies: (String, String),
+    cookies: std::collections::HashMap<String, String>,
     fapi: fautil::FAUtil,
     submission: scraper::Selector,
     client: reqwest::Client,
@@ -402,8 +412,13 @@ pub struct FurAffinity {
 
 impl FurAffinity {
     pub fn new(cookies: (String, String), util_api: String) -> Self {
+        let mut c = std::collections::HashMap::new();
+
+        c.insert("a".into(), cookies.0);
+        c.insert("b".into(), cookies.1);
+
         Self {
-            cookies,
+            cookies: c,
             fapi: fautil::FAUtil::new(util_api),
             submission: scraper::Selector::parse("#submissionImg").unwrap(),
             client: reqwest::Client::new(),
@@ -436,22 +451,46 @@ impl FurAffinity {
         }))
     }
 
-    async fn load_submission(&self, url: &str) -> Result<Option<PostInfo>, SiteError> {
-        let cookies = vec![
-            format!("a={}", self.cookies.0),
-            format!("b={}", self.cookies.1),
-        ]
-        .join("; ");
+    fn stringify_cookies(&self) -> String {
+        let mut cookies = vec![];
+        for (name, value) in &self.cookies {
+            cookies.push(format!("{}={}", name, value));
+        }
+        cookies.join("; ")
+    }
 
+    async fn load_submission(&mut self, url: &str) -> Result<Option<PostInfo>, SiteError> {
         let resp = self
             .client
             .get(url)
-            .header(header::COOKIE, cookies)
+            .header(header::COOKIE, self.stringify_cookies())
             .header(header::USER_AGENT, USER_AGENT)
             .send()
-            .await?
-            .text()
             .await?;
+
+        let resp = if resp.status() == 429 || resp.status() == 503 {
+            let cfscrape::CfscrapeData { cookies, .. } =
+                cfscrape::get_cookie_string(url, Some(USER_AGENT))?;
+            let cookies = cookies.split("; ");
+            for cookie in cookies {
+                let mut parts = cookie.split("=");
+                let name = parts.next().expect("Missing cookie name");
+                let value = parts.next().expect("Missing cookie value");
+
+                self.cookies.insert(name.into(), value.into());
+            }
+
+            self.client
+                .get(url)
+                .header(header::COOKIE, self.stringify_cookies())
+                .header(header::USER_AGENT, USER_AGENT)
+                .send()
+                .await?
+                .text()
+                .await?
+        } else {
+            resp.text().await?
+        };
 
         let body = scraper::Html::parse_document(&resp);
         let img = match body.select(&self.submission).next() {
