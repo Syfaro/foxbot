@@ -217,6 +217,8 @@ async fn main() {
         Box::new(handlers::InlineHandler),
         Box::new(handlers::ChosenInlineHandler),
         Box::new(handlers::ChannelPhotoHandler),
+        Box::new(handlers::GroupAddHandler),
+        Box::new(handlers::PhotoHandler),
     ];
 
     let handler = Arc::new(MessageHandler {
@@ -1301,13 +1303,6 @@ impl MessageHandler {
         //         self.handle_command(message).await;
         //     } else if message.text.is_some() {
         //         self.handle_text(message).await;
-        //     } else if let Some(new_members) = &message.new_chat_members {
-        //         if new_members
-        //             .iter()
-        //             .any(|member| member.id == self.bot_user.id)
-        //         {
-        //             self.handle_welcome(message, "group-add").await;
-        //         }
         //     }
         // }
     }
@@ -1403,148 +1398,6 @@ impl MessageHandler {
         if let Err(e) = self.influx.query(&point).await {
             tracing::error!("unable to send command to InfluxDB: {:?}", e);
             utils::with_user_scope(Some(&user), None, || {
-                capture_fail(&e);
-            });
-        }
-    }
-
-    #[tracing::instrument(skip(self, message))]
-    async fn process_photo(&self, message: Message) {
-        let now = std::time::Instant::now();
-
-        if message.chat.chat_type != ChatType::Private {
-            return;
-        }
-
-        let _action = utils::continuous_action(
-            self.bot.clone(),
-            12,
-            message.chat_id(),
-            message.from.clone(),
-            ChatAction::Typing,
-        );
-
-        let photos = message.photo.clone().unwrap();
-        let best_photo = utils::find_best_photo(&photos).unwrap();
-        let photo = match utils::download_by_id(&self.bot, &best_photo.file_id).await {
-            Ok(photo) => photo,
-            Err(e) => {
-                tracing::error!("unable to download file: {:?}", e);
-                let tags = Some(vec![("command", "photo".to_string())]);
-                self.report_error(&message, tags, || capture_fail(&e)).await;
-                return;
-            }
-        };
-
-        let matches = match self
-            .fapi
-            .image_search(&photo, fautil::MatchType::Close)
-            .await
-        {
-            Ok(matches) if !matches.matches.is_empty() => matches.matches,
-            Ok(_matches) => {
-                let text = self
-                    .get_fluent_bundle(
-                        message.from.clone().unwrap().language_code.as_deref(),
-                        |bundle| utils::get_message(&bundle, "reverse-no-results", None).unwrap(),
-                    )
-                    .await;
-
-                let send_message = SendMessage {
-                    chat_id: message.chat_id(),
-                    text,
-                    reply_to_message_id: Some(message.message_id),
-                    ..Default::default()
-                };
-
-                if let Err(e) = self.bot.make_request(&send_message).await {
-                    tracing::error!("unable to respond to photo: {:?}", e);
-                    utils::with_user_scope(message.from.as_ref(), None, || {
-                        capture_fail(&e);
-                    });
-                }
-
-                let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "source")
-                    .add_field("matches", 0)
-                    .add_field("duration", now.elapsed().as_millis() as i64);
-
-                if let Err(e) = self.influx.query(&point).await {
-                    tracing::error!("unable to send command to InfluxDB: {:?}", e);
-                    utils::with_user_scope(message.from.as_ref(), None, || {
-                        capture_fail(&e);
-                    });
-                }
-
-                return;
-            }
-            Err(e) => {
-                tracing::error!("unable to reverse search image file: {:?}", e);
-                let tags = Some(vec![("command", "photo".to_string())]);
-                self.report_error(&message, tags, || capture_fail(&e)).await;
-                return;
-            }
-        };
-
-        let first = matches.get(0).unwrap();
-        let similar: Vec<&fautil::File> = matches
-            .iter()
-            .skip(1)
-            .take_while(|m| m.distance.unwrap() == first.distance.unwrap())
-            .collect();
-        tracing::debug!("match has distance of {}", first.distance.unwrap());
-
-        let name = if first.distance.unwrap() < 5 {
-            "reverse-good-result"
-        } else {
-            "reverse-bad-result"
-        };
-
-        let mut args = fluent::FluentArgs::new();
-        args.insert(
-            "distance",
-            fluent::FluentValue::from(first.distance.unwrap()),
-        );
-
-        if similar.is_empty() {
-            args.insert("link", fluent::FluentValue::from(first.url()));
-        } else {
-            let mut links = vec![format!("· {}", first.url())];
-            links.extend(similar.iter().map(|s| format!("· {}", s.url())));
-            let mut s = "\n".to_string();
-            s.push_str(&links.join("\n"));
-            args.insert("link", fluent::FluentValue::from(s));
-        }
-
-        let text = self
-            .get_fluent_bundle(
-                message.from.clone().unwrap().language_code.as_deref(),
-                |bundle| utils::get_message(&bundle, name, Some(args)).unwrap(),
-            )
-            .await;
-
-        let send_message = SendMessage {
-            chat_id: message.chat_id(),
-            text,
-            disable_web_page_preview: Some(first.distance.unwrap() > 5),
-            reply_to_message_id: Some(message.message_id),
-            ..Default::default()
-        };
-
-        if let Err(e) = self.bot.make_request(&send_message).await {
-            tracing::error!("unable to respond to photo: {:?}", e);
-            utils::with_user_scope(message.from.as_ref(), None, || {
-                capture_fail(&e);
-            });
-        }
-
-        let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "source")
-            .add_tag("good", first.distance.unwrap() < 5)
-            .add_field("matches", matches.len() as i64)
-            .add_field("duration", now.elapsed().as_millis() as i64);
-
-        if let Err(e) = self.influx.query(&point).await {
-            tracing::error!("unable to send command to InfluxDB: {:?}", e);
-            utils::with_user_scope(message.from.as_ref(), None, || {
                 capture_fail(&e);
             });
         }
