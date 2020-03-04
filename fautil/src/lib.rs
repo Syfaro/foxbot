@@ -113,55 +113,56 @@ impl FAUtil {
         req.send().await?.json().await
     }
 
+    #[cfg(feature = "trace")]
     fn trace_headers(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        if cfg!(feature = "trace") {
-            use opentelemetry::api::{trace::span::Span, HttpTextFormat};
-            let mut headers = std::collections::HashMap::new();
+        use opentelemetry::api::{trace::span::Span, HttpTextFormat};
+        let mut headers = std::collections::HashMap::new();
 
-            let propagator = opentelemetry::api::distributed_context::http_trace_context_propagator::HTTPTraceContextPropagator::new();
+        let propagator = opentelemetry::api::distributed_context::http_trace_context_propagator::HTTPTraceContextPropagator::new();
 
-            let span = tracing::Span::current();
+        let span = tracing::Span::current();
 
-            let context: Option<opentelemetry::api::SpanContext> = span
-                .with_subscriber(|(id, dispatch)| {
-                    use tracing_subscriber::registry::LookupSpan;
+        let context: Option<opentelemetry::api::SpanContext> = span
+            .with_subscriber(|(id, dispatch)| {
+                use tracing_subscriber::registry::LookupSpan;
 
-                    let sub = match dispatch.downcast_ref::<tracing_subscriber::Registry>() {
-                        Some(sub) => sub,
-                        None => return None,
-                    };
+                let sub = match dispatch.downcast_ref::<tracing_subscriber::Registry>() {
+                    Some(sub) => sub,
+                    None => return None,
+                };
 
-                    let span = match sub.span(id) {
-                        Some(span) => span,
-                        None => return None,
-                    };
+                let span = match sub.span(id) {
+                    Some(span) => span,
+                    None => return None,
+                };
 
-                    let context = match span.extensions().get::<opentelemetry::global::BoxedSpan>()
-                    {
-                        Some(boxed) => boxed.get_context(),
-                        None => return None,
-                    };
+                let context = match span.extensions().get::<opentelemetry::global::BoxedSpan>() {
+                    Some(boxed) => boxed.get_context(),
+                    None => return None,
+                };
 
-                    tracing::trace!("passing context to fuzzysearch: {:?}", context);
+                tracing::trace!("passing context to fuzzysearch: {:?}", context);
 
-                    Some(context)
-                })
-                .flatten();
+                Some(context)
+            })
+            .flatten();
 
-            if let Some(context) = context {
-                propagator.inject(context, &mut headers);
-            }
-
-            let mut req = req;
-
-            for (header, value) in headers {
-                req = req.header(header, value);
-            }
-
-            req
-        } else {
-            req
+        if let Some(context) = context {
+            propagator.inject(context, &mut headers);
         }
+
+        let mut req = req;
+
+        for (header, value) in headers {
+            req = req.header(header, value);
+        }
+
+        req
+    }
+
+    #[cfg(not(feature = "trace"))]
+    fn trace_headers(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        req
     }
 }
 
@@ -173,34 +174,38 @@ mod tests {
         FAUtil::new("eluIOaOhIP1RXlgYetkcZCF8la7p3NoCPy8U0i8dKiT4xdIH".to_string())
     }
 
-    #[test]
-    fn test_lookup() {
+    #[tokio::test]
+    async fn test_lookup() {
         let api = get_api();
 
-        let no_filenames = api.lookup_filename("nope");
+        let no_filenames = api.lookup_filename("nope").await;
         println!("{:?}", no_filenames);
 
         assert!(no_filenames.is_ok());
         assert_eq!(no_filenames.unwrap().len(), 0);
     }
 
-    #[test]
-    fn test_image() {
+    #[tokio::test]
+    async fn test_image() {
         let api = get_api();
 
-        let images = api.image_search(
-            vec![
-                0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
-                0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
-                0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78,
-                0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
-                0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
-            ],
-            MatchType::Close,
-        );
+        let images = api
+            .image_search(
+                &vec![
+                    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49,
+                    0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06,
+                    0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44,
+                    0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D,
+                    0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42,
+                    0x60, 0x82,
+                ],
+                MatchType::Exact,
+            )
+            .await;
+
         println!("{:?}", images);
 
         assert!(images.is_ok());
-        assert_eq!(images.unwrap().len(), 10);
+        assert_eq!(images.unwrap().matches.len(), 2);
     }
 }
