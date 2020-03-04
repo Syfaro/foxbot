@@ -48,14 +48,48 @@ static STARTING_ARTWORK: &[&str] = &[
 static L10N_RESOURCES: &[&str] = &["foxbot.ftl"];
 static L10N_LANGS: &[&str] = &["en-US"];
 
+#[derive(serde::Deserialize, Debug, Clone)]
+pub struct Config {
+    // Site config
+    pub fa_a: String,
+    pub fa_b: String,
+    pub weasyl_apitoken: String,
+
+    // Twitter config
+    pub twitter_consumer_key: String,
+    pub twitter_consumer_secret: String,
+    pub twitter_database: String,
+
+    // InfluxDB config
+    influx_host: String,
+    influx_db: String,
+    influx_user: String,
+    influx_pass: String,
+
+    // Logging
+    jaeger_collector: Option<String>,
+    sentry_dsn: Option<String>,
+
+    // Telegram config
+    telegram_apitoken: String,
+    pub use_webhooks: Option<bool>,
+    pub webhook_endpoint: Option<String>,
+    pub http_host: Option<String>,
+    http_secret: Option<String>,
+
+    // Others
+    pub fautil_apitoken: String,
+    pub use_proxy: Option<bool>,
+}
+
 // MARK: Initialization
 
 /// Configure tracing with Jaeger.
-fn configure_tracing() {
+fn configure_tracing(collector: String) {
     use opentelemetry::{
         api::{KeyValue, Provider, Sampler},
         exporter::trace::jaeger,
-        sdk::Config,
+        sdk::Config as TelemConfig,
     };
     use std::net::ToSocketAddrs;
     use tracing_subscriber::layer::SubscriberExt;
@@ -66,8 +100,7 @@ fn configure_tracing() {
         "release"
     };
 
-    let addr = std::env::var("JAEGER_COLLECTOR")
-        .expect("Missing JAEGER_COLLECTOR")
+    let addr = collector
         .to_socket_addrs()
         .expect("Unable to resolve JAEGER_COLLECTOR")
         .next()
@@ -86,7 +119,7 @@ fn configure_tracing() {
 
     let provider = opentelemetry::sdk::Provider::builder()
         .with_exporter(exporter)
-        .with_config(Config {
+        .with_config(TelemConfig {
             default_sampler: Sampler::Always,
             ..Default::default()
         })
@@ -113,64 +146,53 @@ async fn main() {
 
     pretty_env_logger::init();
 
-    configure_tracing();
+    let config = match envy::from_env::<Config>() {
+        Ok(config) => config,
+        Err(err) => panic!("{:#?}", err),
+    };
 
-    let (fa_a, fa_b) = (
-        std::env::var("FA_A").expect("Missing FA token a"),
-        std::env::var("FA_B").expect("Missing FA token b"),
-    );
+    let jaeger_collector = match &config.jaeger_collector {
+        Some(collector) => collector.to_owned(),
+        _ => panic!("Missing JAEGER_COLLECTOR"),
+    };
 
-    let (consumer_key, consumer_secret) = (
-        std::env::var("TWITTER_CONSUMER_KEY").expect("Missing Twitter consumer key"),
-        std::env::var("TWITTER_CONSUMER_SECRET").expect("Missing Twitter consumer secret"),
-    );
+    configure_tracing(jaeger_collector);
 
-    let db_path = std::env::var("TWITTER_DATABASE").expect("Missing Twitter database path");
     let db = PickleDb::load(
-        db_path.clone(),
+        config.twitter_database.clone(),
         PickleDbDumpPolicy::AutoDump,
         SerializationMethod::Json,
     )
     .unwrap_or_else(|_| {
         PickleDb::new(
-            db_path,
+            config.twitter_database.clone(),
             PickleDbDumpPolicy::AutoDump,
             SerializationMethod::Json,
         )
     });
 
-    let fa_util_api = std::env::var("FAUTIL_APITOKEN").expect("Missing FA Utility API token");
-    let fapi = Arc::new(fautil::FAUtil::new(fa_util_api.clone()));
+    let fapi = Arc::new(fautil::FAUtil::new(config.fautil_apitoken.clone()));
 
     let sites: Vec<BoxedSite> = vec![
         Box::new(sites::E621::new()),
-        Box::new(sites::FurAffinity::new((fa_a, fa_b), fa_util_api)),
-        Box::new(sites::Weasyl::new(
-            std::env::var("WEASYL_APITOKEN").expect("Missing Weasyl API token"),
+        Box::new(sites::FurAffinity::new(
+            (config.fa_a.clone(), config.fa_b.clone()),
+            config.fautil_apitoken.clone(),
         )),
+        Box::new(sites::Weasyl::new(config.weasyl_apitoken.clone())),
         Box::new(sites::Twitter::new(
-            consumer_key.clone(),
-            consumer_secret.clone(),
+            config.twitter_consumer_key.clone(),
+            config.twitter_consumer_secret.clone(),
+            config.twitter_database.clone(),
         )),
         Box::new(sites::Mastodon::new()),
         Box::new(sites::Direct::new(fapi.clone())),
     ];
 
-    let bot = Arc::new(Telegram::new(
-        std::env::var("TELEGRAM_APITOKEN").expect("Missing Telegram API token"),
-    ));
+    let bot = Arc::new(Telegram::new(config.telegram_apitoken.clone()));
 
-    let (influx_host, influx_db) = (
-        std::env::var("INFLUX_HOST").expect("Missing InfluxDB host"),
-        std::env::var("INFLUX_DB").expect("Missing InfluxDB database"),
-    );
-
-    let (influx_user, influx_pass) = (
-        std::env::var("INFLUX_USER").expect("Missing InfluxDB user"),
-        std::env::var("INFLUX_PASS").expect("Missing InfluxDB password"),
-    );
-
-    let influx = influxdb::Client::new(influx_host, influx_db).with_auth(influx_user, influx_pass);
+    let influx = influxdb::Client::new(config.influx_host.clone(), config.influx_db.clone())
+        .with_auth(config.influx_user.clone(), config.influx_pass.clone());
 
     let mut finder = linkify::LinkFinder::new();
     finder.kinds(&[linkify::LinkKind::Url]);
@@ -202,11 +224,6 @@ async fn main() {
         langs.insert(langid, lang_resources);
     }
 
-    let use_proxy = std::env::var("USE_PROXY")
-        .unwrap_or_else(|_| "false".into())
-        .parse()
-        .unwrap_or(false);
-
     let bot_user = bot
         .make_request(&GetMe)
         .await
@@ -227,6 +244,7 @@ async fn main() {
         langs,
         best_lang: RwLock::new(HashMap::new()),
         handlers,
+        config: config.clone(),
 
         bot: bot.clone(),
         fapi,
@@ -234,27 +252,23 @@ async fn main() {
         finder,
 
         sites: Mutex::new(sites),
-        consumer_key,
-        consumer_secret,
-        use_proxy,
-
         db: RwLock::new(db),
     });
 
-    let use_webhooks: bool = std::env::var("USE_WEBHOOKS")
-        .unwrap_or_else(|_| "false".to_string())
-        .parse()
-        .unwrap_or(false);
-
-    let _guard = if let Ok(dsn) = std::env::var("SENTRY_DSN") {
+    let _guard = if let Some(dsn) = config.sentry_dsn {
         sentry::integrations::panic::register_panic_handler();
         Some(sentry::init(dsn))
     } else {
         None
     };
 
+    let use_webhooks = match config.use_webhooks {
+        Some(use_webhooks) if use_webhooks => true,
+        _ => false,
+    };
+
     if use_webhooks {
-        let webhook_endpoint = std::env::var("WEBHOOK_ENDPOINT").expect("Missing WEBHOOK_ENDPOINT");
+        let webhook_endpoint = config.webhook_endpoint.expect("Missing WEBHOOK_ENDPOINT");
         let set_webhook = SetWebhook {
             url: webhook_endpoint,
         };
@@ -262,9 +276,14 @@ async fn main() {
             capture_fail(&e);
             tracing::error!("unable to set webhook: {:?}", e);
         }
-        receive_webhook(handler).await;
+        receive_webhook(
+            config.http_host.expect("Missing HTTP_HOST"),
+            config.http_secret.expect("Missing HTTP_SECRET"),
+            handler,
+        )
+        .await;
     } else {
-        let delete_webhook = DeleteWebhook {};
+        let delete_webhook = DeleteWebhook;
         if let Err(e) = bot.make_request(&delete_webhook).await {
             capture_fail(&e);
             tracing::error!("unable to clear webhook: {:?}", e);
@@ -335,11 +354,8 @@ async fn handle_request(
 }
 
 /// Start a web server to handle webhooks and pass updates to [handle_request].
-async fn receive_webhook(handler: Arc<MessageHandler>) {
-    let host = std::env::var("HTTP_HOST").expect("Missing HTTP_HOST");
+async fn receive_webhook(host: String, secret: String, handler: Arc<MessageHandler>) {
     let addr = host.parse().expect("Invalid HTTP_HOST");
-
-    let secret = std::env::var("HTTP_SECRET").expect("Missing HTTP_SECRET");
 
     let secret_path = format!("/{}", secret);
     let secret_path: &'static str = Box::leak(secret_path.into_boxed_str());
@@ -410,9 +426,7 @@ pub struct MessageHandler {
 
     // Configuration
     pub sites: Mutex<Vec<BoxedSite>>, // We always need mutable access, no reason to use a RwLock
-    pub consumer_key: String,
-    pub consumer_secret: String,
-    pub use_proxy: bool,
+    pub config: Config,
 
     // Storage
     pub db: RwLock<pickledb::PickleDb>,

@@ -614,7 +614,7 @@ impl TelegramRequest for AnswerCallbackQuery {
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum MessageOrBool {
-    Message(Message),
+    Message(Box<Message>),
     Bool(bool),
 }
 

@@ -62,8 +62,6 @@ impl crate::Handler for ChannelPhotoHandler {
             }
         }
 
-        // TODO: this should cache file ID -> hash and their lookups.
-
         // Find the highest resolution size of the image and download.
         let best_photo = find_best_photo(&sizes).unwrap();
         let bytes = download_by_id(&handler.bot, &best_photo.file_id)

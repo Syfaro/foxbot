@@ -447,6 +447,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "envy"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "serde 1.0.104 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "error-chain"
 version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -567,6 +575,7 @@ dependencies = [
  "async-trait 0.1.24 (registry+https://github.com/rust-lang/crates.io-index)",
  "cfscrape 0.1.0 (git+https://git.huefox.com/syfaro/cfscrape-rust.git)",
  "egg-mode 0.13.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "envy 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "failure 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "fautil 0.1.0",
  "fluent 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -3083,6 +3092,7 @@ dependencies = [
 "checksum encoding_rs 0.8.22 (registry+https://github.com/rust-lang/crates.io-index)" = "cd8d03faa7fe0c1431609dfad7bbe827af30f82e1e2ae6f7ee4fca6bd764bc28"
 "checksum env_logger 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)" = "aafcde04e90a5226a6443b7aabdb016ba2f8307c847d524724bd9b346dd1a2d3"
 "checksum env_logger 0.7.1 (registry+https://github.com/rust-lang/crates.io-index)" = "44533bbbb3bb3c1fa17d9f2e4e38bbbaf8396ba82193c4cb1b6445d711445d36"
+"checksum envy 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)" = "f938a4abd5b75fe3737902dbc2e79ca142cc1526827a9e40b829a086758531a9"
 "checksum error-chain 0.12.2 (registry+https://github.com/rust-lang/crates.io-index)" = "d371106cc88ffdfb1eabd7111e432da544f16f3e2d7bf1dfe8bf575f1df045cd"
 "checksum failure 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)" = "f8273f13c977665c5db7eb2b99ae520952fe5ac831ae4cd09d80c4c7042b5ed9"
 "checksum failure_derive 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)" = "0bc225b78e0391e4b8683440bf2e63c2deeeb2ce5189eab46e2b68c6d3725d08"

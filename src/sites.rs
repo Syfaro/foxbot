@@ -277,10 +277,11 @@ pub struct Twitter {
     matcher: regex::Regex,
     consumer: egg_mode::KeyPair,
     token: egg_mode::Token,
+    database: String,
 }
 
 impl Twitter {
-    pub fn new(consumer_key: String, consumer_secret: String) -> Self {
+    pub fn new(consumer_key: String, consumer_secret: String, database: String) -> Self {
         use egg_mode::KeyPair;
 
         let consumer = KeyPair::new(consumer_key, consumer_secret);
@@ -293,6 +294,7 @@ impl Twitter {
             .unwrap(),
             consumer,
             token,
+            database,
         }
     }
 }
@@ -322,15 +324,14 @@ impl Site for Twitter {
             &format!("credentials:{}", user_id)
         );
 
-        let db_path = std::env::var("TWITTER_DATABASE").expect("Missing Twitter database path");
         let db = PickleDb::load(
-            db_path.clone(),
+            self.database.clone(),
             PickleDbDumpPolicy::AutoDump,
             SerializationMethod::Json,
         )
         .unwrap_or_else(|_| {
             PickleDb::new(
-                db_path,
+                self.database.clone(),
                 PickleDbDumpPolicy::AutoDump,
                 SerializationMethod::Json,
             )
@@ -372,7 +373,6 @@ impl Site for Twitter {
                         personal: user.protected,
                         title: Some(user.screen_name.clone()),
                         extra_caption: Some(text.clone()),
-                        ..Default::default()
                     },
                     None => PostInfo {
                         file_type: get_file_ext(&item.media_url_https).unwrap().to_owned(),
@@ -473,7 +473,7 @@ impl FurAffinity {
                 cfscrape::get_cookie_string(url, Some(USER_AGENT))?;
             let cookies = cookies.split("; ");
             for cookie in cookies {
-                let mut parts = cookie.split("=");
+                let mut parts = cookie.split('=');
                 let name = parts.next().expect("Missing cookie name");
                 let value = parts.next().expect("Missing cookie value");
 

@@ -221,7 +221,7 @@ pub struct ContinuousAction {
     tx: Option<tokio::sync::oneshot::Sender<bool>>,
 }
 
-#[tracing::instrument(skip(bot))]
+#[tracing::instrument(skip(bot, user))]
 pub fn continuous_action(
     bot: Arc<telegram::Telegram>,
     max: usize,
@@ -278,6 +278,8 @@ pub fn continuous_action(
 impl Drop for ContinuousAction {
     fn drop(&mut self) {
         let tx = std::mem::replace(&mut self.tx, None);
-        tx.map(|tx| tx.send(true).unwrap());
+        if let Some(tx) = tx {
+            tx.send(true).unwrap();
+        }
     }
 }

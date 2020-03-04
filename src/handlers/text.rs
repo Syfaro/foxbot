@@ -53,8 +53,8 @@ impl crate::Handler for TextHandler {
 
         let request_token = egg_mode::KeyPair::new(data.0, data.1);
         let con_token = egg_mode::KeyPair::new(
-            handler.consumer_key.clone(),
-            handler.consumer_secret.clone(),
+            handler.config.twitter_consumer_key.clone(),
+            handler.config.twitter_consumer_secret.clone(),
         );
 
         let token = match block_on_all(egg_mode::access_token(con_token, &request_token, text)) {

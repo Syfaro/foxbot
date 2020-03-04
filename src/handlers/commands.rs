@@ -87,8 +87,8 @@ impl CommandHandler {
         let user = message.from.clone().unwrap();
 
         let con_token = egg_mode::KeyPair::new(
-            handler.consumer_key.clone(),
-            handler.consumer_secret.clone(),
+            handler.config.twitter_consumer_key.clone(),
+            handler.config.twitter_consumer_secret.clone(),
         );
 
         let request_token = match block_on_all(egg_mode::request_token(&con_token, "oob")) {
@@ -236,7 +236,6 @@ impl CommandHandler {
                     },
                     video: FileType::URL(result.url.clone()),
                     reply_to_message_id: Some(message.message_id),
-                    ..Default::default()
                 };
 
                 if let Err(e) = handler.bot.make_request(&video).await {

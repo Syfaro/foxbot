@@ -153,13 +153,13 @@ async fn process_result(
             &result,
             thumb_url,
             &keyboard,
-            handler.use_proxy,
+            handler.config.use_proxy.unwrap_or(false),
         )),
         "gif" => Some(build_gif_result(
             &result,
             thumb_url,
             &keyboard,
-            handler.use_proxy,
+            handler.config.use_proxy.unwrap_or(false),
         )),
         other => {
             log::warn!("Got unusable type: {}", other);
