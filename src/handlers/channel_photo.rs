@@ -23,6 +23,16 @@ impl crate::Handler for ChannelPhotoHandler {
             _ => return Ok(false),
         };
 
+        // We only want messages from channels.
+        if message.chat.chat_type != ChatType::Channel {
+            return Ok(false);
+        }
+
+        let sizes = match &message.photo {
+            Some(sizes) => sizes,
+            _ => return Ok(false),
+        };
+
         // We can't edit forwarded messages, so we have to ignore.
         if message.forward_date.is_some() {
             return Ok(true);
@@ -55,7 +65,6 @@ impl crate::Handler for ChannelPhotoHandler {
         // TODO: this should cache file ID -> hash and their lookups.
 
         // Find the highest resolution size of the image and download.
-        let sizes = message.photo.clone().unwrap();
         let best_photo = find_best_photo(&sizes).unwrap();
         let bytes = download_by_id(&handler.bot, &best_photo.file_id)
             .await

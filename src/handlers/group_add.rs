@@ -22,7 +22,7 @@ impl crate::Handler for GroupAddHandler {
 
         let new_members = match &message.new_chat_members {
             Some(members) => members,
-            _ => return Ok(true),
+            _ => return Ok(false),
         };
 
         if new_members

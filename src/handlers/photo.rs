@@ -25,6 +25,11 @@ impl crate::Handler for PhotoHandler {
             _ => return Ok(false),
         };
 
+        let photos = match &message.photo {
+            Some(photos) => photos,
+            _ => return Ok(false),
+        };
+
         let now = std::time::Instant::now();
 
         if message.chat.chat_type != ChatType::Private {
@@ -39,7 +44,6 @@ impl crate::Handler for PhotoHandler {
             ChatAction::Typing,
         );
 
-        let photos = message.photo.clone().unwrap();
         let best_photo = find_best_photo(&photos).unwrap();
         let photo = match download_by_id(&handler.bot, &best_photo.file_id).await {
             Ok(photo) => photo,
