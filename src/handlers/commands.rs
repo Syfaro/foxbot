@@ -75,6 +75,8 @@ impl crate::Handler for CommandHandler {
 
 impl CommandHandler {
     async fn authenticate_twitter(&self, handler: &crate::MessageHandler, message: Message) {
+        use quaint::prelude::*;
+
         let now = std::time::Instant::now();
 
         if message.chat.chat_type != ChatType::Private {
@@ -112,30 +114,23 @@ impl CommandHandler {
             }
         };
 
-        {
-            let mut lock = handler.db.write().await;
+        let conn = handler.conn.check_out().await.expect("Unable to get conn");
 
-            if let Err(e) = lock.set(
-                &format!("authenticate:{}", user.id),
-                &(request_token.key.clone(), request_token.secret.clone()),
-            ) {
-                tracing::warn!("unable to save authenticate: {:?}", e);
+        conn.delete(Delete::from_table("twitter_auth").so_that("user_id".equals(user.id)))
+            .await
+            .expect("Unable to remove auth keys");
 
-                handler
-                    .report_error(
-                        &message,
-                        Some(vec![("command", "twitter".to_string())]),
-                        || {
-                            sentry::integrations::failure::capture_error(&format_err!(
-                                "Unable to save to Twitter database: {}",
-                                e
-                            ))
-                        },
-                    )
-                    .await;
-                return;
-            }
-        }
+        conn.insert(
+            Insert::single_into("twitter_auth")
+                .value("user_id", user.id)
+                .value("request_key", request_token.key.to_string())
+                .value("request_secret", request_token.secret.to_string())
+                .build(),
+        )
+        .await
+        .expect("Unable to insert request info");
+
+        drop(conn);
 
         let url = egg_mode::authorize_url(&request_token);
 

@@ -33,7 +33,6 @@ tokio = { version = "0.2", features = ["macros", "time", "stream", "sync"] }
 futures = "0.3"
 futures-util = "0.3"
 tokio01 = { version = "0.1", package = "tokio" }
-pickledb = "0.4"
 
 telegram = { path = "./telegram", features = ["trace"] }
 fautil = { path = "./fautil", features = ["trace"] }
@@ -44,3 +43,8 @@ tracing-subscriber = "0.2"
 tracing-futures = "0.2"
 opentelemetry = "0.1"
 tracing-opentelemetry = "0.1"
+
+rusqlite = { version = "0.21", features = ["bundled"] }
+refinery = { version = "0.2", features = ["rusqlite"] }
+barrel = { version = "0.6", features = ["sqlite3"] }
+quaint = { path = "./quaint", features = ["full-sqlite"] }

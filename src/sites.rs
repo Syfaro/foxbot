@@ -277,11 +277,15 @@ pub struct Twitter {
     matcher: regex::Regex,
     consumer: egg_mode::KeyPair,
     token: egg_mode::Token,
-    database: String,
+    conn: quaint::pooled::Quaint,
 }
 
 impl Twitter {
-    pub fn new(consumer_key: String, consumer_secret: String, database: String) -> Self {
+    pub fn new(
+        consumer_key: String,
+        consumer_secret: String,
+        conn: quaint::pooled::Quaint,
+    ) -> Self {
         use egg_mode::KeyPair;
 
         let consumer = KeyPair::new(consumer_key, consumer_secret);
@@ -294,7 +298,7 @@ impl Twitter {
             .unwrap(),
             consumer,
             token,
-            database,
+            conn,
         }
     }
 }
@@ -314,35 +318,31 @@ impl Site for Twitter {
         user_id: i32,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, SiteError> {
-        use pickledb::{PickleDb, PickleDbDumpPolicy, SerializationMethod};
+        use quaint::prelude::*;
 
         let captures = self.matcher.captures(url).unwrap();
         let id = captures["id"].to_owned().parse::<u64>().unwrap();
 
-        tracing::trace!(
-            "attempting to find saved credentials for {}",
-            &format!("credentials:{}", user_id)
-        );
+        tracing::trace!(user_id, "attempting to find saved credentials",);
 
-        let db = PickleDb::load(
-            self.database.clone(),
-            PickleDbDumpPolicy::AutoDump,
-            SerializationMethod::Json,
-        )
-        .unwrap_or_else(|_| {
-            PickleDb::new(
-                self.database.clone(),
-                PickleDbDumpPolicy::AutoDump,
-                SerializationMethod::Json,
+        let conn = self.conn.check_out().await.expect("Unable to get db conn");
+        let result = conn
+            .select(
+                Select::from_table("twitter_account")
+                    .column("consumer_key")
+                    .column("consumer_secret")
+                    .so_that("user_id".equals(user_id)),
             )
-        });
+            .await
+            .expect("Unable to query db");
 
-        let saved: Option<(String, String)> = db.get(&format!("credentials:{}", user_id));
-        tracing::debug!("user saved Twitter credentials: {:?}", saved);
-        let token = match saved {
-            Some(token) => egg_mode::Token::Access {
+        let token = match result.first() {
+            Some(result) => egg_mode::Token::Access {
                 consumer: self.consumer.clone(),
-                access: egg_mode::KeyPair::new(token.0, token.1),
+                access: egg_mode::KeyPair::new(
+                    result["consumer_key"].to_string().unwrap(),
+                    result["consumer_secret"].to_string().unwrap(),
+                ),
             },
             _ => self.token.clone(),
         };

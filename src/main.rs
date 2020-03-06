@@ -14,6 +14,7 @@ use unic_langid::LanguageIdentifier;
 extern crate failure;
 
 mod handlers;
+mod migrations;
 mod sites;
 mod utils;
 
@@ -58,7 +59,6 @@ pub struct Config {
     // Twitter config
     pub twitter_consumer_key: String,
     pub twitter_consumer_secret: String,
-    pub twitter_database: String,
 
     // InfluxDB config
     influx_host: String,
@@ -80,6 +80,7 @@ pub struct Config {
     // Others
     pub fautil_apitoken: String,
     pub use_proxy: Option<bool>,
+    pub database: String,
 }
 
 // MARK: Initialization
@@ -140,10 +141,16 @@ fn configure_tracing(collector: String) {
         .expect("Unable to set default tracing subscriber");
 }
 
+async fn run_migrations(database: &str) {
+    let mut conn = rusqlite::Connection::open(database).expect("Unable to open database");
+
+    migrations::runner()
+        .run(&mut conn)
+        .expect("Unable to migrate database");
+}
+
 #[tokio::main]
 async fn main() {
-    use pickledb::{PickleDb, PickleDbDumpPolicy, SerializationMethod};
-
     pretty_env_logger::init();
 
     let config = match envy::from_env::<Config>() {
@@ -158,18 +165,11 @@ async fn main() {
 
     configure_tracing(jaeger_collector);
 
-    let db = PickleDb::load(
-        config.twitter_database.clone(),
-        PickleDbDumpPolicy::AutoDump,
-        SerializationMethod::Json,
-    )
-    .unwrap_or_else(|_| {
-        PickleDb::new(
-            config.twitter_database.clone(),
-            PickleDbDumpPolicy::AutoDump,
-            SerializationMethod::Json,
-        )
-    });
+    run_migrations(&config.database).await;
+
+    let pool = quaint::pooled::Quaint::new(&format!("file:test.db"))
+        .await
+        .expect("Unable to connect to database");
 
     let fapi = Arc::new(fautil::FAUtil::new(config.fautil_apitoken.clone()));
 
@@ -183,7 +183,7 @@ async fn main() {
         Box::new(sites::Twitter::new(
             config.twitter_consumer_key.clone(),
             config.twitter_consumer_secret.clone(),
-            config.twitter_database.clone(),
+            pool.clone(),
         )),
         Box::new(sites::Mastodon::new()),
         Box::new(sites::Direct::new(fapi.clone())),
@@ -252,7 +252,7 @@ async fn main() {
         finder,
 
         sites: Mutex::new(sites),
-        db: RwLock::new(db),
+        conn: pool,
     });
 
     let _guard = if let Some(dsn) = config.sentry_dsn {
@@ -429,7 +429,7 @@ pub struct MessageHandler {
     pub config: Config,
 
     // Storage
-    pub db: RwLock<pickledb::PickleDb>,
+    pub conn: quaint::pooled::Quaint,
 }
 
 #[async_trait]

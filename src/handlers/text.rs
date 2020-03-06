@@ -19,6 +19,8 @@ impl crate::Handler for TextHandler {
         update: Update,
         _command: Option<Command>,
     ) -> Result<bool, Box<dyn std::error::Error>> {
+        use quaint::prelude::*;
+
         let message = match update.message {
             Some(message) => message,
             _ => return Ok(false),
@@ -40,18 +42,33 @@ impl crate::Handler for TextHandler {
 
         tracing::trace!("checking if message was Twitter code");
 
-        let data: (String, String) = {
-            let lock = handler.db.read().await;
+        let conn = handler
+            .conn
+            .check_out()
+            .await
+            .expect("Unable to get db conn");
+        let result = conn
+            .select(
+                Select::from_table("twitter_auth")
+                    .column("request_key")
+                    .column("request_secret")
+                    .so_that("user_id".equals(from.id)),
+            )
+            .await
+            .expect("Unable to query db");
 
-            match lock.get(&format!("authenticate:{}", from.id)) {
-                Some(data) => data,
-                None => return Ok(true),
-            }
+        let row = match result.first() {
+            Some(row) => row,
+            _ => return Ok(true),
         };
 
         tracing::trace!("we had waiting Twitter code");
 
-        let request_token = egg_mode::KeyPair::new(data.0, data.1);
+        let request_token = egg_mode::KeyPair::new(
+            row["request_key"].to_string().unwrap(),
+            row["request_secret"].to_string().unwrap(),
+        );
+
         let con_token = egg_mode::KeyPair::new(
             handler.config.twitter_consumer_key.clone(),
             handler.config.twitter_consumer_secret.clone(),
@@ -82,30 +99,23 @@ impl crate::Handler for TextHandler {
 
         tracing::trace!("got access token");
 
-        {
-            let mut lock = handler.db.write().await;
+        conn.delete(Delete::from_table("twitter_account").so_that("user_id".equals(from.id)))
+            .await
+            .expect("Unable to remove auth keys");
 
-            if let Err(e) = lock.set(
-                &format!("credentials:{}", from.id),
-                &(access.key, access.secret),
-            ) {
-                tracing::warn!("unable to save user credentials: {:?}", e);
+        conn.insert(
+            Insert::single_into("twitter_account")
+                .value("user_id", from.id)
+                .value("consumer_key", access.key.to_string())
+                .value("consumer_secret", access.secret.to_string())
+                .build(),
+        )
+        .await
+        .expect("Unable to insert credential info");
 
-                handler
-                    .report_error(
-                        &message,
-                        Some(vec![("command", "twitter_auth".to_string())]),
-                        || {
-                            sentry::integrations::failure::capture_error(&format_err!(
-                                "Unable to save to Twitter database: {}",
-                                e
-                            ))
-                        },
-                    )
-                    .await;
-                return Ok(true);
-            }
-        }
+        conn.delete(Delete::from_table("twitter_auth").so_that("user_id".equals(from.id)))
+            .await
+            .expect("Unable to remove auth keys");
 
         let mut args = fluent::FluentArgs::new();
         args.insert("userName", fluent::FluentValue::from(token.2));
