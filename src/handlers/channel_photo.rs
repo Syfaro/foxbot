@@ -18,7 +18,7 @@ impl crate::Handler for ChannelPhotoHandler {
         update: Update,
         _command: Option<Command>,
     ) -> Result<bool, Box<dyn std::error::Error>> {
-        let message = match update.message {
+        let message = match update.channel_post {
             Some(message) => message,
             _ => return Ok(false),
         };
