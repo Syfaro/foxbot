@@ -1,10 +1,12 @@
+use super::Status::*;
+use crate::needs_message;
 use async_trait::async_trait;
 use telegram::*;
 
 pub struct GroupAddHandler;
 
 #[async_trait]
-impl crate::Handler for GroupAddHandler {
+impl super::Handler for GroupAddHandler {
     fn name(&self) -> &'static str {
         "group"
     }
@@ -14,15 +16,12 @@ impl crate::Handler for GroupAddHandler {
         handler: &crate::MessageHandler,
         update: Update,
         _command: Option<Command>,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
-        let message = match update.message {
-            Some(message) => message,
-            _ => return Ok(false),
-        };
+    ) -> Result<super::Status, failure::Error> {
+        let message = needs_message!(update);
 
         let new_members = match &message.new_chat_members {
             Some(members) => members,
-            _ => return Ok(false),
+            _ => return Ok(Ignored),
         };
 
         if new_members
@@ -32,6 +31,6 @@ impl crate::Handler for GroupAddHandler {
             handler.handle_welcome(message, "group-add").await;
         }
 
-        Ok(true)
+        Ok(Completed)
     }
 }

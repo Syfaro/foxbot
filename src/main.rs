@@ -1,7 +1,6 @@
 #![feature(try_trait)]
 
-use async_trait::async_trait;
-use sentry::integrations::failure::capture_fail;
+use sentry::integrations::failure::{capture_error, capture_fail};
 use sites::{PostInfo, Site};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -20,7 +19,7 @@ mod utils;
 // MARK: Statics and types
 
 type BoxedSite = Box<dyn Site + Send + Sync>;
-type BoxedHandler = Box<dyn Handler + Send + Sync>;
+type BoxedHandler = Box<dyn handlers::Handler + Send + Sync>;
 
 /// Generates a random 24 character alphanumeric string.
 ///
@@ -432,23 +431,6 @@ pub struct MessageHandler {
     pub db: RwLock<pickledb::PickleDb>,
 }
 
-#[async_trait]
-pub trait Handler: Send + Sync {
-    /// Name of the handler, for debugging/logging uses.
-    fn name(&self) -> &'static str;
-
-    /// Method called for every update received.
-    ///
-    /// Returns if the update should be absorbed and not passed to the next handler.
-    /// Errors are logged to log::error and reported to Sentry, if enabled.
-    async fn handle(
-        &self,
-        handler: &MessageHandler,
-        update: Update,
-        command: Option<Command>,
-    ) -> Result<bool, Box<dyn std::error::Error>>;
-}
-
 impl MessageHandler {
     #[tracing::instrument(skip(self, callback))]
     async fn get_fluent_bundle<C, R>(&self, requested: Option<&str>, callback: C) -> R
@@ -642,17 +624,28 @@ impl MessageHandler {
 
     #[tracing::instrument(skip(self, update))]
     async fn handle_update(&self, update: Update) {
+        let user = update.clone().message.and_then(|message| message.from);
+
         for handler in &self.handlers {
             let command = update
                 .message
                 .as_ref()
                 .and_then(|message| message.get_command());
 
-            tracing::trace!("running handler {}", handler.name());
+            tracing::trace!(handler = handler.name(), "running handler");
 
             match handler.handle(&self, update.clone(), command.clone()).await {
-                Ok(absorb) if absorb => break,
-                Err(e) => log::error!("Error handling update: {:#?}", e), // Should this break?
+                Ok(status) if status == handlers::Status::Completed => break,
+                Err(e) => {
+                    log::error!("Error handling update: {:#?}", e);
+                    utils::with_user_scope(
+                        user.as_ref(),
+                        Some(vec![("handler", handler.name().to_string())]),
+                        || {
+                            capture_error(&e);
+                        },
+                    );
+                }
                 _ => (),
             }
         }

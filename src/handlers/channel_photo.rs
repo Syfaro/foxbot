@@ -1,13 +1,20 @@
 use async_trait::async_trait;
-use sentry::integrations::failure::capture_fail;
 use telegram::*;
 
-use crate::utils::{download_by_id, find_best_photo, get_message, with_user_scope};
+use super::Status::*;
+use crate::utils::{download_by_id, find_best_photo, get_message};
+use crate::{needs_field, needs_message};
+
+// TODO: Configuration options
+// It should be possible to:
+// * Link to multiple sources (change button to source name)
+// * Edit messages with artist names
+// * Configure localization for channel
 
 pub struct ChannelPhotoHandler;
 
 #[async_trait]
-impl crate::Handler for ChannelPhotoHandler {
+impl super::Handler for ChannelPhotoHandler {
     fn name(&self) -> &'static str {
         "channel"
     }
@@ -17,72 +24,30 @@ impl crate::Handler for ChannelPhotoHandler {
         handler: &crate::MessageHandler,
         update: Update,
         _command: Option<Command>,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
-        let message = match update.channel_post {
-            Some(message) => message,
-            _ => return Ok(false),
-        };
+    ) -> Result<super::Status, failure::Error> {
+        // Ensure we have a channel_post Message and a photo within.
+        let message = needs_message!(update, channel_post);
+        let sizes = needs_field!(&message, photo);
 
-        // We only want messages from channels.
+        // We only want messages from channels. I think this is always true
+        // because this came from a channel_post.
         if message.chat.chat_type != ChatType::Channel {
-            return Ok(false);
+            return Ok(Ignored);
         }
-
-        let sizes = match &message.photo {
-            Some(sizes) => sizes,
-            _ => return Ok(false),
-        };
 
         // We can't edit forwarded messages, so we have to ignore.
         if message.forward_date.is_some() {
-            return Ok(true);
+            return Ok(Completed);
         }
 
-        // Collect all the links in the message to see if there was a source.
-        let mut links = vec![];
-
-        // Unlikely to be text posts here, but we'll consider anyway.
-        if let Some(ref text) = message.text {
-            links.extend(handler.finder.links(&text));
-        }
-
-        // Links could be in an image caption.
-        if let Some(ref caption) = message.caption {
-            links.extend(handler.finder.links(&caption));
-        }
-
-        // See if it was posted with a bot that included an inline keyboard.
-        if let Some(ref markup) = message.reply_markup {
-            for row in &markup.inline_keyboard {
-                for button in row {
-                    if let Some(url) = &button.url {
-                        links.extend(handler.finder.links(&url));
-                    }
-                }
-            }
-        }
-
-        // Find the highest resolution size of the image and download.
-        let best_photo = find_best_photo(&sizes).unwrap();
-        let bytes = download_by_id(&handler.bot, &best_photo.file_id)
-            .await
-            .unwrap();
-
-        // Check if we had any matches.
-        let matches = match handler
-            .fapi
-            .image_search(&bytes, fautil::MatchType::Close)
-            .await
-        {
-            Ok(matches) if !matches.matches.is_empty() => matches.matches,
-            _ => return Ok(true),
+        let first = match get_matches(&handler.bot, &handler.fapi, &sizes).await? {
+            Some(first) => first,
+            _ => return Ok(Completed),
         };
 
-        // We know it's not empty, so get the first item and assert it's a
-        // comfortable distance to be identical.
-        let first = matches.first().unwrap();
-        if first.distance.unwrap() > 2 {
-            return Ok(true);
+        // If this link was already in the message, we can ignore it.
+        if link_was_seen(&extract_links(&message, &handler.finder), &first.url) {
+            return Ok(Completed);
         }
 
         // If this photo was part of a media group, we should set a caption on
@@ -91,16 +56,11 @@ impl crate::Handler for ChannelPhotoHandler {
             let edit_caption_markup = EditMessageCaption {
                 chat_id: message.chat_id(),
                 message_id: Some(message.message_id),
-                caption: Some(format!("https://www.furaffinity.net/view/{}/", first.id)),
+                caption: Some(first.url()),
                 ..Default::default()
             };
 
-            if let Err(e) = handler.bot.make_request(&edit_caption_markup).await {
-                tracing::error!("unable to edit channel caption: {:?}", e);
-                with_user_scope(None, None, || {
-                    capture_fail(&e);
-                });
-            }
+            handler.bot.make_request(&edit_caption_markup).await?;
         // Not a media group, we should create an inline keyboard.
         } else {
             let text = handler
@@ -124,14 +84,134 @@ impl crate::Handler for ChannelPhotoHandler {
                 ..Default::default()
             };
 
-            if let Err(e) = handler.bot.make_request(&edit_reply_markup).await {
-                tracing::error!("unable to edit channel reply markup: {:?}", e);
-                with_user_scope(None, None, || {
-                    capture_fail(&e);
-                });
-            }
+            handler.bot.make_request(&edit_reply_markup).await?;
         }
 
-        Ok(true)
+        Ok(Completed)
+    }
+}
+
+/// Extract all possible links from a Message. It looks at the text,
+/// caption, and all buttons within an inline keyboard.
+fn extract_links<'m>(message: &'m Message, finder: &linkify::LinkFinder) -> Vec<linkify::Link<'m>> {
+    let mut links = vec![];
+
+    // Unlikely to be text posts here, but we'll consider anyway.
+    if let Some(ref text) = message.text {
+        links.extend(finder.links(&text));
+    }
+
+    // Links could be in an image caption.
+    if let Some(ref caption) = message.caption {
+        links.extend(finder.links(&caption));
+    }
+
+    // See if it was posted with a bot that included an inline keyboard.
+    if let Some(ref markup) = message.reply_markup {
+        for row in &markup.inline_keyboard {
+            for button in row {
+                if let Some(url) = &button.url {
+                    links.extend(finder.links(&url));
+                }
+            }
+        }
+    }
+
+    links
+}
+
+/// Check if a link was contained within a linkify Link.
+fn link_was_seen(links: &[linkify::Link], source: &str) -> bool {
+    links.iter().any(|link| link.as_str() == source)
+}
+
+async fn get_matches(
+    bot: &Telegram,
+    fapi: &fautil::FAUtil,
+    sizes: &[PhotoSize],
+) -> reqwest::Result<Option<fautil::File>> {
+    // Find the highest resolution size of the image and download.
+    let best_photo = find_best_photo(&sizes).unwrap();
+    let bytes = download_by_id(&bot, &best_photo.file_id).await.unwrap();
+
+    // Run an image search for these bytes, get the first result.
+    fapi.image_search(&bytes, fautil::MatchType::Close)
+        .await
+        .map(|matches| matches.matches.into_iter().next())
+}
+
+#[cfg(test)]
+mod tests {
+    fn get_finder() -> linkify::LinkFinder {
+        let mut finder = linkify::LinkFinder::new();
+        finder.kinds(&[linkify::LinkKind::Url]);
+
+        finder
+    }
+
+    #[test]
+    fn test_find_links() {
+        let finder = get_finder();
+
+        let expected_links = vec![
+            "https://syfaro.net",
+            "https://huefox.com",
+            "https://e621.net",
+            "https://www.furaffinity.net",
+        ];
+
+        let message = telegram::Message {
+            text: Some(
+                "My message has a link like this: https://syfaro.net and some words after it."
+                    .into(),
+            ),
+            caption: Some("There can also be links in the caption: https://huefox.com".into()),
+            reply_markup: Some(telegram::InlineKeyboardMarkup {
+                inline_keyboard: vec![
+                    vec![telegram::InlineKeyboardButton {
+                        url: Some("https://e621.net".into()),
+                        ..Default::default()
+                    }],
+                    vec![telegram::InlineKeyboardButton {
+                        url: Some("https://www.furaffinity.net".into()),
+                        ..Default::default()
+                    }],
+                ],
+            }),
+            ..Default::default()
+        };
+
+        let links = super::extract_links(&message, &finder);
+
+        assert_eq!(
+            links.len(),
+            expected_links.len(),
+            "found different number of links"
+        );
+
+        for (link, expected) in links.iter().zip(expected_links.iter()) {
+            assert_eq!(&link.as_str(), expected);
+        }
+    }
+
+    #[test]
+    fn test_link_was_seen() {
+        let finder = get_finder();
+
+        let test = "https://www.furaffinity.net/";
+        let found_links = finder.links(&test);
+
+        let mut links = vec![];
+        links.extend(found_links);
+
+        assert!(
+            super::link_was_seen(&links, "https://www.furaffinity.net/"),
+            "seen link was not found"
+        );
+
+        assert!(
+            !super::link_was_seen(&links, "https://e621.net/"),
+            "unseen link was found"
+        );
     }
 }

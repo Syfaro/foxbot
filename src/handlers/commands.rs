@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use telegram::*;
 use tokio01::runtime::current_thread::block_on_all;
 
+use super::Status::*;
+use crate::needs_message;
 use crate::utils::{
     build_alternate_response, continuous_action, download_by_id, find_best_photo, find_images,
     get_message, parse_known_bots, with_user_scope,
@@ -14,7 +16,7 @@ use crate::utils::{
 pub struct CommandHandler;
 
 #[async_trait]
-impl crate::Handler for CommandHandler {
+impl super::Handler for CommandHandler {
     fn name(&self) -> &'static str {
         "command"
     }
@@ -24,15 +26,12 @@ impl crate::Handler for CommandHandler {
         handler: &crate::MessageHandler,
         update: Update,
         _command: Option<Command>,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
-        let message = match update.message {
-            Some(message) => message,
-            _ => return Ok(false),
-        };
+    ) -> Result<super::Status, failure::Error> {
+        let message = needs_message!(update);
 
         let command = match message.get_command() {
             Some(command) => command,
-            None => return Ok(false),
+            None => return Ok(Ignored),
         };
 
         let now = std::time::Instant::now();
@@ -41,7 +40,7 @@ impl crate::Handler for CommandHandler {
             let bot_username = handler.bot_user.username.as_ref().unwrap();
             if &username != bot_username {
                 tracing::debug!("got command for other bot: {}", username);
-                return Ok(false);
+                return Ok(Ignored);
             }
         }
 
@@ -69,7 +68,7 @@ impl crate::Handler for CommandHandler {
             });
         }
 
-        Ok(true)
+        Ok(Completed)
     }
 }
 

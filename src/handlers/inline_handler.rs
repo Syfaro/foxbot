@@ -1,14 +1,15 @@
+use super::Status::*;
 use crate::generate_id;
+use crate::needs_message;
 use crate::sites::PostInfo;
 use crate::utils::*;
 use async_trait::async_trait;
-use sentry::integrations::failure::capture_fail;
 use telegram::*;
 
 pub struct InlineHandler;
 
 #[async_trait]
-impl crate::Handler for InlineHandler {
+impl super::Handler for InlineHandler {
     fn name(&self) -> &'static str {
         "inline"
     }
@@ -18,11 +19,8 @@ impl crate::Handler for InlineHandler {
         handler: &crate::MessageHandler,
         update: Update,
         _command: Option<Command>,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
-        let inline = match update.inline_query {
-            Some(inline) => inline,
-            None => return Ok(false),
-        };
+    ) -> Result<super::Status, failure::Error> {
+        let inline = needs_message!(update, inline_query);
 
         let links: Vec<_> = handler.finder.links(&inline.query).collect();
         let mut results: Vec<PostInfo> = Vec::new();
@@ -98,14 +96,9 @@ impl crate::Handler for InlineHandler {
             answer_inline.switch_pm_parameter = Some("help".to_string());
         }
 
-        if let Err(e) = handler.bot.make_request(&answer_inline).await {
-            with_user_scope(Some(&inline.from), None, || {
-                capture_fail(&e);
-            });
-            log::error!("Unable to respond to inline: {:?}", e);
-        }
+        handler.bot.make_request(&answer_inline).await?;
 
-        Ok(true)
+        Ok(Completed)
     }
 }
 

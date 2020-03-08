@@ -1,15 +1,14 @@
+use super::Status::*;
+use crate::{needs_field, needs_message};
 use async_trait::async_trait;
-use sentry::integrations::failure::capture_fail;
 use telegram::*;
 
-use crate::utils::{
-    continuous_action, download_by_id, find_best_photo, get_message, with_user_scope,
-};
+use crate::utils::{continuous_action, download_by_id, find_best_photo, get_message};
 
 pub struct PhotoHandler;
 
 #[async_trait]
-impl crate::Handler for PhotoHandler {
+impl super::Handler for PhotoHandler {
     fn name(&self) -> &'static str {
         "photo"
     }
@@ -19,21 +18,14 @@ impl crate::Handler for PhotoHandler {
         handler: &crate::MessageHandler,
         update: Update,
         _command: Option<Command>,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
-        let message = match update.message {
-            Some(message) => message,
-            _ => return Ok(false),
-        };
-
-        let photos = match &message.photo {
-            Some(photos) => photos,
-            _ => return Ok(false),
-        };
+    ) -> Result<super::Status, failure::Error> {
+        let message = needs_message!(update);
+        let photos = needs_field!(&message, photo);
 
         let now = std::time::Instant::now();
 
         if message.chat.chat_type != ChatType::Private {
-            return Ok(false);
+            return Ok(Ignored);
         }
 
         let _action = continuous_action(
@@ -45,25 +37,15 @@ impl crate::Handler for PhotoHandler {
         );
 
         let best_photo = find_best_photo(&photos).unwrap();
-        let photo = match download_by_id(&handler.bot, &best_photo.file_id).await {
-            Ok(photo) => photo,
-            Err(e) => {
-                tracing::error!("unable to download file: {:?}", e);
-                let tags = Some(vec![("command", "photo".to_string())]);
-                handler
-                    .report_error(&message, tags, || capture_fail(&e))
-                    .await;
-                return Ok(true);
-            }
-        };
+        let photo = download_by_id(&handler.bot, &best_photo.file_id).await?;
 
         let matches = match handler
             .fapi
             .image_search(&photo, fautil::MatchType::Close)
-            .await
+            .await?
         {
-            Ok(matches) if !matches.matches.is_empty() => matches.matches,
-            Ok(_matches) => {
+            matches if !matches.matches.is_empty() => matches.matches,
+            _matches => {
                 let text = handler
                     .get_fluent_bundle(
                         message.from.clone().unwrap().language_code.as_deref(),
@@ -78,33 +60,15 @@ impl crate::Handler for PhotoHandler {
                     ..Default::default()
                 };
 
-                if let Err(e) = handler.bot.make_request(&send_message).await {
-                    tracing::error!("unable to respond to photo: {:?}", e);
-                    with_user_scope(message.from.as_ref(), None, || {
-                        capture_fail(&e);
-                    });
-                }
+                handler.bot.make_request(&send_message).await?;
 
                 let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "source")
                     .add_field("matches", 0)
                     .add_field("duration", now.elapsed().as_millis() as i64);
 
-                if let Err(e) = handler.influx.query(&point).await {
-                    tracing::error!("unable to send command to InfluxDB: {:?}", e);
-                    with_user_scope(message.from.as_ref(), None, || {
-                        capture_fail(&e);
-                    });
-                }
+                let _ = handler.influx.query(&point).await;
 
-                return Ok(true);
-            }
-            Err(e) => {
-                tracing::error!("unable to reverse search image file: {:?}", e);
-                let tags = Some(vec![("command", "photo".to_string())]);
-                handler
-                    .report_error(&message, tags, || capture_fail(&e))
-                    .await;
-                return Ok(true);
+                return Ok(Completed);
             }
         };
 
@@ -153,25 +117,15 @@ impl crate::Handler for PhotoHandler {
             ..Default::default()
         };
 
-        if let Err(e) = handler.bot.make_request(&send_message).await {
-            tracing::error!("unable to respond to photo: {:?}", e);
-            with_user_scope(message.from.as_ref(), None, || {
-                capture_fail(&e);
-            });
-        }
+        handler.bot.make_request(&send_message).await?;
 
         let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "source")
             .add_tag("good", first.distance.unwrap() < 5)
             .add_field("matches", matches.len() as i64)
             .add_field("duration", now.elapsed().as_millis() as i64);
 
-        if let Err(e) = handler.influx.query(&point).await {
-            tracing::error!("unable to send command to InfluxDB: {:?}", e);
-            with_user_scope(message.from.as_ref(), None, || {
-                capture_fail(&e);
-            });
-        }
+        let _ = handler.influx.query(&point).await;
 
-        Ok(true)
+        Ok(Completed)
     }
 }

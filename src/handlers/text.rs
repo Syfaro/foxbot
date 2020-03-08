@@ -1,14 +1,16 @@
+use super::Status::*;
+use crate::{needs_field, needs_message};
 use async_trait::async_trait;
 use sentry::integrations::failure::capture_fail;
 use telegram::*;
 use tokio01::runtime::current_thread::block_on_all;
 
-use crate::utils::{get_message, with_user_scope};
+use crate::utils::get_message;
 
 pub struct TextHandler;
 
 #[async_trait]
-impl crate::Handler for TextHandler {
+impl super::Handler for TextHandler {
     fn name(&self) -> &'static str {
         "text"
     }
@@ -18,16 +20,9 @@ impl crate::Handler for TextHandler {
         handler: &crate::MessageHandler,
         update: Update,
         _command: Option<Command>,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
-        let message = match update.message {
-            Some(message) => message,
-            _ => return Ok(false),
-        };
-
-        let text = match &message.text {
-            Some(text) => text,
-            _ => return Ok(false),
-        };
+    ) -> Result<super::Status, failure::Error> {
+        let message = needs_message!(update);
+        let text = needs_field!(message, text);
 
         let now = std::time::Instant::now();
 
@@ -35,7 +30,7 @@ impl crate::Handler for TextHandler {
 
         if text.trim().parse::<i32>().is_err() {
             tracing::trace!("got text that wasn't oob, ignoring");
-            return Ok(false);
+            return Ok(Ignored);
         }
 
         tracing::trace!("checking if message was Twitter code");
@@ -45,7 +40,7 @@ impl crate::Handler for TextHandler {
 
             match lock.get(&format!("authenticate:{}", from.id)) {
                 Some(data) => data,
-                None => return Ok(true),
+                None => return Ok(Completed),
             }
         };
 
@@ -68,7 +63,7 @@ impl crate::Handler for TextHandler {
                         || capture_fail(&e),
                     )
                     .await;
-                return Ok(true);
+                return Ok(Completed);
             }
             Ok(token) => token,
         };
@@ -103,7 +98,7 @@ impl crate::Handler for TextHandler {
                         },
                     )
                     .await;
-                return Ok(true);
+                return Ok(Completed);
             }
         }
 
@@ -123,24 +118,14 @@ impl crate::Handler for TextHandler {
             ..Default::default()
         };
 
-        if let Err(e) = handler.bot.make_request(&message).await {
-            tracing::warn!("unable to send message: {:?}", e);
-            with_user_scope(Some(&from), None, || {
-                capture_fail(&e);
-            });
-        }
+        handler.bot.make_request(&message).await?;
 
         let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "twitter")
             .add_tag("type", "added")
             .add_field("duration", now.elapsed().as_millis() as i64);
 
-        if let Err(e) = handler.influx.query(&point).await {
-            tracing::error!("unable to send command to InfluxDB: {:?}", e);
-            with_user_scope(Some(&from), None, || {
-                capture_fail(&e);
-            });
-        }
+        let _ = handler.influx.query(&point).await;
 
-        Ok(true)
+        Ok(Completed)
     }
 }
