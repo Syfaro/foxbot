@@ -34,23 +34,9 @@ pub trait Handler: Send + Sync {
     async fn handle(
         &self,
         handler: &super::MessageHandler,
-        update: telegram::Update,
-        command: Option<telegram::Command>,
-    ) -> Result<Status, failure::Error>;
-}
-
-#[macro_export]
-macro_rules! needs_message {
-    ($update:expr) => {
-        needs_message!($update, message)
-    };
-
-    ($update:expr, $field:tt) => {
-        match $update.$field {
-            Some(message) => message,
-            _ => return Ok(crate::handlers::Status::Ignored),
-        }
-    };
+        update: &telegram::Update,
+        command: Option<&telegram::Command>,
+    ) -> failure::Fallible<Status>;
 }
 
 #[macro_export]

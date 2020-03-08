@@ -1,6 +1,6 @@
 use super::Status::*;
 use crate::generate_id;
-use crate::needs_message;
+use crate::needs_field;
 use crate::sites::PostInfo;
 use crate::utils::*;
 use async_trait::async_trait;
@@ -17,10 +17,10 @@ impl super::Handler for InlineHandler {
     async fn handle(
         &self,
         handler: &crate::MessageHandler,
-        update: Update,
-        _command: Option<Command>,
+        update: &Update,
+        _command: Option<&Command>,
     ) -> Result<super::Status, failure::Error> {
-        let inline = needs_message!(update, inline_query);
+        let inline = needs_field!(update, inline_query);
 
         let links: Vec<_> = handler.finder.links(&inline.query).collect();
         let mut results: Vec<PostInfo> = Vec::new();
@@ -83,7 +83,7 @@ impl super::Handler for InlineHandler {
         }
 
         let mut answer_inline = AnswerInlineQuery {
-            inline_query_id: inline.id,
+            inline_query_id: inline.id.to_owned(),
             results: responses,
             is_personal: Some(personal),
             ..Default::default()

@@ -13,10 +13,10 @@ impl super::Handler for ChosenInlineHandler {
     async fn handle(
         &self,
         handler: &crate::MessageHandler,
-        update: Update,
-        _command: Option<Command>,
+        update: &Update,
+        _command: Option<&Command>,
     ) -> Result<super::Status, failure::Error> {
-        Ok(if let Some(chosen_result) = update.chosen_inline_result {
+        Ok(if let Some(chosen_result) = &update.chosen_inline_result {
             let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "chosen")
                 .add_field("user_id", chosen_result.from.id);
 

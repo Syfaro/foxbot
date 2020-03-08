@@ -1,5 +1,5 @@
 use super::Status::*;
-use crate::{needs_field, needs_message};
+use crate::needs_field;
 use async_trait::async_trait;
 use sentry::integrations::failure::capture_fail;
 use telegram::*;
@@ -18,10 +18,10 @@ impl super::Handler for TextHandler {
     async fn handle(
         &self,
         handler: &crate::MessageHandler,
-        update: Update,
-        _command: Option<Command>,
+        update: &Update,
+        _command: Option<&Command>,
     ) -> Result<super::Status, failure::Error> {
-        let message = needs_message!(update);
+        let message = needs_field!(update, message);
         let text = needs_field!(message, text);
 
         let now = std::time::Instant::now();

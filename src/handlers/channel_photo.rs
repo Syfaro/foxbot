@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use telegram::*;
 
 use super::Status::*;
+use crate::needs_field;
 use crate::utils::{download_by_id, find_best_photo, get_message};
-use crate::{needs_field, needs_message};
 
 // TODO: Configuration options
 // It should be possible to:
@@ -22,11 +22,11 @@ impl super::Handler for ChannelPhotoHandler {
     async fn handle(
         &self,
         handler: &crate::MessageHandler,
-        update: Update,
-        _command: Option<Command>,
-    ) -> Result<super::Status, failure::Error> {
+        update: &Update,
+        _command: Option<&Command>,
+    ) -> failure::Fallible<super::Status> {
         // Ensure we have a channel_post Message and a photo within.
-        let message = needs_message!(update, channel_post);
+        let message = needs_field!(update, channel_post);
         let sizes = needs_field!(&message, photo);
 
         // We only want messages from channels. I think this is always true

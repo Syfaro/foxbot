@@ -1,5 +1,5 @@
 use super::Status::*;
-use crate::needs_message;
+use crate::needs_field;
 use async_trait::async_trait;
 use telegram::*;
 
@@ -14,10 +14,10 @@ impl super::Handler for GroupAddHandler {
     async fn handle(
         &self,
         handler: &crate::MessageHandler,
-        update: Update,
-        _command: Option<Command>,
+        update: &Update,
+        _command: Option<&Command>,
     ) -> Result<super::Status, failure::Error> {
-        let message = needs_message!(update);
+        let message = needs_field!(update, message);
 
         let new_members = match &message.new_chat_members {
             Some(members) => members,
@@ -28,7 +28,7 @@ impl super::Handler for GroupAddHandler {
             .iter()
             .any(|member| member.id == handler.bot_user.id)
         {
-            handler.handle_welcome(message, "group-add").await;
+            handler.handle_welcome(message, "group-add").await?;
         }
 
         Ok(Completed)

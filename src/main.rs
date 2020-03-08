@@ -547,7 +547,7 @@ impl MessageHandler {
     }
 
     #[tracing::instrument(skip(self, message))]
-    async fn handle_welcome(&self, message: Message, command: &str) {
+    async fn handle_welcome(&self, message: &Message, command: &str) -> failure::Fallible<()> {
         use rand::seq::SliceRandom;
 
         let from = message.from.clone().unwrap();
@@ -587,22 +587,26 @@ impl MessageHandler {
             ..Default::default()
         };
 
-        if let Err(e) = self.bot.make_request(&send_message).await {
-            tracing::error!("unable to send help message: {:?}", e);
-            let tags = Some(vec![("command", command.to_string())]);
-            utils::with_user_scope(message.from.as_ref(), tags, || capture_fail(&e));
-        }
+        self.bot
+            .make_request(&send_message)
+            .await
+            .map(|_msg| ())
+            .map_err(Into::into)
     }
 
     #[tracing::instrument(skip(self, message))]
-    async fn send_generic_reply(&self, message: &Message, name: &str) {
-        let language_code = match &message.from {
-            Some(from) => &from.language_code,
-            None => return,
-        };
+    async fn send_generic_reply(
+        &self,
+        message: &Message,
+        name: &str,
+    ) -> failure::Fallible<Message> {
+        let language_code = message
+            .from
+            .as_ref()
+            .and_then(|from| from.language_code.as_deref());
 
         let text = self
-            .get_fluent_bundle(language_code.as_deref(), |bundle| {
+            .get_fluent_bundle(language_code, |bundle| {
                 utils::get_message(&bundle, name, None).unwrap()
             })
             .await;
@@ -614,17 +618,18 @@ impl MessageHandler {
             ..Default::default()
         };
 
-        if let Err(e) = self.bot.make_request(&send_message).await {
-            tracing::error!("unable to make request: {:?}", e);
-            utils::with_user_scope(message.from.as_ref(), None, || {
-                capture_fail(&e);
-            });
-        }
+        self.bot
+            .make_request(&send_message)
+            .await
+            .map_err(Into::into)
     }
 
     #[tracing::instrument(skip(self, update))]
     async fn handle_update(&self, update: Update) {
-        let user = update.clone().message.and_then(|message| message.from);
+        let user = update
+            .message
+            .as_ref()
+            .and_then(|message| message.from.as_ref());
 
         for handler in &self.handlers {
             let command = update
@@ -634,17 +639,18 @@ impl MessageHandler {
 
             tracing::trace!(handler = handler.name(), "running handler");
 
-            match handler.handle(&self, update.clone(), command.clone()).await {
+            match handler.handle(&self, &update, command.as_ref()).await {
                 Ok(status) if status == handlers::Status::Completed => break,
                 Err(e) => {
                     log::error!("Error handling update: {:#?}", e);
-                    utils::with_user_scope(
-                        user.as_ref(),
-                        Some(vec![("handler", handler.name().to_string())]),
-                        || {
-                            capture_error(&e);
-                        },
-                    );
+                    let mut tags = vec![("handler", handler.name().to_string())];
+                    if let Some(user) = user {
+                        tags.push(("user_id", user.id.to_string()));
+                    }
+
+                    utils::with_user_scope(user, Some(tags), || {
+                        capture_error(&e);
+                    });
                 }
                 _ => (),
             }

@@ -1,5 +1,5 @@
 use super::Status::*;
-use crate::{needs_field, needs_message};
+use crate::needs_field;
 use async_trait::async_trait;
 use telegram::*;
 
@@ -16,11 +16,11 @@ impl super::Handler for PhotoHandler {
     async fn handle(
         &self,
         handler: &crate::MessageHandler,
-        update: Update,
-        _command: Option<Command>,
+        update: &Update,
+        _command: Option<&Command>,
     ) -> Result<super::Status, failure::Error> {
-        let message = needs_message!(update);
-        let photos = needs_field!(&message, photo);
+        let message = needs_field!(update, message);
+        let photos = needs_field!(message, photo);
 
         let now = std::time::Instant::now();
 

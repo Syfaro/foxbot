@@ -5,9 +5,9 @@ pub enum Error {
     #[fail(display = "telegram error: {}", _0)]
     Telegram(TelegramError),
     #[fail(display = "json parsing error: {}", _0)]
-    JSON(serde_json::Error),
+    JSON(#[fail(cause)] serde_json::Error),
     #[fail(display = "http error: {}", _0)]
-    Request(reqwest::Error),
+    Request(#[fail(cause)] reqwest::Error),
 }
 
 impl From<reqwest::Error> for Error {
