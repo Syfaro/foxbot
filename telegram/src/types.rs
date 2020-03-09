@@ -130,6 +130,7 @@ pub struct Message {
     pub author_signature: Option<String>,
     pub text: Option<String>,
     pub entities: Option<Vec<MessageEntity>>,
+    pub caption_entities: Option<Vec<MessageEntity>>,
     pub photo: Option<Vec<PhotoSize>>,
     pub caption: Option<String>,
     pub new_chat_members: Option<Vec<User>>,
