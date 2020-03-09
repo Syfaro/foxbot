@@ -8,19 +8,60 @@ platform:
   arch: amd64
 
 steps:
+- name: test
+  image: rustlang/rust:nightly-slim
+  commands:
+  - apt-get update -y
+  - apt-get install pkg-config libssl-dev ca-certificates python3 python3-pip nodejs -y
+  - pip3 install cfscrape
+  # - rustup component add clippy
+  - cargo test
+  # - cargo clippy
+
+- name: sentry-release
+  image: getsentry/sentry-cli
+  commands:
+  - sentry-cli releases new ${DRONE_COMMIT_SHA}
+  environment:
+    SENTRY_AUTH_TOKEN:
+      from_secret: sentry_auth_token
+    SENTRY_ORG:
+      from_secret: sentry_org
+    SENTRY_PROJECT:
+      from_secret: sentry_project
+  when:
+    branch:
+    - master
+
 - name: docker
   image: plugins/docker
   settings:
     auto_tag: true
+    build_args_from_env:
+    - DRONE_COMMIT_SHA
     password:
       from_secret: docker_password
     registry: registry.huefox.com
     repo: registry.huefox.com/foxbot
     username:
       from_secret: docker_username
+  when:
+    branch:
+    - master
 
-trigger:
-  branch:
-  - master
+- name: sentry-finalize
+  image: getsentry/sentry-cli
+  commands:
+  - sentry-cli releases finalize ${DRONE_COMMIT_SHA}
+  environment:
+    SENTRY_AUTH_TOKEN:
+      from_secret: sentry_auth_token
+    SENTRY_ORG:
+      from_secret: sentry_org
+    SENTRY_PROJECT:
+      from_secret: sentry_project
+  when:
+    branch:
+    - master
 
 ...

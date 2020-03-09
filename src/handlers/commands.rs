@@ -1,12 +1,13 @@
 use async_trait::async_trait;
-use sentry::integrations::failure::capture_fail;
 use std::collections::HashMap;
 use telegram::*;
 use tokio01::runtime::current_thread::block_on_all;
 
+use super::Status::*;
+use crate::needs_field;
 use crate::utils::{
     build_alternate_response, continuous_action, download_by_id, find_best_photo, find_images,
-    get_message, parse_known_bots, with_user_scope,
+    get_message, parse_known_bots,
 };
 
 // TODO: there's a lot of shared code between these commands.
@@ -14,7 +15,7 @@ use crate::utils::{
 pub struct CommandHandler;
 
 #[async_trait]
-impl crate::Handler for CommandHandler {
+impl super::Handler for CommandHandler {
     fn name(&self) -> &'static str {
         "command"
     }
@@ -22,17 +23,14 @@ impl crate::Handler for CommandHandler {
     async fn handle(
         &self,
         handler: &crate::MessageHandler,
-        update: Update,
-        _command: Option<Command>,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
-        let message = match update.message {
-            Some(message) => message,
-            _ => return Ok(false),
-        };
+        update: &Update,
+        _command: Option<&Command>,
+    ) -> Result<super::Status, failure::Error> {
+        let message = needs_field!(update, message);
 
         let command = match message.get_command() {
             Some(command) => command,
-            None => return Ok(false),
+            None => return Ok(Ignored),
         };
 
         let now = std::time::Instant::now();
@@ -41,13 +39,11 @@ impl crate::Handler for CommandHandler {
             let bot_username = handler.bot_user.username.as_ref().unwrap();
             if &username != bot_username {
                 tracing::debug!("got command for other bot: {}", username);
-                return Ok(false);
+                return Ok(Ignored);
             }
         }
 
         tracing::debug!("got command {}", command.name);
-
-        let from = message.from.clone();
 
         match command.name.as_ref() {
             "/help" | "/start" => handler.handle_welcome(message, &command.name).await,
@@ -55,26 +51,29 @@ impl crate::Handler for CommandHandler {
             "/mirror" => self.handle_mirror(&handler, message).await,
             "/source" => self.handle_source(&handler, message).await,
             "/alts" => self.handle_alts(&handler, message).await,
-            _ => tracing::info!("unknown command: {}", command.name),
-        };
+            "/error" => Err(failure::format_err!("a test error message")),
+            _ => {
+                tracing::info!("unknown command: {}", command.name);
+                Ok(())
+            }
+        }?;
 
         let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "command")
             .add_tag("command", command.name)
             .add_field("duration", now.elapsed().as_millis() as i64);
 
-        if let Err(e) = handler.influx.query(&point).await {
-            tracing::error!("unable to send command to InfluxDB: {:?}", e);
-            with_user_scope(from.as_ref(), None, || {
-                capture_fail(&e);
-            });
-        }
+        let _ = handler.influx.query(&point).await;
 
-        Ok(true)
+        Ok(Completed)
     }
 }
 
 impl CommandHandler {
-    async fn authenticate_twitter(&self, handler: &crate::MessageHandler, message: Message) {
+    async fn authenticate_twitter(
+        &self,
+        handler: &crate::MessageHandler,
+        message: &Message,
+    ) -> failure::Fallible<()> {
         use quaint::prelude::*;
 
         let now = std::time::Instant::now();
@@ -82,43 +81,23 @@ impl CommandHandler {
         if message.chat.chat_type != ChatType::Private {
             handler
                 .send_generic_reply(&message, "twitter-private")
-                .await;
-            return;
+                .await?;
+            return Ok(());
         }
 
-        let user = message.from.clone().unwrap();
+        let user = message.from.as_ref().unwrap();
 
         let con_token = egg_mode::KeyPair::new(
             handler.config.twitter_consumer_key.clone(),
             handler.config.twitter_consumer_secret.clone(),
         );
 
-        let request_token = match block_on_all(egg_mode::request_token(&con_token, "oob")) {
-            Ok(req) => req,
-            Err(e) => {
-                tracing::warn!("unable to get request token: {:?}", e);
+        let request_token = block_on_all(egg_mode::request_token(&con_token, "oob"))?;
 
-                handler
-                    .report_error(
-                        &message,
-                        Some(vec![("command", "twitter".to_string())]),
-                        || {
-                            sentry::integrations::failure::capture_error(&format_err!(
-                                "Unable to get request token: {}",
-                                e
-                            ))
-                        },
-                    )
-                    .await;
-                return;
-            }
-        };
-
-        let conn = handler.conn.check_out().await.expect("Unable to get conn");
+        let conn = handler.conn.check_out().await?;
 
         conn.delete(Delete::from_table("twitter_auth").so_that("user_id".equals(user.id)))
-            .await
-            .expect("Unable to remove auth keys");
+            .await?;
 
         conn.insert(
             Insert::single_into("twitter_auth")
@@ -127,8 +106,7 @@ impl CommandHandler {
                 .value("request_secret", request_token.secret.to_string())
                 .build(),
         )
-        .await
-        .expect("Unable to insert request info");
+        .await?;
 
         drop(conn);
 
@@ -151,27 +129,23 @@ impl CommandHandler {
             ..Default::default()
         };
 
-        if let Err(e) = handler.bot.make_request(&send_message).await {
-            tracing::warn!("unable to send message: {:?}", e);
-            with_user_scope(Some(&user), None, || {
-                capture_fail(&e);
-            });
-        }
+        handler.bot.make_request(&send_message).await?;
 
         let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "twitter")
             .add_tag("type", "new")
             .add_field("duration", now.elapsed().as_millis() as i64);
 
-        if let Err(e) = handler.influx.query(&point).await {
-            tracing::error!("unable to send command to InfluxDB: {:?}", e);
-            with_user_scope(Some(&user), None, || {
-                capture_fail(&e);
-            });
-        }
+        let _ = handler.influx.query(&point).await;
+
+        Ok(())
     }
 
-    async fn handle_mirror(&self, handler: &crate::MessageHandler, message: Message) {
-        let from = message.from.clone().unwrap();
+    async fn handle_mirror(
+        &self,
+        handler: &crate::MessageHandler,
+        message: &Message,
+    ) -> failure::Fallible<()> {
+        let from = message.from.as_ref().unwrap();
 
         let _action = continuous_action(
             handler.bot.clone(),
@@ -181,8 +155,8 @@ impl CommandHandler {
             ChatAction::Typing,
         );
 
-        let (reply_to_id, message) = if let Some(reply_to_message) = message.reply_to_message {
-            (message.message_id, *reply_to_message)
+        let (reply_to_id, message) = if let Some(reply_to_message) = &message.reply_to_message {
+            (message.message_id, &**reply_to_message)
         } else {
             (message.message_id, message)
         };
@@ -196,8 +170,8 @@ impl CommandHandler {
         if links.is_empty() {
             handler
                 .send_generic_reply(&message, "mirror-no-links")
-                .await;
-            return;
+                .await?;
+            return Ok(());
         }
 
         let mut results: Vec<crate::PostInfo> = Vec::with_capacity(links.len());
@@ -208,14 +182,14 @@ impl CommandHandler {
             find_images(&from, links, &mut sites, &mut |info| {
                 results.extend(info.results);
             })
-            .await
+            .await?
         };
 
         if results.is_empty() {
             handler
                 .send_generic_reply(&message, "mirror-no-results")
-                .await;
-            return;
+                .await?;
+            return Ok(());
         }
 
         if results.len() == 1 {
@@ -233,17 +207,7 @@ impl CommandHandler {
                     reply_to_message_id: Some(message.message_id),
                 };
 
-                if let Err(e) = handler.bot.make_request(&video).await {
-                    tracing::error!("unable to make request: {:?}", e);
-                    handler
-                        .report_error(
-                            &message,
-                            Some(vec![("command", "mirror".to_string())]),
-                            || capture_fail(&e),
-                        )
-                        .await;
-                    return;
-                }
+                handler.bot.make_request(&video).await?;
             } else {
                 let photo = SendPhoto {
                     chat_id: message.chat_id(),
@@ -257,17 +221,7 @@ impl CommandHandler {
                     ..Default::default()
                 };
 
-                if let Err(e) = handler.bot.make_request(&photo).await {
-                    tracing::error!("unable to make request: {:?}", e);
-                    handler
-                        .report_error(
-                            &message,
-                            Some(vec![("command", "mirror".to_string())]),
-                            || capture_fail(&e),
-                        )
-                        .await;
-                    return;
-                }
+                handler.bot.make_request(&photo).await?;
             }
         } else {
             for chunk in results.chunks(10) {
@@ -302,17 +256,7 @@ impl CommandHandler {
                     ..Default::default()
                 };
 
-                if let Err(e) = handler.bot.make_request(&media_group).await {
-                    tracing::error!("unable to make request: {:?}", e);
-                    handler
-                        .report_error(
-                            &message,
-                            Some(vec![("command", "mirror".to_string())]),
-                            || capture_fail(&e),
-                        )
-                        .await;
-                    return;
-                }
+                handler.bot.make_request(&media_group).await?;
             }
         }
 
@@ -335,16 +279,17 @@ impl CommandHandler {
                 ..Default::default()
             };
 
-            if let Err(e) = handler.bot.make_request(&send_message).await {
-                tracing::error!("unable to make request: {:?}", e);
-                with_user_scope(message.from.as_ref(), None, || {
-                    capture_fail(&e);
-                });
-            }
+            handler.bot.make_request(&send_message).await?;
         }
+
+        Ok(())
     }
 
-    async fn handle_source(&self, handler: &crate::MessageHandler, message: Message) {
+    async fn handle_source(
+        &self,
+        handler: &crate::MessageHandler,
+        message: &Message,
+    ) -> failure::Fallible<()> {
         let _action = continuous_action(
             handler.bot.clone(),
             12,
@@ -353,58 +298,37 @@ impl CommandHandler {
             ChatAction::Typing,
         );
 
-        let (reply_to_id, message) = if let Some(reply_to_message) = message.reply_to_message {
-            (message.message_id, *reply_to_message)
+        let (reply_to_id, message) = if let Some(reply_to_message) = &message.reply_to_message {
+            (message.message_id, &**reply_to_message)
         } else {
             (message.message_id, message)
         };
 
-        let photo = match message.photo.clone() {
+        let photo = match &message.photo {
             Some(photo) if !photo.is_empty() => photo,
             _ => {
                 handler
                     .send_generic_reply(&message, "source-no-photo")
-                    .await;
-                return;
+                    .await?;
+                return Ok(());
             }
         };
 
         let best_photo = find_best_photo(&photo).unwrap();
-        let bytes = match download_by_id(&handler.bot, &best_photo.file_id).await {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                tracing::error!("unable to download file: {:?}", e);
-                let tags = Some(vec![("command", "source".to_string())]);
-                handler
-                    .report_error(&message, tags, || capture_fail(&e))
-                    .await;
-                return;
-            }
-        };
+        let bytes = download_by_id(&handler.bot, &best_photo.file_id).await?;
 
-        let matches = match handler
+        let matches = handler
             .fapi
             .image_search(&bytes, fautil::MatchType::Close)
-            .await
-        {
-            Ok(matches) => matches.matches,
-            Err(e) => {
-                tracing::error!("unable to find matches: {:?}", e);
-                let tags = Some(vec![("command", "source".to_string())]);
-                handler
-                    .report_error(&message, tags, || capture_fail(&e))
-                    .await;
-                return;
-            }
-        };
+            .await?;
 
-        let result = match matches.first() {
+        let result = match matches.matches.first() {
             Some(result) => result,
             None => {
                 handler
                     .send_generic_reply(&message, "reverse-no-results")
-                    .await;
-                return;
+                    .await?;
+                return Ok(());
             }
         };
 
@@ -423,7 +347,7 @@ impl CommandHandler {
 
         let text = handler
             .get_fluent_bundle(
-                message.from.clone().unwrap().language_code.as_deref(),
+                message.from.as_ref().unwrap().language_code.as_deref(),
                 |bundle| get_message(&bundle, name, Some(args)).unwrap(),
             )
             .await;
@@ -436,15 +360,19 @@ impl CommandHandler {
             ..Default::default()
         };
 
-        if let Err(e) = handler.bot.make_request(&send_message).await {
-            tracing::error!("Unable to make request: {:?}", e);
-            with_user_scope(message.from.as_ref(), None, || {
-                capture_fail(&e);
-            });
-        }
+        handler
+            .bot
+            .make_request(&send_message)
+            .await
+            .map(|_msg| ())
+            .map_err(Into::into)
     }
 
-    async fn handle_alts(&self, handler: &crate::MessageHandler, message: Message) {
+    async fn handle_alts(
+        &self,
+        handler: &crate::MessageHandler,
+        message: &Message,
+    ) -> failure::Fallible<()> {
         let _action = continuous_action(
             handler.bot.clone(),
             12,
@@ -453,26 +381,17 @@ impl CommandHandler {
             ChatAction::Typing,
         );
 
-        let (reply_to_id, message) = if let Some(reply_to_message) = message.reply_to_message {
-            (message.message_id, *reply_to_message)
-        } else {
-            (message.message_id, message)
-        };
+        let (reply_to_id, message): (i32, &Message) =
+            if let Some(reply_to_message) = &message.reply_to_message {
+                (message.message_id, &**reply_to_message)
+            } else {
+                (message.message_id, message)
+            };
 
-        let bytes = match message.photo.clone() {
+        let bytes = match &message.photo {
             Some(photo) => {
                 let best_photo = find_best_photo(&photo).unwrap();
-                match download_by_id(&handler.bot, &best_photo.file_id).await {
-                    Ok(bytes) => bytes,
-                    Err(e) => {
-                        tracing::error!("unable to download file: {:?}", e);
-                        let tags = Some(vec![("command", "source".to_string())]);
-                        handler
-                            .report_error(&message, tags, || capture_fail(&e))
-                            .await;
-                        return;
-                    }
-                }
+                download_by_id(&handler.bot, &best_photo.file_id).await?
             }
             None => {
                 let mut links = vec![];
@@ -493,27 +412,27 @@ impl CommandHandler {
                 if links.is_empty() {
                     handler
                         .send_generic_reply(&message, "source-no-photo")
-                        .await;
-                    return;
+                        .await?;
+                    return Ok(());
                 } else if links.len() > 1 {
                     handler
                         .send_generic_reply(&message, "alternate-multiple-photo")
-                        .await;
-                    return;
+                        .await?;
+                    return Ok(());
                 }
 
                 let mut sites = handler.sites.lock().await;
                 let links = links.iter().map(|link| link.as_str()).collect();
                 let mut link = None;
                 find_images(
-                    &message.from.clone().unwrap(),
+                    &message.from.as_ref().unwrap(),
                     links,
                     &mut sites,
                     &mut |info| {
                         link = info.results.into_iter().next();
                     },
                 )
-                .await;
+                .await?;
 
                 match link {
                     Some(link) => reqwest::get(&link.url)
@@ -526,34 +445,23 @@ impl CommandHandler {
                     None => {
                         handler
                             .send_generic_reply(&message, "source-no-photo")
-                            .await;
-                        return;
+                            .await?;
+                        return Ok(());
                     }
                 }
             }
         };
 
-        let matches = match handler
+        let matches = handler
             .fapi
             .image_search(&bytes, fautil::MatchType::Force)
-            .await
-        {
-            Ok(matches) => matches,
-            Err(e) => {
-                tracing::error!("unable to find matches: {:?}", e);
-                let tags = Some(vec![("command", "source".to_string())]);
-                handler
-                    .report_error(&message, tags, || capture_fail(&e))
-                    .await;
-                return;
-            }
-        };
+            .await?;
 
         if matches.matches.is_empty() {
             handler
                 .send_generic_reply(&message, "reverse-no-results")
-                .await;
-            return;
+                .await?;
+            return Ok(());
         }
 
         let hash = matches.hash.to_be_bytes();
@@ -590,7 +498,7 @@ impl CommandHandler {
 
         let (text, used_hashes) = handler
             .get_fluent_bundle(
-                message.from.clone().unwrap().language_code.as_deref(),
+                message.from.as_ref().unwrap().language_code.as_deref(),
                 |bundle| build_alternate_response(&bundle, items),
             )
             .await;
@@ -605,38 +513,19 @@ impl CommandHandler {
             ..Default::default()
         };
 
-        let sent = match handler.bot.make_request(&send_message).await {
-            Ok(message) => message.message_id,
-            Err(e) => {
-                tracing::error!("unable to make request: {:?}", e);
-                with_user_scope(message.from.as_ref(), None, || {
-                    capture_fail(&e);
-                });
-                return;
-            }
-        };
+        let sent = handler.bot.make_request(&send_message).await?;
 
         if !has_multiple_matches {
-            return;
+            return Ok(());
         }
 
-        let matches = match handler.fapi.lookup_hashes(used_hashes).await {
-            Ok(matches) => matches,
-            Err(e) => {
-                tracing::error!("unable to find matches: {:?}", e);
-                let tags = Some(vec![("command", "source".to_string())]);
-                handler
-                    .report_error(&message, tags, || capture_fail(&e))
-                    .await;
-                return;
-            }
-        };
+        let matches = handler.fapi.lookup_hashes(used_hashes).await?;
 
         if matches.is_empty() {
             handler
                 .send_generic_reply(&message, "reverse-no-results")
-                .await;
-            return;
+                .await?;
+            return Ok(());
         }
 
         for m in matches {
@@ -663,28 +552,28 @@ impl CommandHandler {
 
         let (updated_text, _used_hashes) = handler
             .get_fluent_bundle(
-                message.from.clone().unwrap().language_code.as_deref(),
+                message.from.as_ref().unwrap().language_code.as_deref(),
                 |bundle| build_alternate_response(&bundle, items),
             )
             .await;
 
         if text == updated_text {
-            return;
+            return Ok(());
         }
 
         let edit = EditMessageText {
             chat_id: message.chat_id(),
-            message_id: Some(sent),
+            message_id: Some(sent.message_id),
             text: updated_text,
             disable_web_page_preview: Some(true),
             ..Default::default()
         };
 
-        if let Err(e) = handler.bot.make_request(&edit).await {
-            tracing::error!("unable to make request: {:?}", e);
-            with_user_scope(message.from.as_ref(), None, || {
-                capture_fail(&e);
-            });
-        }
+        handler
+            .bot
+            .make_request(&edit)
+            .await
+            .map(|_msg| ())
+            .map_err(Into::into)
     }
 }

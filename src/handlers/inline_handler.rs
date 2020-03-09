@@ -1,14 +1,15 @@
+use super::Status::*;
 use crate::generate_id;
+use crate::needs_field;
 use crate::sites::PostInfo;
 use crate::utils::*;
 use async_trait::async_trait;
-use sentry::integrations::failure::capture_fail;
 use telegram::*;
 
 pub struct InlineHandler;
 
 #[async_trait]
-impl crate::Handler for InlineHandler {
+impl super::Handler for InlineHandler {
     fn name(&self) -> &'static str {
         "inline"
     }
@@ -16,13 +17,10 @@ impl crate::Handler for InlineHandler {
     async fn handle(
         &self,
         handler: &crate::MessageHandler,
-        update: Update,
-        _command: Option<Command>,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
-        let inline = match update.inline_query {
-            Some(inline) => inline,
-            None => return Ok(false),
-        };
+        update: &Update,
+        _command: Option<&Command>,
+    ) -> Result<super::Status, failure::Error> {
+        let inline = needs_field!(update, inline_query);
 
         let links: Vec<_> = handler.finder.links(&inline.query).collect();
         let mut results: Vec<PostInfo> = Vec::new();
@@ -53,7 +51,7 @@ impl crate::Handler for InlineHandler {
 
                 results.extend(info.results);
             })
-            .await;
+            .await?;
         }
 
         // Find if any of our results were personal. If they were, we need to
@@ -85,7 +83,7 @@ impl crate::Handler for InlineHandler {
         }
 
         let mut answer_inline = AnswerInlineQuery {
-            inline_query_id: inline.id,
+            inline_query_id: inline.id.to_owned(),
             results: responses,
             is_personal: Some(personal),
             ..Default::default()
@@ -98,14 +96,9 @@ impl crate::Handler for InlineHandler {
             answer_inline.switch_pm_parameter = Some("help".to_string());
         }
 
-        if let Err(e) = handler.bot.make_request(&answer_inline).await {
-            with_user_scope(Some(&inline.from), None, || {
-                capture_fail(&e);
-            });
-            log::error!("Unable to respond to inline: {:?}", e);
-        }
+        handler.bot.make_request(&answer_inline).await?;
 
-        Ok(true)
+        Ok(Completed)
     }
 }
 

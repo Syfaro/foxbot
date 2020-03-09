@@ -19,7 +19,7 @@ hamming = "0.1"
 
 log = "0.4"
 pretty_env_logger = "0.4"
-sentry = "0.17"
+sentry = { version = "0.17", features = ["with_debug_meta"] }
 uuid = "0.7"
 failure = "0.1"
 influxdb = "0.0.6"
@@ -47,4 +47,4 @@ tracing-opentelemetry = "0.1"
 rusqlite = { version = "0.21", features = ["bundled"] }
 refinery = { version = "0.2", features = ["rusqlite"] }
 barrel = { version = "0.6", features = ["sqlite3"] }
-quaint = { path = "./quaint", features = ["full-sqlite"] }
+quaint = { version = "0.2.0-alpha.9", features = ["full"] }

@@ -62,5 +62,6 @@ alternate-distance = · { $link } (distance of { $distance })
 alternate-multiple-photo = I can only find alternates for a single photo, sorry.
 
 # Error Messages
-error-generic = Oh no, something went wrong! Please send a message to my creator { -creatorName } if you continue having issues.
-error-uuid = Oh no, something went wrong! Please send a message to my creator { -creatorName } with this ID if you continue having issues: { $uuid }
+error-generic = Oh no, something went wrong! Please send a message to my creator, { -creatorName }, saying what happened.
+error-uuid = Oh no, something went wrong! Please reply to this message saying what happened. You may also send a message to my creator, { -creatorName }, with this ID if you continue having issues: { $uuid }
+error-feedback = Thank you for the feedback, hopefully we can get this issue resolved soon.

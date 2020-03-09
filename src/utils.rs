@@ -20,7 +20,7 @@ pub async fn find_images<'a, C>(
     links: Vec<&'a str>,
     sites: &mut [BoxedSite],
     callback: &mut C,
-) -> Vec<&'a str>
+) -> failure::Fallible<Vec<&'a str>>
 where
     C: FnMut(SiteCallback),
 {
@@ -33,11 +33,10 @@ where
             if site.url_supported(link).await {
                 tracing::debug!("link {} supported by {}", link, site.name());
 
-                match site.get_images(user.id, link).await {
-                    // Got results successfully and there were results
-                    // Execute callback with site info and results
-                    Ok(results) if results.is_some() => {
-                        let results = results.unwrap(); // we know this is safe
+                let images = site.get_images(user.id, link).await?;
+
+                match images {
+                    Some(results) => {
                         tracing::debug!("found images: {:?}", results);
                         callback(SiteCallback {
                             site: &site,
@@ -47,23 +46,8 @@ where
                         });
                         break 'link;
                     }
-                    // Got results successfully and there were NO results
-                    // Continue onto next link
-                    Ok(_) => {
+                    _ => {
                         missing.push(link);
-                        continue 'link;
-                    }
-                    // Got error while processing, report and move onto next link
-                    Err(e) => {
-                        missing.push(link);
-                        tracing::warn!("unable to get results: {:?}", e);
-                        with_user_scope(
-                            Some(user),
-                            Some(vec![("site", site.name().to_string())]),
-                            || {
-                                capture_fail(&e);
-                            },
-                        );
                         continue 'link;
                     }
                 }
@@ -71,7 +55,7 @@ where
         }
     }
 
-    missing
+    Ok(missing)
 }
 
 pub fn find_best_photo(sizes: &[telegram::PhotoSize]) -> Option<&telegram::PhotoSize> {

@@ -208,18 +208,33 @@ pub struct E621 {
     client: reqwest::Client,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
+struct E621PostFile {
+    ext: String,
+    url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct E621PostPreview {
+    url: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct E621Post {
     id: i32,
-    file_url: String,
-    preview_url: String,
-    file_ext: String,
+    file: E621PostFile,
+    preview: E621PostPreview,
+}
+
+#[derive(Debug, Deserialize)]
+struct E621Resp {
+    post: E621Post,
 }
 
 impl E621 {
     pub fn new() -> Self {
         Self {
-            show: regex::Regex::new(r"https?://(?P<host>e(?:621|926)\.net)/post/show/(?P<id>\d+)(?:/(?P<tags>.+))?").unwrap(),
+            show: regex::Regex::new(r"https?://(?P<host>e(?:621|926)\.net)/(?:post/show/|posts/)(?P<id>\d+)(?:/(?P<tags>.+))?").unwrap(),
             data: regex::Regex::new(r"https?://(?P<host>static\d+\.e(?:621|926)\.net)/data/(?:(?P<modifier>sample|preview)/)?[0-9a-f]{2}/[0-9a-f]{2}/(?P<md5>[0-9a-f]{32})\.(?P<ext>.+)").unwrap(),
 
             client: reqwest::Client::new(),
@@ -246,15 +261,15 @@ impl Site for E621 {
             let captures = self.show.captures(url).unwrap();
             let id = &captures["id"];
 
-            format!("https://e621.net/post/show.json?id={}", id)
+            format!("https://e621.net/posts/{}.json", id)
         } else {
             let captures = self.data.captures(url).unwrap();
             let md5 = &captures["md5"];
 
-            format!("https://e621.net/post/show.json?md5={}", md5)
+            format!("https://e621.net/posts.json?md5={}", md5)
         };
 
-        let resp: E621Post = self
+        let resp: E621Resp = self
             .client
             .get(&endpoint)
             .header(header::USER_AGENT, USER_AGENT)
@@ -264,10 +279,10 @@ impl Site for E621 {
             .await?;
 
         Ok(Some(vec![PostInfo {
-            file_type: resp.file_ext,
-            url: resp.file_url,
-            thumb: Some(resp.preview_url),
-            source_link: Some(format!("https://e621.net/post/show/{}", resp.id)),
+            file_type: resp.post.file.ext,
+            url: resp.post.file.url,
+            thumb: Some(resp.post.preview.url),
+            source_link: Some(format!("https://e621.net/posts/{}", resp.post.id)),
             ..Default::default()
         }]))
     }

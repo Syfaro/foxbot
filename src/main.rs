@@ -1,7 +1,6 @@
 #![feature(try_trait)]
 
-use async_trait::async_trait;
-use sentry::integrations::failure::capture_fail;
+use sentry::integrations::failure::{capture_error, capture_fail};
 use sites::{PostInfo, Site};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -21,7 +20,7 @@ mod utils;
 // MARK: Statics and types
 
 type BoxedSite = Box<dyn Site + Send + Sync>;
-type BoxedHandler = Box<dyn Handler + Send + Sync>;
+type BoxedHandler = Box<dyn handlers::Handler + Send + Sync>;
 
 /// Generates a random 24 character alphanumeric string.
 ///
@@ -68,7 +67,9 @@ pub struct Config {
 
     // Logging
     jaeger_collector: Option<String>,
-    sentry_dsn: Option<String>,
+    pub sentry_dsn: Option<String>,
+    pub sentry_organization_slug: Option<String>,
+    pub sentry_project_slug: Option<String>,
 
     // Telegram config
     telegram_apitoken: String,
@@ -167,7 +168,7 @@ async fn main() {
 
     run_migrations(&config.database).await;
 
-    let pool = quaint::pooled::Quaint::new(&format!("file:test.db"))
+    let pool = quaint::pooled::Quaint::new(&format!("file:{}", config.database))
         .await
         .expect("Unable to connect to database");
 
@@ -237,6 +238,7 @@ async fn main() {
         Box::new(handlers::PhotoHandler),
         Box::new(handlers::CommandHandler),
         Box::new(handlers::TextHandler),
+        Box::new(handlers::ErrorReplyHandler::new()),
     ];
 
     let handler = Arc::new(MessageHandler {
@@ -257,7 +259,11 @@ async fn main() {
 
     let _guard = if let Some(dsn) = config.sentry_dsn {
         sentry::integrations::panic::register_panic_handler();
-        Some(sentry::init(dsn))
+        Some(sentry::init(sentry::ClientOptions {
+            dsn: Some(dsn.parse().unwrap()),
+            release: option_env!("RELEASE").map(std::borrow::Cow::from),
+            ..Default::default()
+        }))
     } else {
         None
     };
@@ -273,8 +279,7 @@ async fn main() {
             url: webhook_endpoint,
         };
         if let Err(e) = bot.make_request(&set_webhook).await {
-            capture_fail(&e);
-            tracing::error!("unable to set webhook: {:?}", e);
+            panic!(e);
         }
         receive_webhook(
             config.http_host.expect("Missing HTTP_HOST"),
@@ -285,8 +290,7 @@ async fn main() {
     } else {
         let delete_webhook = DeleteWebhook;
         if let Err(e) = bot.make_request(&delete_webhook).await {
-            capture_fail(&e);
-            tracing::error!("unable to clear webhook: {:?}", e);
+            panic!(e);
         }
         poll_updates(bot, handler).await;
     }
@@ -432,25 +436,7 @@ pub struct MessageHandler {
     pub conn: quaint::pooled::Quaint,
 }
 
-#[async_trait]
-pub trait Handler: Send + Sync {
-    /// Name of the handler, for debugging/logging uses.
-    fn name(&self) -> &'static str;
-
-    /// Method called for every update received.
-    ///
-    /// Returns if the update should be absorbed and not passed to the next handler.
-    /// Errors are logged to log::error and reported to Sentry, if enabled.
-    async fn handle(
-        &self,
-        handler: &MessageHandler,
-        update: Update,
-        command: Option<Command>,
-    ) -> Result<bool, Box<dyn std::error::Error>>;
-}
-
 impl MessageHandler {
-    #[tracing::instrument(skip(self, callback))]
     async fn get_fluent_bundle<C, R>(&self, requested: Option<&str>, callback: C) -> R
     where
         C: FnOnce(&fluent::FluentBundle<fluent::FluentResource>) -> R,
@@ -529,8 +515,8 @@ impl MessageHandler {
 
         let lang_code = message
             .from
-            .clone()
-            .map(|from| from.language_code)
+            .as_ref()
+            .map(|from| from.language_code.clone())
             .flatten();
 
         let msg = self
@@ -565,10 +551,10 @@ impl MessageHandler {
     }
 
     #[tracing::instrument(skip(self, message))]
-    async fn handle_welcome(&self, message: Message, command: &str) {
+    async fn handle_welcome(&self, message: &Message, command: &str) -> failure::Fallible<()> {
         use rand::seq::SliceRandom;
 
-        let from = message.from.clone().unwrap();
+        let from = message.from.as_ref().unwrap();
 
         let random_artwork = *STARTING_ARTWORK.choose(&mut rand::thread_rng()).unwrap();
 
@@ -605,22 +591,26 @@ impl MessageHandler {
             ..Default::default()
         };
 
-        if let Err(e) = self.bot.make_request(&send_message).await {
-            tracing::error!("unable to send help message: {:?}", e);
-            let tags = Some(vec![("command", command.to_string())]);
-            utils::with_user_scope(message.from.as_ref(), tags, || capture_fail(&e));
-        }
+        self.bot
+            .make_request(&send_message)
+            .await
+            .map(|_msg| ())
+            .map_err(Into::into)
     }
 
     #[tracing::instrument(skip(self, message))]
-    async fn send_generic_reply(&self, message: &Message, name: &str) {
-        let language_code = match &message.from {
-            Some(from) => &from.language_code,
-            None => return,
-        };
+    async fn send_generic_reply(
+        &self,
+        message: &Message,
+        name: &str,
+    ) -> failure::Fallible<Message> {
+        let language_code = message
+            .from
+            .as_ref()
+            .and_then(|from| from.language_code.as_deref());
 
         let text = self
-            .get_fluent_bundle(language_code.as_deref(), |bundle| {
+            .get_fluent_bundle(language_code, |bundle| {
                 utils::get_message(&bundle, name, None).unwrap()
             })
             .await;
@@ -632,27 +622,49 @@ impl MessageHandler {
             ..Default::default()
         };
 
-        if let Err(e) = self.bot.make_request(&send_message).await {
-            tracing::error!("unable to make request: {:?}", e);
-            utils::with_user_scope(message.from.as_ref(), None, || {
-                capture_fail(&e);
-            });
-        }
+        self.bot
+            .make_request(&send_message)
+            .await
+            .map_err(Into::into)
     }
 
     #[tracing::instrument(skip(self, update))]
     async fn handle_update(&self, update: Update) {
+        let user = update
+            .message
+            .as_ref()
+            .and_then(|message| message.from.as_ref());
+
         for handler in &self.handlers {
             let command = update
                 .message
                 .as_ref()
                 .and_then(|message| message.get_command());
 
-            tracing::trace!("running handler {}", handler.name());
+            tracing::trace!(handler = handler.name(), "running handler");
 
-            match handler.handle(&self, update.clone(), command.clone()).await {
-                Ok(absorb) if absorb => break,
-                Err(e) => log::error!("Error handling update: {:#?}", e), // Should this break?
+            match handler.handle(&self, &update, command.as_ref()).await {
+                Ok(status) if status == handlers::Status::Completed => break,
+                Err(e) => {
+                    log::error!("Error handling update: {:#?}", e);
+
+                    let mut tags = vec![("handler", handler.name().to_string())];
+                    if let Some(user) = user {
+                        tags.push(("user_id", user.id.to_string()));
+                    }
+                    if let Some(command) = command {
+                        tags.push(("command", command.name));
+                    }
+
+                    if let Some(msg) = &update.message {
+                        self.report_error(&msg, Some(tags), || capture_error(&e))
+                            .await;
+                    } else {
+                        capture_error(&e);
+                    }
+
+                    break;
+                }
                 _ => (),
             }
         }

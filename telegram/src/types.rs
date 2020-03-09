@@ -33,7 +33,7 @@ impl<T> Into<Result<T, Error>> for Response<T> {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Default)]
 pub struct Update {
     pub update_id: i32,
     pub message: Option<Message>,
@@ -45,7 +45,7 @@ pub struct Update {
     pub callback_query: Option<CallbackQuery>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Default)]
 pub struct User {
     pub id: i32,
     pub is_bot: bool,
@@ -64,7 +64,13 @@ pub enum ChatType {
     Channel,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+impl Default for ChatType {
+    fn default() -> Self {
+        ChatType::Private
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Default)]
 pub struct Chat {
     pub id: i64,
     #[serde(rename = "type")]
@@ -100,7 +106,7 @@ pub enum MessageEntityType {
     TextMention,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Default)]
 pub struct Message {
     pub message_id: i32,
     pub from: Option<User>,
