@@ -83,7 +83,7 @@ impl CommandHandler {
             return Ok(());
         }
 
-        let user = message.from.clone().unwrap();
+        let user = message.from.as_ref().unwrap();
 
         let con_token = egg_mode::KeyPair::new(
             handler.config.twitter_consumer_key.clone(),
@@ -137,7 +137,7 @@ impl CommandHandler {
         handler: &crate::MessageHandler,
         message: &Message,
     ) -> failure::Fallible<()> {
-        let from = message.from.clone().unwrap();
+        let from = message.from.as_ref().unwrap();
 
         let _action = continuous_action(
             handler.bot.clone(),
@@ -296,7 +296,7 @@ impl CommandHandler {
             (message.message_id, message)
         };
 
-        let photo = match message.photo.clone() {
+        let photo = match &message.photo {
             Some(photo) if !photo.is_empty() => photo,
             _ => {
                 handler
@@ -339,7 +339,7 @@ impl CommandHandler {
 
         let text = handler
             .get_fluent_bundle(
-                message.from.clone().unwrap().language_code.as_deref(),
+                message.from.as_ref().unwrap().language_code.as_deref(),
                 |bundle| get_message(&bundle, name, Some(args)).unwrap(),
             )
             .await;
@@ -380,7 +380,7 @@ impl CommandHandler {
                 (message.message_id, message)
             };
 
-        let bytes = match message.photo.clone() {
+        let bytes = match &message.photo {
             Some(photo) => {
                 let best_photo = find_best_photo(&photo).unwrap();
                 download_by_id(&handler.bot, &best_photo.file_id).await?
@@ -417,7 +417,7 @@ impl CommandHandler {
                 let links = links.iter().map(|link| link.as_str()).collect();
                 let mut link = None;
                 find_images(
-                    &message.from.clone().unwrap(),
+                    &message.from.as_ref().unwrap(),
                     links,
                     &mut sites,
                     &mut |info| {
@@ -490,7 +490,7 @@ impl CommandHandler {
 
         let (text, used_hashes) = handler
             .get_fluent_bundle(
-                message.from.clone().unwrap().language_code.as_deref(),
+                message.from.as_ref().unwrap().language_code.as_deref(),
                 |bundle| build_alternate_response(&bundle, items),
             )
             .await;
@@ -544,7 +544,7 @@ impl CommandHandler {
 
         let (updated_text, _used_hashes) = handler
             .get_fluent_bundle(
-                message.from.clone().unwrap().language_code.as_deref(),
+                message.from.as_ref().unwrap().language_code.as_deref(),
                 |bundle| build_alternate_response(&bundle, items),
             )
             .await;

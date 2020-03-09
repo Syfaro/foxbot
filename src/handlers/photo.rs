@@ -83,7 +83,7 @@ impl super::Handler for PhotoHandler {
 
         let text = handler
             .get_fluent_bundle(
-                message.from.clone().unwrap().language_code.as_deref(),
+                message.from.as_ref().unwrap().language_code.as_deref(),
                 |bundle| get_message(&bundle, name, Some(args)).unwrap(),
             )
             .await;
@@ -116,7 +116,7 @@ async fn no_results(
 ) -> failure::Fallible<()> {
     let text = handler
         .get_fluent_bundle(
-            message.from.clone().unwrap().language_code.as_deref(),
+            message.from.as_ref().unwrap().language_code.as_deref(),
             |bundle| get_message(&bundle, "reverse-no-results", None).unwrap(),
         )
         .await;

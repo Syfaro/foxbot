@@ -515,8 +515,8 @@ impl MessageHandler {
 
         let lang_code = message
             .from
-            .clone()
-            .map(|from| from.language_code)
+            .as_ref()
+            .map(|from| from.language_code.clone())
             .flatten();
 
         let msg = self
@@ -554,7 +554,7 @@ impl MessageHandler {
     async fn handle_welcome(&self, message: &Message, command: &str) -> failure::Fallible<()> {
         use rand::seq::SliceRandom;
 
-        let from = message.from.clone().unwrap();
+        let from = message.from.as_ref().unwrap();
 
         let random_artwork = *STARTING_ARTWORK.choose(&mut rand::thread_rng()).unwrap();
 
