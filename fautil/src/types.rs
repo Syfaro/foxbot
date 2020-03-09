@@ -31,6 +31,7 @@ pub struct File {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(flatten)]
     pub site_info: Option<SiteInfo>,
+    pub searched_hash: Option<i64>,
 }
 
 impl File {

@@ -3,7 +3,7 @@ use telegram::*;
 
 use super::Status::*;
 use crate::needs_field;
-use crate::utils::{download_by_id, find_best_photo, get_message};
+use crate::utils::{find_best_photo, get_message, match_image};
 
 // TODO: Configuration options
 // It should be possible to:
@@ -40,7 +40,7 @@ impl super::Handler for ChannelPhotoHandler {
             return Ok(Completed);
         }
 
-        let first = match get_matches(&handler.bot, &handler.fapi, &sizes).await? {
+        let first = match get_matches(&handler.bot, &handler.fapi, &handler.conn, &sizes).await? {
             Some(first) => first,
             _ => return Ok(Completed),
         };
@@ -128,16 +128,15 @@ fn link_was_seen(links: &[linkify::Link], source: &str) -> bool {
 async fn get_matches(
     bot: &Telegram,
     fapi: &fautil::FAUtil,
+    conn: &quaint::pooled::Quaint,
     sizes: &[PhotoSize],
-) -> reqwest::Result<Option<fautil::File>> {
+) -> failure::Fallible<Option<fautil::File>> {
     // Find the highest resolution size of the image and download.
     let best_photo = find_best_photo(&sizes).unwrap();
-    let bytes = download_by_id(&bot, &best_photo.file_id).await.unwrap();
-
-    // Run an image search for these bytes, get the first result.
-    fapi.image_search(&bytes, fautil::MatchType::Close)
-        .await
-        .map(|matches| matches.matches.into_iter().next())
+    Ok(match_image(&bot, &conn, &fapi, &best_photo)
+        .await?
+        .into_iter()
+        .next())
 }
 
 #[cfg(test)]

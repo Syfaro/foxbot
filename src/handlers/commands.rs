@@ -6,8 +6,8 @@ use tokio01::runtime::current_thread::block_on_all;
 use super::Status::*;
 use crate::needs_field;
 use crate::utils::{
-    build_alternate_response, continuous_action, download_by_id, find_best_photo, find_images,
-    get_message, parse_known_bots,
+    build_alternate_response, continuous_action, find_best_photo, find_images, get_message,
+    match_image, parse_known_bots,
 };
 
 // TODO: there's a lot of shared code between these commands.
@@ -315,14 +315,9 @@ impl CommandHandler {
         };
 
         let best_photo = find_best_photo(&photo).unwrap();
-        let bytes = download_by_id(&handler.bot, &best_photo.file_id).await?;
+        let matches = match_image(&handler.bot, &handler.conn, &handler.fapi, &best_photo).await?;
 
-        let matches = handler
-            .fapi
-            .image_search(&bytes, fautil::MatchType::Close)
-            .await?;
-
-        let result = match matches.matches.first() {
+        let result = match matches.first() {
             Some(result) => result,
             None => {
                 handler
@@ -388,10 +383,10 @@ impl CommandHandler {
                 (message.message_id, message)
             };
 
-        let bytes = match &message.photo {
+        let matches = match &message.photo {
             Some(photo) => {
                 let best_photo = find_best_photo(&photo).unwrap();
-                download_by_id(&handler.bot, &best_photo.file_id).await?
+                match_image(&handler.bot, &handler.conn, &handler.fapi, &best_photo).await?
             }
             None => {
                 let mut links = vec![];
@@ -434,7 +429,7 @@ impl CommandHandler {
                 )
                 .await?;
 
-                match link {
+                let bytes = match link {
                     Some(link) => reqwest::get(&link.url)
                         .await
                         .unwrap()
@@ -448,29 +443,28 @@ impl CommandHandler {
                             .await?;
                         return Ok(());
                     }
-                }
+                };
+
+                handler
+                    .fapi
+                    .image_search(&bytes, fautil::MatchType::Close)
+                    .await?
+                    .matches
             }
         };
 
-        let matches = handler
-            .fapi
-            .image_search(&bytes, fautil::MatchType::Force)
-            .await?;
-
-        if matches.matches.is_empty() {
+        if matches.is_empty() {
             handler
                 .send_generic_reply(&message, "reverse-no-results")
                 .await?;
             return Ok(());
         }
 
-        let hash = matches.hash.to_be_bytes();
-        let has_multiple_matches = matches.matches.len() > 1;
+        let has_multiple_matches = matches.len() > 1;
 
         let mut results: HashMap<Vec<String>, Vec<fautil::File>> = HashMap::new();
 
         let matches: Vec<fautil::File> = matches
-            .matches
             .into_iter()
             .map(|m| fautil::File {
                 artists: Some(
@@ -530,17 +524,20 @@ impl CommandHandler {
 
         for m in matches {
             if let Some(artist) = results.get_mut(&m.artists.clone().unwrap()) {
-                let bytes = m.hash.unwrap().to_be_bytes();
-
                 artist.push(fautil::File {
                     id: m.id,
                     site_id: m.site_id,
-                    distance: Some(hamming::distance_fast(&bytes, &hash).unwrap()),
+                    distance: hamming::distance_fast(
+                        &m.hash.unwrap().to_be_bytes(),
+                        &m.searched_hash.unwrap().to_be_bytes(),
+                    )
+                    .ok(),
                     hash: m.hash,
                     url: m.url,
                     filename: m.filename,
                     artists: m.artists.clone(),
                     site_info: None,
+                    searched_hash: None,
                 });
             }
         }

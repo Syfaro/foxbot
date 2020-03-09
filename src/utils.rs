@@ -62,18 +62,6 @@ pub fn find_best_photo(sizes: &[telegram::PhotoSize]) -> Option<&telegram::Photo
     sizes.iter().max_by_key(|size| size.height * size.width)
 }
 
-#[tracing::instrument(skip(bot))]
-pub async fn download_by_id(
-    bot: &telegram::Telegram,
-    file_id: &str,
-) -> Result<Vec<u8>, telegram::Error> {
-    let get_file = telegram::GetFile {
-        file_id: file_id.to_string(),
-    };
-    let file = bot.make_request(&get_file).await?;
-    bot.download_file(file.file_path.unwrap()).await
-}
-
 pub fn get_message(
     bundle: Bundle,
     name: &str,
@@ -135,7 +123,7 @@ pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (S
     for item in items {
         let total_dist: u64 = item.1.iter().map(|item| item.distance.unwrap()).sum();
         tracing::trace!("total distance: {}", total_dist);
-        if total_dist > (7 * item.1.len() as u64) {
+        if total_dist > (6 * item.1.len() as u64) {
             tracing::trace!("too high, aborting");
             continue;
         }
@@ -266,4 +254,67 @@ impl Drop for ContinuousAction {
             tx.send(true).unwrap();
         }
     }
+}
+
+pub async fn match_image(
+    bot: &telegram::Telegram,
+    conn: &quaint::pooled::Quaint,
+    fapi: &fautil::FAUtil,
+    file: &telegram::PhotoSize,
+) -> failure::Fallible<Vec<fautil::File>> {
+    use quaint::prelude::*;
+
+    let conn = conn.check_out().await?;
+
+    let result = conn
+        .select(
+            Select::from_table("file_id_cache")
+                .column("hash")
+                .so_that("file_id".equals(file.file_unique_id.to_string())),
+        )
+        .await?;
+
+    if let Some(row) = result.first() {
+        let hash = row["hash"].as_i64().unwrap();
+        return lookup_single_hash(&fapi, hash).await;
+    }
+
+    let get_file = telegram::GetFile {
+        file_id: file.file_id.clone(),
+    };
+
+    let file_info = bot.make_request(&get_file).await?;
+    let data = bot.download_file(file_info.file_path.unwrap()).await?;
+
+    let hash = fautil::hash_bytes(&data)?;
+    conn.insert(
+        Insert::single_into("file_id_cache")
+            .value("hash", hash)
+            .value("file_id", file.file_unique_id.clone())
+            .build(),
+    )
+    .await?;
+
+    lookup_single_hash(&fapi, hash).await
+}
+
+async fn lookup_single_hash(
+    fapi: &fautil::FAUtil,
+    hash: i64,
+) -> failure::Fallible<Vec<fautil::File>> {
+    let mut matches = fapi.lookup_hashes(vec![hash]).await?;
+
+    for mut m in &mut matches {
+        m.distance =
+            hamming::distance_fast(&m.hash.unwrap().to_be_bytes(), &hash.to_be_bytes()).ok();
+    }
+
+    matches.sort_by(|a, b| {
+        a.distance
+            .unwrap()
+            .partial_cmp(&b.distance.unwrap())
+            .unwrap()
+    });
+
+    Ok(matches)
 }

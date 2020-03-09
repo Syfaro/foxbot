@@ -166,6 +166,32 @@ impl FAUtil {
     }
 }
 
+#[cfg(feature = "local_hash")]
+pub use image::ImageError;
+
+#[cfg(feature = "local_hash")]
+pub fn get_hasher() -> img_hash::Hasher<[u8; 8]> {
+    img_hash::HasherConfig::with_bytes_type::<[u8; 8]>()
+        .hash_alg(img_hash::HashAlg::Gradient)
+        .hash_size(8, 8)
+        .preproc_dct()
+        .to_hasher()
+}
+
+#[cfg(feature = "local_hash")]
+pub fn hash_bytes(b: &[u8]) -> Result<i64, image::ImageError> {
+    let hasher = get_hasher();
+
+    let image = image::load_from_memory(&b)?;
+    let hash = hasher.hash_image(&image);
+    drop(image);
+
+    let mut buf = [0u8; 8];
+    buf.copy_from_slice(hash.as_bytes());
+
+    Ok(i64::from_be_bytes(buf))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

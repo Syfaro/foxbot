@@ -3,7 +3,7 @@ use crate::needs_field;
 use async_trait::async_trait;
 use telegram::*;
 
-use crate::utils::{continuous_action, download_by_id, find_best_photo, get_message};
+use crate::utils::{continuous_action, find_best_photo, get_message, match_image};
 
 pub struct PhotoHandler;
 
@@ -28,7 +28,7 @@ impl super::Handler for PhotoHandler {
             return Ok(Ignored);
         }
 
-        let _action = continuous_action(
+        let action = continuous_action(
             handler.bot.clone(),
             12,
             message.chat_id(),
@@ -37,21 +37,16 @@ impl super::Handler for PhotoHandler {
         );
 
         let best_photo = find_best_photo(&photos).unwrap();
-        let photo = download_by_id(&handler.bot, &best_photo.file_id).await?;
+        let matches = match_image(&handler.bot, &handler.conn, &handler.fapi, &best_photo).await?;
 
-        let matches = match handler
-            .fapi
-            .image_search(&photo, fautil::MatchType::Close)
-            .await?
-        {
-            matches if !matches.matches.is_empty() => matches.matches,
-            _matches => {
+        let first = match matches.get(0) {
+            Some(item) => item,
+            _ => {
                 no_results(&handler, &message, now).await?;
                 return Ok(Completed);
             }
         };
 
-        let first = matches.get(0).unwrap();
         let similar: Vec<&fautil::File> = matches
             .iter()
             .skip(1)
@@ -87,6 +82,8 @@ impl super::Handler for PhotoHandler {
                 |bundle| get_message(&bundle, name, Some(args)).unwrap(),
             )
             .await;
+
+        drop(action);
 
         let send_message = SendMessage {
             chat_id: message.chat_id(),

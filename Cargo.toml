@@ -35,7 +35,7 @@ futures-util = "0.3"
 tokio01 = { version = "0.1", package = "tokio" }
 
 telegram = { path = "./telegram", features = ["trace"] }
-fautil = { path = "./fautil", features = ["trace"] }
+fautil = { path = "./fautil", features = ["trace", "local_hash"] }
 cfscrape = { git = "https://git.huefox.com/syfaro/cfscrape-rust.git" }
 
 tracing = "0.1"
@@ -48,3 +48,7 @@ rusqlite = { version = "0.21", features = ["bundled"] }
 refinery = { version = "0.2", features = ["rusqlite"] }
 barrel = { version = "0.6", features = ["sqlite3"] }
 quaint = { version = "0.2.0-alpha.9", features = ["full"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
