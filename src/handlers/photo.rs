@@ -46,28 +46,7 @@ impl super::Handler for PhotoHandler {
         {
             matches if !matches.matches.is_empty() => matches.matches,
             _matches => {
-                let text = handler
-                    .get_fluent_bundle(
-                        message.from.clone().unwrap().language_code.as_deref(),
-                        |bundle| get_message(&bundle, "reverse-no-results", None).unwrap(),
-                    )
-                    .await;
-
-                let send_message = SendMessage {
-                    chat_id: message.chat_id(),
-                    text,
-                    reply_to_message_id: Some(message.message_id),
-                    ..Default::default()
-                };
-
-                handler.bot.make_request(&send_message).await?;
-
-                let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "source")
-                    .add_field("matches", 0)
-                    .add_field("duration", now.elapsed().as_millis() as i64);
-
-                let _ = handler.influx.query(&point).await;
-
+                no_results(&handler, &message, now).await?;
                 return Ok(Completed);
             }
         };
@@ -128,4 +107,34 @@ impl super::Handler for PhotoHandler {
 
         Ok(Completed)
     }
+}
+
+async fn no_results(
+    handler: &crate::MessageHandler,
+    message: &Message,
+    start: std::time::Instant,
+) -> failure::Fallible<()> {
+    let text = handler
+        .get_fluent_bundle(
+            message.from.clone().unwrap().language_code.as_deref(),
+            |bundle| get_message(&bundle, "reverse-no-results", None).unwrap(),
+        )
+        .await;
+
+    let send_message = SendMessage {
+        chat_id: message.chat_id(),
+        text,
+        reply_to_message_id: Some(message.message_id),
+        ..Default::default()
+    };
+
+    handler.bot.make_request(&send_message).await?;
+
+    let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "source")
+        .add_field("matches", 0)
+        .add_field("duration", start.elapsed().as_millis() as i64);
+
+    let _ = handler.influx.query(&point).await;
+
+    Ok(())
 }

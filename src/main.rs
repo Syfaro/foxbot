@@ -279,8 +279,7 @@ async fn main() {
             url: webhook_endpoint,
         };
         if let Err(e) = bot.make_request(&set_webhook).await {
-            capture_fail(&e);
-            tracing::error!("unable to set webhook: {:?}", e);
+            panic!(e);
         }
         receive_webhook(
             config.http_host.expect("Missing HTTP_HOST"),
@@ -291,8 +290,7 @@ async fn main() {
     } else {
         let delete_webhook = DeleteWebhook;
         if let Err(e) = bot.make_request(&delete_webhook).await {
-            capture_fail(&e);
-            tracing::error!("unable to clear webhook: {:?}", e);
+            panic!(e);
         }
         poll_updates(bot, handler).await;
     }

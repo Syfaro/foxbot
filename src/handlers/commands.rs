@@ -174,7 +174,7 @@ impl CommandHandler {
             find_images(&from, links, &mut sites, &mut |info| {
                 results.extend(info.results);
             })
-            .await
+            .await?
         };
 
         if results.is_empty() {
@@ -424,7 +424,7 @@ impl CommandHandler {
                         link = info.results.into_iter().next();
                     },
                 )
-                .await;
+                .await?;
 
                 match link {
                     Some(link) => reqwest::get(&link.url)

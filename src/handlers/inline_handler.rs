@@ -51,7 +51,7 @@ impl super::Handler for InlineHandler {
 
                 results.extend(info.results);
             })
-            .await;
+            .await?;
         }
 
         // Find if any of our results were personal. If they were, we need to

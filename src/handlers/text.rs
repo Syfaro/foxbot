@@ -1,7 +1,6 @@
 use super::Status::*;
 use crate::needs_field;
 use async_trait::async_trait;
-use sentry::integrations::failure::capture_fail;
 use telegram::*;
 use tokio01::runtime::current_thread::block_on_all;
 
@@ -26,7 +25,7 @@ impl super::Handler for TextHandler {
 
         let now = std::time::Instant::now();
 
-        let from = message.from.clone().unwrap();
+        let from = message.from.as_ref().unwrap();
 
         if text.trim().parse::<i32>().is_err() {
             tracing::trace!("got text that wasn't oob, ignoring");
@@ -52,21 +51,7 @@ impl super::Handler for TextHandler {
             handler.config.twitter_consumer_secret.clone(),
         );
 
-        let token = match block_on_all(egg_mode::access_token(con_token, &request_token, text)) {
-            Err(e) => {
-                tracing::warn!("user was unable to verify OOB: {:?}", e);
-
-                handler
-                    .report_error(
-                        &message,
-                        Some(vec![("command", "twitter_auth".to_string())]),
-                        || capture_fail(&e),
-                    )
-                    .await;
-                return Ok(Completed);
-            }
-            Ok(token) => token,
-        };
+        let token = block_on_all(egg_mode::access_token(con_token, &request_token, text))?;
 
         tracing::trace!("got token");
 
@@ -80,26 +65,11 @@ impl super::Handler for TextHandler {
         {
             let mut lock = handler.db.write().await;
 
-            if let Err(e) = lock.set(
+            lock.set(
                 &format!("credentials:{}", from.id),
                 &(access.key, access.secret),
-            ) {
-                tracing::warn!("unable to save user credentials: {:?}", e);
-
-                handler
-                    .report_error(
-                        &message,
-                        Some(vec![("command", "twitter_auth".to_string())]),
-                        || {
-                            sentry::integrations::failure::capture_error(&format_err!(
-                                "Unable to save to Twitter database: {}",
-                                e
-                            ))
-                        },
-                    )
-                    .await;
-                return Ok(Completed);
-            }
+            )
+            .map_err(|err| failure::format_err!("pickledb error: {}", err))?;
         }
 
         let mut args = fluent::FluentArgs::new();
