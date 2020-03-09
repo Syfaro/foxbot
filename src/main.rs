@@ -67,7 +67,9 @@ pub struct Config {
 
     // Logging
     jaeger_collector: Option<String>,
-    sentry_dsn: Option<String>,
+    pub sentry_dsn: Option<String>,
+    pub sentry_organization_slug: Option<String>,
+    pub sentry_project_slug: Option<String>,
 
     // Telegram config
     telegram_apitoken: String,
@@ -236,6 +238,7 @@ async fn main() {
         Box::new(handlers::PhotoHandler),
         Box::new(handlers::CommandHandler),
         Box::new(handlers::TextHandler),
+        Box::new(handlers::ErrorReplyHandler::new()),
     ];
 
     let handler = Arc::new(MessageHandler {
@@ -256,7 +259,11 @@ async fn main() {
 
     let _guard = if let Some(dsn) = config.sentry_dsn {
         sentry::integrations::panic::register_panic_handler();
-        Some(sentry::init(dsn))
+        Some(sentry::init(sentry::ClientOptions {
+            dsn: Some(dsn.parse().unwrap()),
+            release: option_env!("RELEASE").map(std::borrow::Cow::from),
+            ..Default::default()
+        }))
     } else {
         None
     };
@@ -432,7 +439,6 @@ pub struct MessageHandler {
 }
 
 impl MessageHandler {
-    #[tracing::instrument(skip(self, callback))]
     async fn get_fluent_bundle<C, R>(&self, requested: Option<&str>, callback: C) -> R
     where
         C: FnOnce(&fluent::FluentBundle<fluent::FluentResource>) -> R,
@@ -643,14 +649,23 @@ impl MessageHandler {
                 Ok(status) if status == handlers::Status::Completed => break,
                 Err(e) => {
                     log::error!("Error handling update: {:#?}", e);
+
                     let mut tags = vec![("handler", handler.name().to_string())];
                     if let Some(user) = user {
                         tags.push(("user_id", user.id.to_string()));
                     }
+                    if let Some(command) = command {
+                        tags.push(("command", command.name));
+                    }
 
-                    utils::with_user_scope(user, Some(tags), || {
+                    if let Some(msg) = &update.message {
+                        self.report_error(&msg, Some(tags), || capture_error(&e))
+                            .await;
+                    } else {
                         capture_error(&e);
-                    });
+                    }
+
+                    break;
                 }
                 _ => (),
             }

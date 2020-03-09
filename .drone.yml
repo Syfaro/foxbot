@@ -14,7 +14,9 @@ steps:
   - apt-get update -y
   - apt-get install pkg-config libssl-dev ca-certificates python3 python3-pip nodejs -y
   - pip3 install cfscrape
+  - rustup component add clippy
   - cargo test
+  - cargo clippy
 
 - name: sentry-release
   image: getsentry/sentry-cli
@@ -35,6 +37,8 @@ steps:
   image: plugins/docker
   settings:
     auto_tag: true
+    build_args_from_env:
+      - DRONE_COMMIT_SHA
     password:
       from_secret: docker_password
     registry: registry.huefox.com

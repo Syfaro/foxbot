@@ -51,6 +51,7 @@ impl super::Handler for CommandHandler {
             "/mirror" => self.handle_mirror(&handler, message).await,
             "/source" => self.handle_source(&handler, message).await,
             "/alts" => self.handle_alts(&handler, message).await,
+            "/error" => Err(failure::format_err!("a test error message")),
             _ => {
                 tracing::info!("unknown command: {}", command.name);
                 Ok(())

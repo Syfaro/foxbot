@@ -1,4 +1,5 @@
 use super::Status::*;
+use crate::needs_field;
 use async_trait::async_trait;
 use telegram::*;
 
@@ -16,15 +17,13 @@ impl super::Handler for ChosenInlineHandler {
         update: &Update,
         _command: Option<&Command>,
     ) -> Result<super::Status, failure::Error> {
-        Ok(if let Some(chosen_result) = &update.chosen_inline_result {
-            let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "chosen")
-                .add_field("user_id", chosen_result.from.id);
+        let chosen_result = needs_field!(update, chosen_inline_result);
 
-            let _ = handler.influx.query(&point).await;
+        let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "chosen")
+            .add_field("user_id", chosen_result.from.id);
 
-            Completed
-        } else {
-            Ignored
-        })
+        let _ = handler.influx.query(&point).await;
+
+        Ok(Completed)
     }
 }
