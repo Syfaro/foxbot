@@ -70,6 +70,12 @@ impl Default for ChatType {
     }
 }
 
+impl ChatType {
+    pub fn is_group(&self) -> bool {
+        *self == Self::Group || *self == Self::Supergroup
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Default)]
 pub struct Chat {
     pub id: i64,
@@ -232,4 +238,50 @@ pub struct InlineKeyboardButton {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct InlineKeyboardMarkup {
     pub inline_keyboard: Vec<Vec<InlineKeyboardButton>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ChatMemberStatus {
+    Creator,
+    Administrator,
+    Member,
+    Restricted,
+    Left,
+    Kicked
+}
+
+impl Default for ChatMemberStatus {
+    fn default() -> Self {
+        Self::Member
+    }
+}
+
+impl ChatMemberStatus {
+    pub fn is_admin(&self) -> bool {
+        *self == Self::Creator || *self == Self::Administrator
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct ChatMember {
+    pub user: User,
+    pub status: ChatMemberStatus,
+    pub custom_title: Option<String>,
+    pub until_date: Option<i32>,
+    pub can_be_edited: Option<bool>,
+    pub can_post_messages: Option<bool>,
+    pub can_edit_messages: Option<bool>,
+    pub can_delete_messages: Option<bool>,
+    pub can_restrict_members: Option<bool>,
+    pub can_promote_members: Option<bool>,
+    pub can_change_info: Option<bool>,
+    pub can_invite_users: Option<bool>,
+    pub can_pin_messages: Option<bool>,
+    pub is_member: Option<bool>,
+    pub can_send_messages: Option<bool>,
+    pub can_send_media_messages: Option<bool>,
+    pub can_send_polls: Option<bool>,
+    pub can_send_other_messages: Option<bool>,
+    pub can_add_web_page_previews: Option<bool>,
 }

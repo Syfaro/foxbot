@@ -237,6 +237,7 @@ async fn main() {
         Box::new(handlers::GroupAddHandler),
         Box::new(handlers::PhotoHandler),
         Box::new(handlers::CommandHandler),
+        Box::new(handlers::GroupSourceHandler),
         Box::new(handlers::TextHandler),
         Box::new(handlers::ErrorReplyHandler::new()),
     ];

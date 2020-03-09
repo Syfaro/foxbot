@@ -256,6 +256,7 @@ impl Drop for ContinuousAction {
     }
 }
 
+#[tracing::instrument(skip(bot, conn, fapi))]
 pub async fn match_image(
     bot: &telegram::Telegram,
     conn: &quaint::pooled::Quaint,
@@ -286,7 +287,8 @@ pub async fn match_image(
     let file_info = bot.make_request(&get_file).await?;
     let data = bot.download_file(file_info.file_path.unwrap()).await?;
 
-    let hash = fautil::hash_bytes(&data)?;
+    let hash = tokio::task::spawn_blocking(move || fautil::hash_bytes(&data)).await??;
+
     conn.insert(
         Insert::single_into("file_id_cache")
             .value("hash", hash)

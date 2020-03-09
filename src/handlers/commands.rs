@@ -52,6 +52,7 @@ impl super::Handler for CommandHandler {
             "/source" => self.handle_source(&handler, message).await,
             "/alts" => self.handle_alts(&handler, message).await,
             "/error" => Err(failure::format_err!("a test error message")),
+            "/groupsource" => self.enable_group_source(&handler, message).await,
             _ => {
                 tracing::info!("unknown command: {}", command.name);
                 Ok(())
@@ -572,5 +573,93 @@ impl CommandHandler {
             .await
             .map(|_msg| ())
             .map_err(Into::into)
+    }
+
+    async fn enable_group_source(
+        &self,
+        handler: &crate::MessageHandler,
+        message: &Message,
+    ) -> failure::Fallible<()> {
+        use super::group_source::{ENABLE_KEY, ENABLE_VALUE};
+        use quaint::prelude::*;
+
+        if !message.chat.chat_type.is_group() {
+            handler
+                .send_generic_reply(&message, "automatic-enable-not-group")
+                .await?;
+            return Ok(());
+        }
+
+        let user = message.from.as_ref().unwrap();
+
+        let get_chat_member = GetChatMember {
+            chat_id: message.chat_id(),
+            user_id: user.id,
+        };
+        let chat_member = handler.bot.make_request(&get_chat_member).await?;
+
+        if !chat_member.status.is_admin() {
+            handler
+                .send_generic_reply(&message, "automatic-enable-not-admin")
+                .await?;
+            return Ok(());
+        }
+
+        let get_chat_member = GetChatMember {
+            user_id: handler.bot_user.id,
+            ..get_chat_member
+        };
+        let bot_member = handler.bot.make_request(&get_chat_member).await?;
+
+        if !bot_member.status.is_admin() {
+            handler
+                .send_generic_reply(&message, "automatic-enable-bot-not-admin")
+                .await?;
+            return Ok(());
+        }
+
+        let conn = handler.conn.check_out().await?;
+
+        let results = conn
+            .select(
+                Select::from_table("group_config").so_that(
+                    "chat_id"
+                        .equals(message.chat.id)
+                        .and("name".equals(ENABLE_KEY)),
+                ),
+            )
+            .await?;
+
+        if !results.is_empty() {
+            conn.delete(
+                Delete::from_table("group_config").so_that(
+                    "chat_id"
+                        .equals(message.chat.id)
+                        .and("name".equals(ENABLE_KEY)),
+                ),
+            )
+            .await?;
+
+            handler
+                .send_generic_reply(&message, "automatic-disable")
+                .await?;
+
+            return Ok(());
+        }
+
+        conn.insert(
+            Insert::single_into("group_config")
+                .value("chat_id", message.chat.id)
+                .value("name", ENABLE_KEY)
+                .value("value", ENABLE_VALUE)
+                .build(),
+        )
+        .await?;
+
+        handler
+            .send_generic_reply(&message, "automatic-enable-success")
+            .await?;
+
+        Ok(())
     }
 }

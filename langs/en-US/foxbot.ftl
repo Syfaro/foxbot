@@ -11,6 +11,8 @@ welcome =
     
     Add me to your group for features like /mirror (where I mirror all the links in a message, including messages you reply to) or /source (where I attempt to find the source of an image you're replying to).
     
+    If I'm given edit permissions in your channel, I'll automatically edit posts to include a source link.
+    
     Contact my creator { -creatorName } if you have any issues or feature suggestions.
 
 welcome-group =
@@ -21,6 +23,8 @@ welcome-group =
     I've also got a few commands to help in groups:
     · /mirror - I'll look at all the links in your message or the message you're replying to and mirror them
     · /source - I'll attempt to find if the photo you're replying to has been posted on FurAffinity
+    
+    You can also enable automatically finding sources for images posted in here with the /groupsource command. However, I must be an administrator in the group for this to work and it can only be enabled by an administrator.
 
 welcome-try-me = Try Me!
 
@@ -60,6 +64,16 @@ alternate-title = Here are some possible alternate versions:
 alternate-posted-by = Posted by { $name }
 alternate-distance = · { $link } (distance of { $distance })
 alternate-multiple-photo = I can only find alternates for a single photo, sorry.
+
+# Automatic group sourcing
+automatic-single = It looks like this image may have come from here: { $link }
+automatic-multiple = I found a few places this image may have come from:
+automatic-multiple-result = · { $link } (distance of { $distance })
+automatic-enable-not-admin = Sorry, you must be a group admin to enable this.
+automatic-enable-bot-not-admin = Sorry, you must give me admin permissions due to a Telegram limitation.
+automatic-enable-success = Automatic group sourcing is now enabled!
+automatic-disable = This feature is now turned off.
+automatic-enable-not-group = This feature is only supported in groups.
 
 # Error Messages
 error-generic = Oh no, something went wrong! Please send a message to my creator, { -creatorName }, saying what happened.

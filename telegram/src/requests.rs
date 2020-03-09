@@ -5,7 +5,7 @@ use crate::types::*;
 use crate::TelegramRequest;
 
 /// ChatID represents a possible type of value for requests.
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum ChatID {
     /// A chat's numeric ID.
@@ -681,5 +681,19 @@ impl TelegramRequest for EditMessageReplyMarkup {
 
     fn endpoint(&self) -> &str {
         "editMessageReplyMarkup"
+    }
+}
+
+#[derive(Default, Debug, Serialize, Clone)]
+pub struct GetChatMember {
+    pub chat_id: ChatID,
+    pub user_id: i32,
+}
+
+impl TelegramRequest for GetChatMember {
+    type Response = ChatMember;
+
+    fn endpoint(&self) -> &str {
+        "getChatMember"
     }
 }
