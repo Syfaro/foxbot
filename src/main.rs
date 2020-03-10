@@ -4,7 +4,7 @@ use sentry::integrations::failure::{capture_error, capture_fail};
 use sites::{PostInfo, Site};
 use std::collections::HashMap;
 use std::sync::Arc;
-use telegram::*;
+use tgbotapi::{requests::*, *};
 use tokio::sync::{Mutex, RwLock};
 use tracing_futures::Instrument;
 use unic_langid::LanguageIdentifier;

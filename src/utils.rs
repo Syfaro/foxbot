@@ -16,7 +16,7 @@ pub struct SiteCallback<'a> {
 
 #[tracing::instrument(skip(user, sites, callback))]
 pub async fn find_images<'a, C>(
-    user: &telegram::User,
+    user: &tgbotapi::User,
     links: Vec<&'a str>,
     sites: &mut [BoxedSite],
     callback: &mut C,
@@ -58,7 +58,7 @@ where
     Ok(missing)
 }
 
-pub fn find_best_photo(sizes: &[telegram::PhotoSize]) -> Option<&telegram::PhotoSize> {
+pub fn find_best_photo(sizes: &[tgbotapi::PhotoSize]) -> Option<&tgbotapi::PhotoSize> {
     sizes.iter().max_by_key(|size| size.height * size.width)
 }
 
@@ -80,7 +80,7 @@ pub fn get_message(
 
 type SentryTags<'a> = Option<Vec<(&'a str, String)>>;
 
-pub fn with_user_scope<C, R>(from: Option<&telegram::User>, tags: SentryTags, callback: C) -> R
+pub fn with_user_scope<C, R>(from: Option<&tgbotapi::User>, tags: SentryTags, callback: C) -> R
 where
     C: FnOnce() -> R,
 {
@@ -158,7 +158,7 @@ pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (S
     (s, used_hashes)
 }
 
-pub fn parse_known_bots(message: &telegram::Message) -> Option<Vec<String>> {
+pub fn parse_known_bots(message: &tgbotapi::Message) -> Option<Vec<String>> {
     let from = if let Some(ref forward_from) = message.forward_from {
         Some(forward_from)
     } else {
@@ -195,11 +195,11 @@ pub struct ContinuousAction {
 
 #[tracing::instrument(skip(bot, user))]
 pub fn continuous_action(
-    bot: Arc<telegram::Telegram>,
+    bot: Arc<tgbotapi::Telegram>,
     max: usize,
-    chat_id: telegram::ChatID,
-    user: Option<telegram::User>,
-    action: telegram::ChatAction,
+    chat_id: tgbotapi::requests::ChatID,
+    user: Option<tgbotapi::User>,
+    action: tgbotapi::requests::ChatAction,
 ) -> ContinuousAction {
     use futures::future::FutureExt;
     use futures_util::stream::StreamExt;
@@ -209,7 +209,7 @@ pub fn continuous_action(
 
     tokio::spawn(
         async move {
-            let chat_action = telegram::SendChatAction { chat_id, action };
+            let chat_action = tgbotapi::requests::SendChatAction { chat_id, action };
 
             let mut count: usize = 0;
 
@@ -258,10 +258,10 @@ impl Drop for ContinuousAction {
 
 #[tracing::instrument(skip(bot, conn, fapi))]
 pub async fn match_image(
-    bot: &telegram::Telegram,
+    bot: &tgbotapi::Telegram,
     conn: &quaint::pooled::Quaint,
     fapi: &fautil::FAUtil,
-    file: &telegram::PhotoSize,
+    file: &tgbotapi::PhotoSize,
 ) -> failure::Fallible<Vec<fautil::File>> {
     use quaint::prelude::*;
 
@@ -280,12 +280,12 @@ pub async fn match_image(
         return lookup_single_hash(&fapi, hash).await;
     }
 
-    let get_file = telegram::GetFile {
+    let get_file = tgbotapi::requests::GetFile {
         file_id: file.file_id.clone(),
     };
 
     let file_info = bot.make_request(&get_file).await?;
-    let data = bot.download_file(file_info.file_path.unwrap()).await?;
+    let data = bot.download_file(&file_info.file_path.unwrap()).await?;
 
     let hash = tokio::task::spawn_blocking(move || fautil::hash_bytes(&data)).await??;
 

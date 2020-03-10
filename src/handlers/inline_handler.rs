@@ -4,7 +4,7 @@ use crate::needs_field;
 use crate::sites::PostInfo;
 use crate::utils::*;
 use async_trait::async_trait;
-use telegram::*;
+use tgbotapi::{requests::*, *};
 
 pub struct InlineHandler;
 

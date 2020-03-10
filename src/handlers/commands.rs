@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
-use telegram::*;
+use tgbotapi::{requests::*, *};
 use tokio01::runtime::current_thread::block_on_all;
 
 use super::Status::*;

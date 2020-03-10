@@ -1,7 +1,7 @@
 use super::Status::*;
 use crate::needs_field;
 use async_trait::async_trait;
-use telegram::*;
+use tgbotapi::*;
 
 pub struct ErrorReplyHandler {
     client: reqwest::Client,
@@ -121,8 +121,8 @@ fn get_code_block(entities: &[MessageEntity], text: &str) -> Option<String> {
 mod tests {
     #[test]
     fn test_get_code_block() {
-        let entities = vec![telegram::MessageEntity {
-            entity_type: telegram::MessageEntityType::Code,
+        let entities = vec![tgbotapi::MessageEntity {
+            entity_type: tgbotapi::MessageEntityType::Code,
             offset: 0,
             length: 36,
             url: None,

@@ -1,15 +1,9 @@
 use async_trait::async_trait;
-use telegram::*;
+use tgbotapi::{requests::*, *};
 
 use super::Status::*;
 use crate::needs_field;
 use crate::utils::{find_best_photo, get_message, match_image};
-
-// TODO: Configuration options
-// It should be possible to:
-// * Link to multiple sources (change button to source name)
-// * Edit messages with artist names
-// * Configure localization for channel
 
 pub struct ChannelPhotoHandler;
 
@@ -180,33 +174,33 @@ mod tests {
             "https://furrynetwork.com",
         ];
 
-        let message = telegram::Message {
+        let message = tgbotapi::Message {
             text: Some(
                 "My message has a link like this: https://syfaro.net and some words after it."
                     .into(),
             ),
             caption: Some("There can also be links in the caption: https://huefox.com".into()),
-            reply_markup: Some(telegram::InlineKeyboardMarkup {
+            reply_markup: Some(tgbotapi::InlineKeyboardMarkup {
                 inline_keyboard: vec![
-                    vec![telegram::InlineKeyboardButton {
+                    vec![tgbotapi::InlineKeyboardButton {
                         url: Some("https://e621.net".into()),
                         ..Default::default()
                     }],
-                    vec![telegram::InlineKeyboardButton {
+                    vec![tgbotapi::InlineKeyboardButton {
                         url: Some("https://www.furaffinity.net".into()),
                         ..Default::default()
                     }],
                 ],
             }),
-            entities: Some(vec![telegram::MessageEntity {
-                entity_type: telegram::MessageEntityType::TextLink,
+            entities: Some(vec![tgbotapi::MessageEntity {
+                entity_type: tgbotapi::MessageEntityType::TextLink,
                 offset: 0,
                 length: 10,
                 url: Some("https://www.weasyl.com".to_string()),
                 user: None,
             }]),
-            caption_entities: Some(vec![telegram::MessageEntity {
-                entity_type: telegram::MessageEntityType::TextLink,
+            caption_entities: Some(vec![tgbotapi::MessageEntity {
+                entity_type: tgbotapi::MessageEntityType::TextLink,
                 offset: 11,
                 length: 20,
                 url: Some("https://furrynetwork.com".to_string()),

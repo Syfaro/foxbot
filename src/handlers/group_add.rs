@@ -1,7 +1,7 @@
 use super::Status::*;
 use crate::needs_field;
 use async_trait::async_trait;
-use telegram::*;
+use tgbotapi::*;
 
 pub struct GroupAddHandler;
 

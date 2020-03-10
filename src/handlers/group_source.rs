@@ -2,7 +2,7 @@ use super::Status::*;
 use crate::needs_field;
 use crate::utils::{find_best_photo, get_message, match_image};
 use async_trait::async_trait;
-use telegram::*;
+use tgbotapi::{requests::*, *};
 
 pub static ENABLE_KEY: &str = "group_add";
 pub static ENABLE_VALUE: &str = "yes";

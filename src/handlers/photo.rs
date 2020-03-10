@@ -1,7 +1,7 @@
 use super::Status::*;
 use crate::needs_field;
 use async_trait::async_trait;
-use telegram::*;
+use tgbotapi::{requests::*, *};
 
 use crate::utils::{continuous_action, find_best_photo, get_message, match_image};
 

@@ -34,7 +34,7 @@ futures = "0.3"
 futures-util = "0.3"
 tokio01 = { version = "0.1", package = "tokio" }
 
-telegram = { path = "./telegram", features = ["trace"] }
+tgbotapi = { git = "https://github.com/Syfaro/tgbotapi-rs.git" }
 fautil = { path = "./fautil", features = ["trace", "local_hash"] }
 cfscrape = { git = "https://git.huefox.com/syfaro/cfscrape-rust.git" }
 

@@ -38,8 +38,8 @@ pub trait Handler: Send + Sync {
     async fn handle(
         &self,
         handler: &super::MessageHandler,
-        update: &telegram::Update,
-        command: Option<&telegram::Command>,
+        update: &tgbotapi::Update,
+        command: Option<&tgbotapi::Command>,
     ) -> failure::Fallible<Status>;
 }
 
