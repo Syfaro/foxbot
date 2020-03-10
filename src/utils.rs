@@ -44,9 +44,10 @@ where
                             duration: start.elapsed().as_millis() as i64,
                             results,
                         });
-                        break 'link;
+                        continue 'link;
                     }
                     _ => {
+                        tracing::debug!("no images found");
                         missing.push(link);
                         continue 'link;
                     }

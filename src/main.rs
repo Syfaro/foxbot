@@ -408,7 +408,7 @@ async fn poll_updates(bot: Arc<Telegram>, handler: Arc<MessageHandler>) {
 
             tokio::spawn(async move {
                 handler.handle_update(update).await;
-                tracing::event!(tracing::Level::DEBUG, "finished handling update");
+                tracing::debug!("finished handling update");
             });
 
             update_req.offset = Some(id + 1);
@@ -638,12 +638,12 @@ impl MessageHandler {
             .as_ref()
             .and_then(|message| message.from.as_ref());
 
-        for handler in &self.handlers {
-            let command = update
-                .message
-                .as_ref()
-                .and_then(|message| message.get_command());
+        let command = update
+            .message
+            .as_ref()
+            .and_then(|message| message.get_command());
 
+        for handler in &self.handlers {
             tracing::trace!(handler = handler.name(), "running handler");
 
             match handler.handle(&self, &update, command.as_ref()).await {

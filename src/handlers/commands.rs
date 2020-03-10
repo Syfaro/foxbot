@@ -148,7 +148,7 @@ impl CommandHandler {
     ) -> failure::Fallible<()> {
         let from = message.from.as_ref().unwrap();
 
-        let _action = continuous_action(
+        let action = continuous_action(
             handler.bot.clone(),
             6,
             message.chat_id(),
@@ -185,6 +185,8 @@ impl CommandHandler {
             })
             .await?
         };
+
+        drop(action);
 
         if results.is_empty() {
             handler
