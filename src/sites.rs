@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use fautil::MatchType;
+use fuzzysearch::MatchType;
 use reqwest::header;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -95,14 +95,14 @@ pub trait Site {
 
 pub struct Direct {
     client: reqwest::Client,
-    fautil: std::sync::Arc<fautil::FAUtil>,
+    fautil: std::sync::Arc<fuzzysearch::FuzzySearch>,
 }
 
 impl Direct {
     const EXTENSIONS: &'static [&'static str] = &["png", "jpg", "jpeg", "gif"];
     const TYPES: &'static [&'static str] = &["image/png", "image/jpeg", "image/gif"];
 
-    pub fn new(fautil: std::sync::Arc<fautil::FAUtil>) -> Self {
+    pub fn new(fautil: std::sync::Arc<fuzzysearch::FuzzySearch>) -> Self {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(2))
             .build()
@@ -111,7 +111,7 @@ impl Direct {
         Self { fautil, client }
     }
 
-    async fn reverse_search(&self, url: &str) -> Option<fautil::File> {
+    async fn reverse_search(&self, url: &str) -> Option<fuzzysearch::File> {
         let image = self.client.get(url).send().await;
 
         let image = match image {
@@ -420,7 +420,7 @@ fn get_best_video(media: &egg_mode::entities::MediaEntity) -> Option<&str> {
 
 pub struct FurAffinity {
     cookies: std::collections::HashMap<String, String>,
-    fapi: fautil::FAUtil,
+    fapi: fuzzysearch::FuzzySearch,
     submission: scraper::Selector,
     client: reqwest::Client,
 }
@@ -434,7 +434,7 @@ impl FurAffinity {
 
         Self {
             cookies: c,
-            fapi: fautil::FAUtil::new(util_api),
+            fapi: fuzzysearch::FuzzySearch::new(util_api),
             submission: scraper::Selector::parse("#submissionImg").unwrap(),
             client: reqwest::Client::new(),
         }
@@ -447,7 +447,7 @@ impl FurAffinity {
             url.to_string()
         };
 
-        let sub: fautil::File = match self.fapi.lookup_url(&url).await {
+        let sub: fuzzysearch::File = match self.fapi.lookup_url(&url).await {
             Ok(mut results) if !results.is_empty() => results.remove(0),
             _ => {
                 return Ok(Some(PostInfo {

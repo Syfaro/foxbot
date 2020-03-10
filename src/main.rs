@@ -172,7 +172,9 @@ async fn main() {
         .await
         .expect("Unable to connect to database");
 
-    let fapi = Arc::new(fautil::FAUtil::new(config.fautil_apitoken.clone()));
+    let fapi = Arc::new(fuzzysearch::FuzzySearch::new(
+        config.fautil_apitoken.clone(),
+    ));
 
     let sites: Vec<BoxedSite> = vec![
         Box::new(sites::E621::new()),
@@ -425,7 +427,7 @@ pub struct MessageHandler {
 
     // API clients
     pub bot: Arc<Telegram>,
-    pub fapi: Arc<fautil::FAUtil>,
+    pub fapi: Arc<fuzzysearch::FuzzySearch>,
     pub influx: Arc<influxdb::Client>,
     pub finder: linkify::LinkFinder,
 

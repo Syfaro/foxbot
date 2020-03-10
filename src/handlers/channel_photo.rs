@@ -140,10 +140,10 @@ pub fn link_was_seen(links: &[linkify::Link], source: &str) -> bool {
 
 async fn get_matches(
     bot: &Telegram,
-    fapi: &fautil::FAUtil,
+    fapi: &fuzzysearch::FuzzySearch,
     conn: &quaint::pooled::Quaint,
     sizes: &[PhotoSize],
-) -> failure::Fallible<Option<fautil::File>> {
+) -> failure::Fallible<Option<fuzzysearch::File>> {
     // Find the highest resolution size of the image and download.
     let best_photo = find_best_photo(&sizes).unwrap();
     Ok(match_image(&bot, &conn, &fapi, &best_photo)

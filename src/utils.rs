@@ -104,7 +104,7 @@ where
     )
 }
 
-type AlternateItems<'a> = Vec<(&'a Vec<String>, &'a Vec<fautil::File>)>;
+type AlternateItems<'a> = Vec<(&'a Vec<String>, &'a Vec<fuzzysearch::File>)>;
 
 pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (String, Vec<i64>) {
     let mut used_hashes = vec![];
@@ -139,7 +139,7 @@ pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (S
         args.insert("name", artist_name.into());
         s.push_str(&get_message(&bundle, "alternate-posted-by", Some(args)).unwrap());
         s.push_str("\n");
-        let mut subs: Vec<fautil::File> = item.1.to_vec();
+        let mut subs: Vec<fuzzysearch::File> = item.1.to_vec();
         subs.sort_by(|a, b| a.id.partial_cmp(&b.id).unwrap());
         subs.dedup_by(|a, b| a.id == b.id);
         subs.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
@@ -260,9 +260,9 @@ impl Drop for ContinuousAction {
 pub async fn match_image(
     bot: &tgbotapi::Telegram,
     conn: &quaint::pooled::Quaint,
-    fapi: &fautil::FAUtil,
+    fapi: &fuzzysearch::FuzzySearch,
     file: &tgbotapi::PhotoSize,
-) -> failure::Fallible<Vec<fautil::File>> {
+) -> failure::Fallible<Vec<fuzzysearch::File>> {
     use quaint::prelude::*;
 
     let conn = conn.check_out().await?;
@@ -287,7 +287,7 @@ pub async fn match_image(
     let file_info = bot.make_request(&get_file).await?;
     let data = bot.download_file(&file_info.file_path.unwrap()).await?;
 
-    let hash = tokio::task::spawn_blocking(move || fautil::hash_bytes(&data)).await??;
+    let hash = tokio::task::spawn_blocking(move || fuzzysearch::hash_bytes(&data)).await??;
 
     conn.insert(
         Insert::single_into("file_id_cache")
@@ -301,9 +301,9 @@ pub async fn match_image(
 }
 
 async fn lookup_single_hash(
-    fapi: &fautil::FAUtil,
+    fapi: &fuzzysearch::FuzzySearch,
     hash: i64,
-) -> failure::Fallible<Vec<fautil::File>> {
+) -> failure::Fallible<Vec<fuzzysearch::File>> {
     let mut matches = fapi.lookup_hashes(vec![hash]).await?;
 
     for mut m in &mut matches {

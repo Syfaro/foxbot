@@ -47,7 +47,7 @@ impl super::Handler for PhotoHandler {
             }
         };
 
-        let similar: Vec<&fautil::File> = matches
+        let similar: Vec<&fuzzysearch::File> = matches
             .iter()
             .skip(1)
             .take_while(|m| m.distance.unwrap() == first.distance.unwrap())

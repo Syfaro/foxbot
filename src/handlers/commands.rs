@@ -448,7 +448,7 @@ impl CommandHandler {
 
                 handler
                     .fapi
-                    .image_search(&bytes, fautil::MatchType::Close)
+                    .image_search(&bytes, fuzzysearch::MatchType::Close)
                     .await?
                     .matches
             }
@@ -463,11 +463,11 @@ impl CommandHandler {
 
         let has_multiple_matches = matches.len() > 1;
 
-        let mut results: HashMap<Vec<String>, Vec<fautil::File>> = HashMap::new();
+        let mut results: HashMap<Vec<String>, Vec<fuzzysearch::File>> = HashMap::new();
 
-        let matches: Vec<fautil::File> = matches
+        let matches: Vec<fuzzysearch::File> = matches
             .into_iter()
-            .map(|m| fautil::File {
+            .map(|m| fuzzysearch::File {
                 artists: Some(
                     m.artists
                         .unwrap_or_else(|| vec![])
@@ -525,7 +525,7 @@ impl CommandHandler {
 
         for m in matches {
             if let Some(artist) = results.get_mut(&m.artists.clone().unwrap()) {
-                artist.push(fautil::File {
+                artist.push(fuzzysearch::File {
                     id: m.id,
                     site_id: m.site_id,
                     distance: hamming::distance_fast(
