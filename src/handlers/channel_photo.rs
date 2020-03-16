@@ -39,6 +39,11 @@ impl super::Handler for ChannelPhotoHandler {
             _ => return Ok(Completed),
         };
 
+        // Ignore unlikely matches
+        if first.distance.unwrap() > 3 {
+            return Ok(Completed);
+        }
+
         // If this link was already in the message, we can ignore it.
         if link_was_seen(&extract_links(&message, &handler.finder), &first.url) {
             return Ok(Completed);
