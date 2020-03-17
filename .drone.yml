@@ -14,9 +14,7 @@ steps:
   - apt-get update -y
   - apt-get install pkg-config libssl-dev ca-certificates python3 python3-pip nodejs -y
   - pip3 install cfscrape
-  # - rustup component add clippy
   - cargo test
-  # - cargo clippy
 
 - name: sentry-release
   image: getsentry/sentry-cli
@@ -36,13 +34,14 @@ steps:
 - name: docker
   image: plugins/docker
   settings:
-    auto_tag: true
     build_args_from_env:
     - DRONE_COMMIT_SHA
     password:
       from_secret: docker_password
     registry: registry.huefox.com
     repo: registry.huefox.com/foxbot
+    tags:
+    - ${DRONE_COMMIT_SHA}
     username:
       from_secret: docker_username
   when:
@@ -60,6 +59,22 @@ steps:
       from_secret: sentry_org
     SENTRY_PROJECT:
       from_secret: sentry_project
+  when:
+    branch:
+    - master
+
+- name: deploy
+  image: appleboy/drone-ssh
+  settings:
+    host:
+      from_secret: deploy_host
+    key:
+      from_secret: deploy_key
+    script:
+    - export VCS_REF=${DRONE_COMMIT_SHA}
+    - bash /deploy/foxbot.sh
+    username:
+      from_secret: deploy_username
   when:
     branch:
     - master
