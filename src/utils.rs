@@ -321,3 +321,62 @@ async fn lookup_single_hash(
 
     Ok(matches)
 }
+
+pub async fn sort_results(
+    conn: &quaint::pooled::Quaint,
+    user_id: i32,
+    results: &mut Vec<fuzzysearch::File>,
+) -> failure::Fallible<()> {
+    use crate::handlers::settings::Sites;
+    use quaint::prelude::*;
+
+    // If we have 1 or fewer items, we don't need to do any sorting.
+    if results.len() <= 1 {
+        return Ok(());
+    }
+
+    let conn = conn.check_out().await?;
+
+    let order = conn
+        .select(
+            Select::from_table("user_config").so_that(
+                "user_id"
+                    .equals(user_id)
+                    .and("name".equals("site-sort-order")),
+            ),
+        )
+        .await?;
+
+    let has_config = order.len() != 0;
+
+    let sites = if !has_config {
+        vec![Sites::FurAffinity, Sites::E621, Sites::Twitter]
+    } else {
+        let row = order.into_single()?;
+        let data = row["value"].as_str().unwrap();
+        let data: Vec<String> = serde_json::from_str(&data)?;
+        data.iter().map(|item| Sites::from_str(&item)).collect()
+    };
+
+    results.sort_unstable_by(|a, b| {
+        let a_dist = a.distance.unwrap();
+        let b_dist = b.distance.unwrap();
+
+        if a_dist != b_dist {
+            return a_dist.cmp(&b_dist);
+        }
+
+        let a_idx = sites
+            .iter()
+            .position(|s| s.as_str() == a.site_name())
+            .unwrap();
+        let b_idx = sites
+            .iter()
+            .position(|s| s.as_str() == b.site_name())
+            .unwrap();
+
+        a_idx.cmp(&b_idx)
+    });
+
+    Ok(())
+}

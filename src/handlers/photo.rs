@@ -3,7 +3,7 @@ use crate::needs_field;
 use async_trait::async_trait;
 use tgbotapi::{requests::*, *};
 
-use crate::utils::{continuous_action, find_best_photo, get_message, match_image};
+use crate::utils::{continuous_action, find_best_photo, get_message, match_image, sort_results};
 
 pub struct PhotoHandler;
 
@@ -37,7 +37,14 @@ impl super::Handler for PhotoHandler {
         );
 
         let best_photo = find_best_photo(&photos).unwrap();
-        let matches = match_image(&handler.bot, &handler.conn, &handler.fapi, &best_photo).await?;
+        let mut matches =
+            match_image(&handler.bot, &handler.conn, &handler.fapi, &best_photo).await?;
+        sort_results(
+            &handler.conn,
+            message.from.as_ref().unwrap().id,
+            &mut matches,
+        )
+        .await?;
 
         let first = match matches.get(0) {
             Some(item) => item,

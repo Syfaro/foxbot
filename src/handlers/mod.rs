@@ -8,6 +8,7 @@ mod group_add;
 mod group_source;
 mod inline_handler;
 mod photo;
+pub mod settings;
 mod text;
 
 pub use channel_photo::ChannelPhotoHandler;
@@ -18,6 +19,7 @@ pub use group_add::GroupAddHandler;
 pub use group_source::GroupSourceHandler;
 pub use inline_handler::InlineHandler;
 pub use photo::PhotoHandler;
+pub use settings::SettingsHandler;
 pub use text::TextHandler;
 
 #[derive(PartialEq)]

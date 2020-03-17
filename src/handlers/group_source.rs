@@ -1,6 +1,6 @@
 use super::Status::*;
 use crate::needs_field;
-use crate::utils::{find_best_photo, get_message, match_image};
+use crate::utils::{find_best_photo, get_message, match_image, sort_results};
 use async_trait::async_trait;
 use tgbotapi::{requests::*, *};
 
@@ -47,7 +47,14 @@ impl super::Handler for GroupSourceHandler {
         }
 
         let best_photo = find_best_photo(&photo_sizes).unwrap();
-        let matches = match_image(&handler.bot, &handler.conn, &handler.fapi, &best_photo).await?;
+        let mut matches =
+            match_image(&handler.bot, &handler.conn, &handler.fapi, &best_photo).await?;
+        sort_results(
+            &handler.conn,
+            message.from.as_ref().unwrap().id,
+            &mut matches,
+        )
+        .await?;
 
         let wanted_matches = matches
             .iter()

@@ -242,6 +242,7 @@ async fn main() {
         Box::new(handlers::GroupSourceHandler),
         Box::new(handlers::TextHandler),
         Box::new(handlers::ErrorReplyHandler::new()),
+        Box::new(handlers::SettingsHandler),
     ];
 
     let handler = Arc::new(MessageHandler {

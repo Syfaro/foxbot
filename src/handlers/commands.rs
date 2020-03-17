@@ -7,7 +7,7 @@ use super::Status::*;
 use crate::needs_field;
 use crate::utils::{
     build_alternate_response, continuous_action, find_best_photo, find_images, get_message,
-    match_image, parse_known_bots,
+    match_image, parse_known_bots, sort_results,
 };
 
 // TODO: there's a lot of shared code between these commands.
@@ -55,7 +55,7 @@ impl super::Handler for CommandHandler {
             "/groupsource" => self.enable_group_source(&handler, message).await,
             _ => {
                 tracing::info!("unknown command: {}", command.name);
-                Ok(())
+                return Ok(Ignored);
             }
         }?;
 
@@ -318,7 +318,14 @@ impl CommandHandler {
         };
 
         let best_photo = find_best_photo(&photo).unwrap();
-        let matches = match_image(&handler.bot, &handler.conn, &handler.fapi, &best_photo).await?;
+        let mut matches =
+            match_image(&handler.bot, &handler.conn, &handler.fapi, &best_photo).await?;
+        sort_results(
+            &handler.conn,
+            message.from.as_ref().unwrap().id,
+            &mut matches,
+        )
+        .await?;
 
         let result = match matches.first() {
             Some(result) => result,

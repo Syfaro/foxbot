@@ -151,10 +151,8 @@ async fn get_matches(
 ) -> failure::Fallible<Option<fuzzysearch::File>> {
     // Find the highest resolution size of the image and download.
     let best_photo = find_best_photo(&sizes).unwrap();
-    Ok(match_image(&bot, &conn, &fapi, &best_photo)
-        .await?
-        .into_iter()
-        .next())
+    let matches = match_image(&bot, &conn, &fapi, &best_photo).await?;
+    Ok(matches.into_iter().next())
 }
 
 #[cfg(test)]

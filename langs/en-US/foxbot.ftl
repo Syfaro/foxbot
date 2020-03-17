@@ -79,3 +79,10 @@ automatic-enable-not-group = This feature is only supported in groups.
 error-generic = Oh no, something went wrong! Please send a message to my creator, { -creatorName }, saying what happened.
 error-uuid = Oh no, something went wrong! Please reply to this message saying what happened. You may also send a message to my creator, { -creatorName }, with this ID if you continue having issues: { $uuid }
 error-feedback = Thank you for the feedback, hopefully we can get this issue resolved soon.
+
+# Settings
+settings-main = Let's take a look at some settings.
+settings-site-order =
+    Set the order of sites in returned results.
+    
+    This is especially useful for places where only one result is returned.
