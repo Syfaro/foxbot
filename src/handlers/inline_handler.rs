@@ -54,10 +54,6 @@ impl super::Handler for InlineHandler {
             .await?;
         }
 
-        // Find if any of our results were personal. If they were, we need to
-        // prevent this response from being cached for others.
-        let personal = results.iter().any(|result| result.personal);
-
         let mut responses: Vec<InlineQueryResult> = vec![];
 
         for result in results {
@@ -85,7 +81,7 @@ impl super::Handler for InlineHandler {
         let mut answer_inline = AnswerInlineQuery {
             inline_query_id: inline.id.to_owned(),
             results: responses,
-            is_personal: Some(personal),
+            is_personal: Some(true), // Everything is personal because of config
             ..Default::default()
         };
 
@@ -127,8 +123,18 @@ async fn process_result(
     }];
 
     if let Some(source_link) = &result.source_link {
+        let use_name = use_source_name(&handler.conn, from.id)
+            .await
+            .unwrap_or(false);
+
+        let text = if use_name {
+            result.site_name.to_string()
+        } else {
+            source
+        };
+
         row.push(InlineKeyboardButton {
-            text: source,
+            text,
             url: Some(source_link.clone()),
             callback_data: None,
             ..Default::default()

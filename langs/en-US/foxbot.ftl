@@ -86,3 +86,4 @@ settings-site-order =
     Set the order of sites in returned results.
     
     This is especially useful for places where only one result is returned.
+settings-name = If I should say the name of the site instead of just 'Source'

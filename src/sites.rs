@@ -27,6 +27,8 @@ pub struct PostInfo {
     pub extra_caption: Option<String>,
     /// Title for video results
     pub title: Option<String>,
+    /// Human readable name of the site
+    pub site_name: &'static str,
 }
 
 fn get_file_ext(name: &str) -> Option<&str> {
@@ -136,7 +138,7 @@ impl Direct {
 #[async_trait]
 impl Site for Direct {
     fn name(&self) -> &'static str {
-        "direct links"
+        "direct link"
     }
 
     async fn url_supported(&mut self, url: &str) -> bool {
@@ -196,6 +198,7 @@ impl Site for Direct {
             file_type: get_file_ext(url).unwrap().to_string(),
             url: u.clone(),
             source_link,
+            site_name: self.name(),
             ..Default::default()
         }]))
     }
@@ -283,6 +286,7 @@ impl Site for E621 {
             url: resp.post.file.url,
             thumb: Some(resp.post.preview.url),
             source_link: Some(format!("https://e621.net/posts/{}", resp.post.id)),
+            site_name: self.name(),
             ..Default::default()
         }]))
     }
@@ -388,6 +392,7 @@ impl Site for Twitter {
                         personal: user.protected,
                         title: Some(user.screen_name.clone()),
                         extra_caption: Some(text.clone()),
+                        site_name: self.name(),
                     },
                     None => PostInfo {
                         file_type: get_file_ext(&item.media_url_https).unwrap().to_owned(),
@@ -395,6 +400,7 @@ impl Site for Twitter {
                         thumb: Some(format!("{}:thumb", item.media_url_https.clone())),
                         source_link: Some(item.expanded_url),
                         personal: user.protected,
+                        site_name: self.name(),
                         ..Default::default()
                     },
                 })
@@ -453,6 +459,7 @@ impl FurAffinity {
                 return Ok(Some(PostInfo {
                     file_type: get_file_ext(&url).unwrap().to_string(),
                     url: url.clone(),
+                    site_name: self.name(),
                     ..Default::default()
                 }));
             }
@@ -462,6 +469,7 @@ impl FurAffinity {
             file_type: get_file_ext(&sub.filename).unwrap().to_string(),
             url: sub.url.clone(),
             source_link: Some(sub.url()),
+            site_name: self.name(),
             ..Default::default()
         }))
     }
@@ -519,6 +527,7 @@ impl FurAffinity {
             file_type: get_file_ext(&image_url).unwrap().to_string(),
             url: image_url.clone(),
             source_link: Some(url.to_string()),
+            site_name: self.name(),
             ..Default::default()
         }))
     }
@@ -651,6 +660,7 @@ impl Site for Mastodon {
                     url: media.url.clone(),
                     thumb: Some(media.preview_url.clone()),
                     source_link: Some(json.url.clone()),
+                    site_name: self.name(),
                     ..Default::default()
                 })
                 .collect(),
@@ -733,6 +743,7 @@ impl Site for Weasyl {
                         url: sub_url.clone(),
                         thumb: Some(thumb_url),
                         source_link: Some(url.to_string()),
+                        site_name: self.name(),
                         ..Default::default()
                     }
                 })

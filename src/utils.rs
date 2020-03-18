@@ -347,7 +347,7 @@ pub async fn sort_results(
         )
         .await?;
 
-    let has_config = order.len() != 0;
+    let has_config = !order.is_empty();
 
     let sites = if !has_config {
         vec![Sites::FurAffinity, Sites::E621, Sites::Twitter]
@@ -379,4 +379,30 @@ pub async fn sort_results(
     });
 
     Ok(())
+}
+
+pub async fn use_source_name(
+    conn: &quaint::pooled::Quaint,
+    user_id: i32,
+) -> failure::Fallible<bool> {
+    use quaint::prelude::*;
+
+    let conn = conn.check_out().await?;
+
+    let row = conn
+        .select(
+            Select::from_table("user_config")
+                .so_that("user_id".equals(user_id).and("name".equals("source-name"))),
+        )
+        .await?;
+
+    if row.is_empty() {
+        return Ok(false);
+    }
+
+    let row = row.into_single()?;
+
+    let val = serde_json::from_str(&row["value"].as_str().unwrap())?;
+
+    Ok(val)
 }
