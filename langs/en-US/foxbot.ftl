@@ -87,3 +87,11 @@ settings-site-order =
     
     This is especially useful for places where only one result is returned.
 settings-name = If I should say the name of the site instead of just 'Source'
+settings-name-toggled = Toggled using site name
+settings-name-source = Only show Source on keyboard
+settings-name-site = Show site name on keyboard
+settings-unsupported = Sorry, not yet supported.
+settings-move-unable = Unable to move { $name } to that position
+settings-move-updated = Updated position for { $name }
+settings-site-preference = Site Preference
+settings-source-name = Source Name

@@ -130,13 +130,19 @@ async fn name(
             .await?;
         }
 
+        let text = handler
+            .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
+                get_message(&bundle, "settings-name-toggled", None).unwrap()
+            })
+            .await;
+
         let answer = AnswerCallbackQuery {
             callback_query_id: callback_query.id.clone(),
-            text: Some("Toggled using site name".into()),
+            text: Some(text),
             ..Default::default()
         };
 
-        let keyboard = name_keyboard(&handler.conn, callback_query.from.id).await?;
+        let keyboard = name_keyboard(&handler, &callback_query.from).await?;
 
         let edit_message = EditMessageReplyMarkup {
             message_id: Some(reply_message.message_id),
@@ -159,7 +165,7 @@ async fn name(
         })
         .await;
 
-    let keyboard = name_keyboard(&handler.conn, reply_message.from.as_ref().unwrap().id).await?;
+    let keyboard = name_keyboard(&handler, &callback_query.from).await?;
 
     let edit_message = EditMessageText {
         message_id: Some(reply_message.message_id),
@@ -175,17 +181,17 @@ async fn name(
 }
 
 async fn name_keyboard(
-    conn: &quaint::pooled::Quaint,
-    user_id: i32,
+    handler: &crate::MessageHandler,
+    from: &User,
 ) -> failure::Fallible<InlineKeyboardMarkup> {
     use quaint::prelude::*;
 
-    let conn = conn.check_out().await?;
+    let conn = handler.conn.check_out().await?;
 
     let row = conn
         .select(
             Select::from_table("user_config")
-                .so_that("user_id".equals(user_id).and("name".equals("source-name"))),
+                .so_that("user_id".equals(from.id).and("name".equals("source-name"))),
         )
         .await?;
 
@@ -196,13 +202,20 @@ async fn name_keyboard(
         serde_json::from_str(&item["value"].as_str().unwrap())?
     };
 
+    let message_name = if enabled {
+        "settings-name-source"
+    } else {
+        "settings-name-site"
+    };
+
+    let text = handler
+        .get_fluent_bundle(from.language_code.as_deref(), |bundle| {
+            get_message(&bundle, &message_name, None).unwrap()
+        })
+        .await;
+
     let keyboard = vec![vec![InlineKeyboardButton {
-        text: if enabled {
-            "Only show Source on keyboard"
-        } else {
-            "Show site name on keyboard"
-        }
-        .into(),
+        text,
         callback_data: Some("s:name:t".into()),
         ..Default::default()
     }]];
@@ -218,9 +231,15 @@ async fn order(
     data: &str,
 ) -> failure::Fallible<super::Status> {
     if data.ends_with(":e") {
+        let text = handler
+            .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
+                get_message(&bundle, "settings-unsupported", None).unwrap()
+            })
+            .await;
+
         let answer = AnswerCallbackQuery {
             callback_query_id: callback_query.id.clone(),
-            text: Some("Sorry, not yet supported.".into()),
+            text: Some(text),
             ..Default::default()
         };
 
@@ -232,9 +251,18 @@ async fn order(
     if data.ends_with(":-") {
         let site = Sites::from_str(data.split(':').nth(2).unwrap());
 
+        let mut args = fluent::FluentArgs::new();
+        args.insert("name", site.as_str().into());
+
+        let text = handler
+            .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
+                get_message(&bundle, "settings-move-unable", Some(args)).unwrap()
+            })
+            .await;
+
         let answer = AnswerCallbackQuery {
             callback_query_id: callback_query.id.clone(),
-            text: Some(format!("Unable to move {} to that position", site.as_str())),
+            text: Some(text),
             ..Default::default()
         };
 
@@ -313,9 +341,18 @@ async fn order(
             .await?;
         }
 
+        let mut args = fluent::FluentArgs::new();
+        args.insert("name", site.as_str().into());
+
+        let text = handler
+            .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
+                get_message(&bundle, "settings-move-updated", Some(args)).unwrap()
+            })
+            .await;
+
         let answer = AnswerCallbackQuery {
             callback_query_id: callback_query.id.clone(),
-            text: Some(format!("Updated position for {}", site.as_str())),
+            text: Some(text),
             ..Default::default()
         };
 
@@ -369,28 +406,37 @@ async fn send_settings_message(
     handler: &crate::MessageHandler,
     message: &Message,
 ) -> failure::Fallible<Message> {
+    let from = message
+        .from
+        .as_ref()
+        .and_then(|user| user.language_code.as_deref());
+
+    let (site_preference, source_name) = handler
+        .get_fluent_bundle(from, |bundle| {
+            (
+                get_message(&bundle, "settings-site-preference", None).unwrap(),
+                get_message(&bundle, "settings-source-name", None).unwrap(),
+            )
+        })
+        .await;
+
     let keyboard = InlineKeyboardMarkup {
         inline_keyboard: vec![vec![
             InlineKeyboardButton {
-                text: "Site Preference".into(),
+                text: site_preference,
                 callback_data: Some("s:order:".into()),
                 ..Default::default()
             },
             InlineKeyboardButton {
-                text: "Source Name".into(),
+                text: source_name,
                 callback_data: Some("s:name:".into()),
                 ..Default::default()
             },
         ]],
     };
 
-    let user = message
-        .from
-        .as_ref()
-        .and_then(|from| from.language_code.as_deref());
-
     let text = handler
-        .get_fluent_bundle(user, |bundle| {
+        .get_fluent_bundle(from, |bundle| {
             get_message(&bundle, "settings-main", None).unwrap()
         })
         .await;
