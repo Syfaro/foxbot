@@ -148,18 +148,8 @@ async fn process_result(
     let thumb_url = result.thumb.clone().unwrap_or_else(|| result.url.clone());
 
     match result.file_type.as_ref() {
-        "png" | "jpeg" | "jpg" => Some(build_image_result(
-            &result,
-            thumb_url,
-            &keyboard,
-            handler.config.use_proxy.unwrap_or(false),
-        )),
-        "gif" => Some(build_gif_result(
-            &result,
-            thumb_url,
-            &keyboard,
-            handler.config.use_proxy.unwrap_or(false),
-        )),
+        "png" | "jpeg" | "jpg" => Some(build_image_result(&result, thumb_url, &keyboard)),
+        "gif" => Some(build_gif_result(&result, thumb_url, &keyboard)),
         other => {
             log::warn!("Got unusable type: {}", other);
             None
@@ -171,19 +161,8 @@ fn build_image_result(
     result: &crate::sites::PostInfo,
     thumb_url: String,
     keyboard: &InlineKeyboardMarkup,
-    use_proxy: bool,
 ) -> Vec<InlineQueryResult> {
-    let (full_url, thumb_url) = if use_proxy {
-        (
-            format!("https://images.weserv.nl/?url={}&output=jpg", result.url),
-            format!(
-                "https://images.weserv.nl/?url={}&output=jpg&w=300",
-                thumb_url
-            ),
-        )
-    } else {
-        (result.url.clone(), thumb_url)
-    };
+    let (full_url, thumb_url) = (result.url.clone(), thumb_url);
 
     let mut photo =
         InlineQueryResult::photo(generate_id(), full_url.to_owned(), thumb_url.to_owned());
@@ -209,19 +188,8 @@ fn build_gif_result(
     result: &crate::sites::PostInfo,
     thumb_url: String,
     keyboard: &InlineKeyboardMarkup,
-    use_proxy: bool,
 ) -> Vec<InlineQueryResult> {
-    let (full_url, thumb_url) = if use_proxy {
-        (
-            format!("https://images.weserv.nl/?url={}&output=gif", result.url),
-            format!(
-                "https://images.weserv.nl/?url={}&output=gif&w=300",
-                thumb_url
-            ),
-        )
-    } else {
-        (result.url.clone(), thumb_url)
-    };
+    let (full_url, thumb_url) = (result.url.clone(), thumb_url);
 
     let mut gif = InlineQueryResult::gif(generate_id(), full_url.to_owned(), thumb_url.to_owned());
     gif.reply_markup = Some(keyboard.clone());

@@ -80,7 +80,6 @@ pub struct Config {
 
     // Others
     pub fautil_apitoken: String,
-    pub use_proxy: Option<bool>,
     pub database: String,
 }
 

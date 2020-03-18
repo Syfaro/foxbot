@@ -36,7 +36,6 @@ Env Name                   | Description
 `INFLUX_DB`                | InfluxDB database name
 `INFLUX_USER`              | InfluxDB username
 `INFLUX_PASS`              | InfluxDB password
-`USE_PROXY`                | If should use images.weserv.nl to proxy images
 `SENTRY_DSN`               | Sentry DSN to report errors
 `SENTRY_ORGANIZATION_SLUG` | Sentry organization slug
 `SENTRY_PROJECT_SLUG`      | Sentry project slug
