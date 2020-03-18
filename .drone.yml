@@ -79,4 +79,19 @@ steps:
     branch:
     - master
 
+- name: sentry-deploy
+  image: getsentry/sentry-cli
+  commands:
+  - sentry-cli releases deploys ${DRONE_COMMIT_SHA} new -e production
+  environment:
+    SENTRY_AUTH_TOKEN:
+      from_secret: sentry_auth_token
+    SENTRY_ORG:
+      from_secret: sentry_org
+    SENTRY_PROJECT:
+      from_secret: sentry_project
+  when:
+    branch:
+    - master
+
 ...
