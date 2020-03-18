@@ -14,6 +14,7 @@ extern crate failure;
 
 mod handlers;
 mod migrations;
+pub mod models;
 mod sites;
 mod utils;
 

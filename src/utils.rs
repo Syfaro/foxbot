@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing_futures::Instrument;
 
+use crate::models::{get_user_config, Sites};
 use crate::BoxedSite;
 
 type Bundle<'a> = &'a fluent::FluentBundle<fluent::FluentResource>;
@@ -327,9 +328,6 @@ pub async fn sort_results(
     user_id: i32,
     results: &mut Vec<fuzzysearch::File>,
 ) -> failure::Fallible<()> {
-    use crate::handlers::settings::Sites;
-    use quaint::prelude::*;
-
     // If we have 1 or fewer items, we don't need to do any sorting.
     if results.len() <= 1 {
         return Ok(());
@@ -337,25 +335,10 @@ pub async fn sort_results(
 
     let conn = conn.check_out().await?;
 
-    let order = conn
-        .select(
-            Select::from_table("user_config").so_that(
-                "user_id"
-                    .equals(user_id)
-                    .and("name".equals("site-sort-order")),
-            ),
-        )
-        .await?;
-
-    let has_config = !order.is_empty();
-
-    let sites = if !has_config {
-        vec![Sites::FurAffinity, Sites::E621, Sites::Twitter]
-    } else {
-        let row = order.into_single()?;
-        let data = row["value"].as_str().unwrap();
-        let data: Vec<String> = serde_json::from_str(&data)?;
-        data.iter().map(|item| Sites::from_str(&item)).collect()
+    let row: Option<Vec<String>> = get_user_config(&conn, "site-sort-order", user_id).await?;
+    let sites = match row {
+        Some(row) => row.iter().map(|item| Sites::from_str(&item)).collect(),
+        None => Sites::default_order(),
     };
 
     results.sort_unstable_by(|a, b| {
@@ -385,24 +368,10 @@ pub async fn use_source_name(
     conn: &quaint::pooled::Quaint,
     user_id: i32,
 ) -> failure::Fallible<bool> {
-    use quaint::prelude::*;
-
     let conn = conn.check_out().await?;
+    let row = get_user_config(&conn, "source-name", user_id)
+        .await?
+        .unwrap_or(false);
 
-    let row = conn
-        .select(
-            Select::from_table("user_config")
-                .so_that("user_id".equals(user_id).and("name".equals("source-name"))),
-        )
-        .await?;
-
-    if row.is_empty() {
-        return Ok(false);
-    }
-
-    let row = row.into_single()?;
-
-    let val = serde_json::from_str(&row["value"].as_str().unwrap())?;
-
-    Ok(val)
+    Ok(row)
 }

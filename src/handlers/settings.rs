@@ -2,34 +2,9 @@ use async_trait::async_trait;
 use tgbotapi::{requests::*, *};
 
 use super::Status::*;
+use crate::models::{get_user_config, set_user_config, Sites};
 use crate::needs_field;
 use crate::utils::get_message;
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum Sites {
-    FurAffinity,
-    E621,
-    Twitter,
-}
-
-impl Sites {
-    pub fn as_str(&self) -> &'static str {
-        match *self {
-            Sites::FurAffinity => "FurAffinity",
-            Sites::E621 => "e621",
-            Sites::Twitter => "Twitter",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Sites {
-        match s {
-            "FurAffinity" => Sites::FurAffinity,
-            "e621" => Sites::E621,
-            "Twitter" => Sites::Twitter,
-            _ => panic!("Invalid value"),
-        }
-    }
-}
 
 pub struct SettingsHandler;
 
@@ -83,52 +58,23 @@ async fn name(
         .and_then(|from| from.language_code.as_deref());
 
     if data.ends_with(":t") {
-        use quaint::prelude::*;
-
         let conn = handler.conn.check_out().await?;
 
-        let row = conn
-            .select(
-                Select::from_table("user_config").so_that(
-                    "user_id"
-                        .equals(callback_query.from.id)
-                        .and("name".equals("source-name")),
-                ),
-            )
-            .await?;
+        let source_name: Option<bool> =
+            get_user_config(&conn, "source-name", callback_query.from.id).await?;
+        let existed = source_name.is_some();
+        let source_name = source_name.unwrap_or(false);
 
-        let (existed, enabled) = if row.is_empty() {
-            (false, false)
-        } else {
-            let item = row.into_single()?;
-            (
-                true,
-                serde_json::from_str(&item["value"].as_str().unwrap())?,
-            )
-        };
+        let source_name = !source_name;
 
-        let enabled = !enabled;
-        let value = serde_json::to_string(&enabled).unwrap();
-
-        if existed {
-            conn.update(
-                Update::table("user_config").set("value", value).so_that(
-                    "user_id"
-                        .equals(callback_query.from.id)
-                        .and("name".equals("source-name")),
-                ),
-            )
-            .await?;
-        } else {
-            conn.insert(
-                Insert::single_into("user_config")
-                    .value("user_id", callback_query.from.id)
-                    .value("name", "source-name")
-                    .value("value", value)
-                    .build(),
-            )
-            .await?;
-        }
+        set_user_config(
+            &conn,
+            "source-name",
+            callback_query.from.id,
+            existed,
+            source_name,
+        )
+        .await?;
 
         let text = handler
             .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
@@ -184,23 +130,11 @@ async fn name_keyboard(
     handler: &crate::MessageHandler,
     from: &User,
 ) -> failure::Fallible<InlineKeyboardMarkup> {
-    use quaint::prelude::*;
-
     let conn = handler.conn.check_out().await?;
 
-    let row = conn
-        .select(
-            Select::from_table("user_config")
-                .so_that("user_id".equals(from.id).and("name".equals("source-name"))),
-        )
-        .await?;
-
-    let enabled = if row.is_empty() {
-        false
-    } else {
-        let item = row.into_single()?;
-        serde_json::from_str(&item["value"].as_str().unwrap())?
-    };
+    let enabled = get_user_config(&conn, "source-name", from.id)
+        .await?
+        .unwrap_or(false);
 
     let message_name = if enabled {
         "settings-name-source"
@@ -282,29 +216,14 @@ async fn order(
         let site = Sites::from_str(data.split(':').nth(2).unwrap());
         let pos: usize = pos.parse().unwrap();
 
-        use quaint::prelude::*;
-
         let conn = handler.conn.check_out().await?;
 
-        let order = conn
-            .select(
-                Select::from_table("user_config").so_that(
-                    "user_id"
-                        .equals(callback_query.from.id)
-                        .and("name".equals("site-sort-order")),
-                ),
-            )
-            .await?;
-
-        let has_config = !order.is_empty();
-
-        let mut sites = if !has_config {
-            vec![Sites::FurAffinity, Sites::E621, Sites::Twitter]
-        } else {
-            let row = order.into_single()?;
-            let data = row["value"].as_str().unwrap();
-            let data: Vec<String> = serde_json::from_str(&data)?;
-            data.iter().map(|item| Sites::from_str(&item)).collect()
+        let order: Option<Vec<String>> =
+            get_user_config(&conn, "site-sort-order", callback_query.from.id).await?;
+        let has_config = order.is_some();
+        let mut sites = match order {
+            Some(sites) => sites.iter().map(|item| Sites::from_str(&item)).collect(),
+            None => Sites::default_order(),
         };
 
         let mut existing_pos = None;
@@ -320,26 +239,14 @@ async fn order(
 
         sites.insert(pos, site.clone());
 
-        let data =
-            serde_json::to_string(&sites.iter().map(|site| site.as_str()).collect::<Vec<_>>())?;
-
-        if !has_config {
-            conn.insert(
-                Insert::single_into("user_config")
-                    .value("user_id", callback_query.from.id)
-                    .value("name", "site-sort-order")
-                    .value("value", data)
-                    .build(),
-            )
-            .await?;
-        } else {
-            conn.update(
-                Update::table("user_config")
-                    .so_that("user_id".equals(callback_query.from.id))
-                    .set("value", data),
-            )
-            .await?;
-        }
+        set_user_config(
+            &conn,
+            "site-sort-order",
+            callback_query.from.id,
+            has_config,
+            sites,
+        )
+        .await?;
 
         let mut args = fluent::FluentArgs::new();
         args.insert("name", site.as_str().into());
@@ -460,27 +367,12 @@ async fn sort_order_keyboard(
     conn: &quaint::pooled::Quaint,
     user_id: i32,
 ) -> failure::Fallible<InlineKeyboardMarkup> {
-    use quaint::prelude::*;
-
     let conn = conn.check_out().await?;
 
-    let order = conn
-        .select(
-            Select::from_table("user_config").so_that(
-                "user_id"
-                    .equals(user_id)
-                    .and("name".equals("site-sort-order")),
-            ),
-        )
-        .await?;
-
-    let sites = if order.is_empty() {
-        vec![Sites::FurAffinity, Sites::E621, Sites::Twitter]
-    } else {
-        let row = order.into_single()?;
-        let data = row["value"].as_str().unwrap();
-        let data: Vec<String> = serde_json::from_str(&data)?;
-        data.iter().map(|item| Sites::from_str(&item)).collect()
+    let row: Option<Vec<String>> = get_user_config(&conn, "site-sort-order", user_id).await?;
+    let sites = match row {
+        Some(row) => row.iter().map(|item| Sites::from_str(&item)).collect(),
+        None => Sites::default_order(),
     };
 
     let mut buttons = vec![];
