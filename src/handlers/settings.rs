@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use tgbotapi::{requests::*, *};
 
 use super::Status::*;
-use crate::models::{get_user_config, set_user_config, Sites};
+use crate::models::{Sites, UserConfig, UserConfigKey};
 use crate::needs_field;
 use crate::utils::get_message;
 
@@ -61,13 +61,13 @@ async fn name(
         let conn = handler.conn.check_out().await?;
 
         let source_name: Option<bool> =
-            get_user_config(&conn, "source-name", callback_query.from.id).await?;
+            UserConfig::get(&conn, UserConfigKey::SourceName, callback_query.from.id).await?;
         let existed = source_name.is_some();
         let source_name = source_name.unwrap_or(false);
 
         let source_name = !source_name;
 
-        set_user_config(
+        UserConfig::set(
             &conn,
             "source-name",
             callback_query.from.id,
@@ -132,7 +132,7 @@ async fn name_keyboard(
 ) -> failure::Fallible<InlineKeyboardMarkup> {
     let conn = handler.conn.check_out().await?;
 
-    let enabled = get_user_config(&conn, "source-name", from.id)
+    let enabled = UserConfig::get(&conn, UserConfigKey::SourceName, from.id)
         .await?
         .unwrap_or(false);
 
@@ -183,7 +183,7 @@ async fn order(
     }
 
     if data.ends_with(":-") {
-        let site = Sites::from_str(data.split(':').nth(2).unwrap());
+        let site: Sites = data.split(':').nth(2).unwrap().parse().unwrap();
 
         let mut args = fluent::FluentArgs::new();
         args.insert("name", site.as_str().into());
@@ -213,16 +213,16 @@ async fn order(
 
     let pos = data.split(':').nth(3);
     if let Some(pos) = pos {
-        let site = Sites::from_str(data.split(':').nth(2).unwrap());
+        let site = data.split(':').nth(2).unwrap().parse().unwrap();
         let pos: usize = pos.parse().unwrap();
 
         let conn = handler.conn.check_out().await?;
 
         let order: Option<Vec<String>> =
-            get_user_config(&conn, "site-sort-order", callback_query.from.id).await?;
+            UserConfig::get(&conn, UserConfigKey::SiteSortOrder, callback_query.from.id).await?;
         let has_config = order.is_some();
         let mut sites = match order {
-            Some(sites) => sites.iter().map(|item| Sites::from_str(&item)).collect(),
+            Some(sites) => sites.iter().map(|item| item.parse().unwrap()).collect(),
             None => Sites::default_order(),
         };
 
@@ -239,7 +239,7 @@ async fn order(
 
         sites.insert(pos, site.clone());
 
-        set_user_config(
+        UserConfig::set(
             &conn,
             "site-sort-order",
             callback_query.from.id,
@@ -369,9 +369,10 @@ async fn sort_order_keyboard(
 ) -> failure::Fallible<InlineKeyboardMarkup> {
     let conn = conn.check_out().await?;
 
-    let row: Option<Vec<String>> = get_user_config(&conn, "site-sort-order", user_id).await?;
+    let row: Option<Vec<String>> =
+        UserConfig::get(&conn, UserConfigKey::SiteSortOrder, user_id).await?;
     let sites = match row {
-        Some(row) => row.iter().map(|item| Sites::from_str(&item)).collect(),
+        Some(row) => row.iter().map(|item| item.parse().unwrap()).collect(),
         None => Sites::default_order(),
     };
 

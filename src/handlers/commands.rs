@@ -4,6 +4,7 @@ use tgbotapi::{requests::*, *};
 use tokio01::runtime::current_thread::block_on_all;
 
 use super::Status::*;
+use crate::models::{GroupConfig, GroupConfigKey, Twitter, TwitterRequest};
 use crate::needs_field;
 use crate::utils::{
     build_alternate_response, continuous_action, find_best_photo, find_images, get_message,
@@ -75,8 +76,6 @@ impl CommandHandler {
         handler: &crate::MessageHandler,
         message: &Message,
     ) -> failure::Fallible<()> {
-        use quaint::prelude::*;
-
         let now = std::time::Instant::now();
 
         if message.chat.chat_type != ChatType::Private {
@@ -96,20 +95,15 @@ impl CommandHandler {
         let request_token = block_on_all(egg_mode::request_token(&con_token, "oob"))?;
 
         let conn = handler.conn.check_out().await?;
-
-        conn.delete(Delete::from_table("twitter_auth").so_that("user_id".equals(user.id)))
-            .await?;
-
-        conn.insert(
-            Insert::single_into("twitter_auth")
-                .value("user_id", user.id)
-                .value("request_key", request_token.key.to_string())
-                .value("request_secret", request_token.secret.to_string())
-                .build(),
+        Twitter::set_request(
+            &conn,
+            user.id,
+            TwitterRequest {
+                request_key: request_token.key.to_string(),
+                request_secret: request_token.secret.to_string(),
+            },
         )
         .await?;
-
-        drop(conn);
 
         let url = egg_mode::authorize_url(&request_token);
 
@@ -589,9 +583,6 @@ impl CommandHandler {
         handler: &crate::MessageHandler,
         message: &Message,
     ) -> failure::Fallible<()> {
-        use super::group_source::{ENABLE_KEY, ENABLE_VALUE};
-        use quaint::prelude::*;
-
         if !message.chat.chat_type.is_group() {
             handler
                 .send_generic_reply(&message, "automatic-enable-not-group")
@@ -629,45 +620,27 @@ impl CommandHandler {
 
         let conn = handler.conn.check_out().await?;
 
-        let results = conn
-            .select(
-                Select::from_table("group_config").so_that(
-                    "chat_id"
-                        .equals(message.chat.id)
-                        .and("name".equals(ENABLE_KEY)),
-                ),
-            )
-            .await?;
+        let result: Option<bool> =
+            GroupConfig::get(&conn, message.chat.id, GroupConfigKey::GroupAdd).await?;
 
-        if !results.is_empty() {
-            conn.delete(
-                Delete::from_table("group_config").so_that(
-                    "chat_id"
-                        .equals(message.chat.id)
-                        .and("name".equals(ENABLE_KEY)),
-                ),
-            )
-            .await?;
-
+        if result.is_some() {
+            GroupConfig::delete(&conn, GroupConfigKey::GroupAdd, message.chat.id).await?;
             handler
                 .send_generic_reply(&message, "automatic-disable")
                 .await?;
-
-            return Ok(());
-        }
-
-        conn.insert(
-            Insert::single_into("group_config")
-                .value("chat_id", message.chat.id)
-                .value("name", ENABLE_KEY)
-                .value("value", ENABLE_VALUE)
-                .build(),
-        )
-        .await?;
-
-        handler
-            .send_generic_reply(&message, "automatic-enable-success")
+        } else {
+            GroupConfig::set(
+                &conn,
+                GroupConfigKey::GroupAdd,
+                message.chat.id,
+                false,
+                true,
+            )
             .await?;
+            handler
+                .send_generic_reply(&message, "automatic-enable-success")
+                .await?;
+        }
 
         Ok(())
     }

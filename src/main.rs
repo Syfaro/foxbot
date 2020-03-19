@@ -203,8 +203,6 @@ async fn main() {
     let mut dir = std::env::current_dir().expect("Unable to get directory");
     dir.push("langs");
 
-    use std::io::Read;
-
     let mut langs = HashMap::new();
 
     for lang in L10N_LANGS {
@@ -217,9 +215,7 @@ async fn main() {
 
         for resource in L10N_RESOURCES {
             let file = path.join(resource);
-            let mut f = std::fs::File::open(file).expect("Unable to open language");
-            let mut s = String::new();
-            f.read_to_string(&mut s).expect("Unable to read file");
+            let s = std::fs::read_to_string(file).expect("Unable to read file");
 
             lang_resources.push(s);
         }

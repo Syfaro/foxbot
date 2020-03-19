@@ -1,11 +1,9 @@
 use super::Status::*;
+use crate::models::{GroupConfig, GroupConfigKey};
 use crate::needs_field;
-use crate::utils::{find_best_photo, get_message, match_image, sort_results};
+use crate::utils::{continuous_action, find_best_photo, get_message, match_image, sort_results};
 use async_trait::async_trait;
 use tgbotapi::{requests::*, *};
-
-pub static ENABLE_KEY: &str = "group_add";
-pub static ENABLE_VALUE: &str = "yes";
 
 pub struct GroupSourceHandler;
 
@@ -21,30 +19,22 @@ impl super::Handler for GroupSourceHandler {
         update: &Update,
         _command: Option<&Command>,
     ) -> Result<super::Status, failure::Error> {
-        use quaint::prelude::*;
-
         let message = needs_field!(update, message);
         let photo_sizes = needs_field!(message, photo);
 
         let conn = handler.conn.check_out().await?;
-        let results = conn
-            .select(
-                Select::from_table("group_config").so_that(
-                    "chat_id"
-                        .equals(message.chat.id)
-                        .and("name".equals(ENABLE_KEY)),
-                ),
-            )
-            .await?;
-
-        let row = match results.first() {
-            Some(first) => first,
+        match GroupConfig::get(&conn, message.chat.id, GroupConfigKey::GroupAdd).await? {
+            Some(val) if val => (),
             _ => return Ok(Ignored),
-        };
-
-        if row["value"].as_str().unwrap() != ENABLE_VALUE {
-            return Ok(Ignored);
         }
+
+        let action = continuous_action(
+            handler.bot.clone(),
+            6,
+            message.chat_id(),
+            message.from.clone(),
+            ChatAction::Typing,
+        );
 
         let best_photo = find_best_photo(&photo_sizes).unwrap();
         let mut matches =
@@ -106,6 +96,8 @@ impl super::Handler for GroupSourceHandler {
                 }
             })
             .await;
+
+        drop(action);
 
         let message = SendMessage {
             chat_id: message.chat_id(),

@@ -1,9 +1,10 @@
-use super::Status::*;
-use crate::needs_field;
 use async_trait::async_trait;
 use tgbotapi::{requests::*, *};
 use tokio01::runtime::current_thread::block_on_all;
 
+use super::Status::*;
+use crate::models::{Twitter, TwitterAccount};
+use crate::needs_field;
 use crate::utils::get_message;
 
 pub struct TextHandler;
@@ -20,8 +21,6 @@ impl super::Handler for TextHandler {
         update: &Update,
         _command: Option<&Command>,
     ) -> Result<super::Status, failure::Error> {
-        use quaint::prelude::*;
-
         let message = needs_field!(update, message);
         let text = needs_field!(message, text);
 
@@ -38,26 +37,14 @@ impl super::Handler for TextHandler {
 
         let conn = handler.conn.check_out().await?;
 
-        let result = conn
-            .select(
-                Select::from_table("twitter_auth")
-                    .column("request_key")
-                    .column("request_secret")
-                    .so_that("user_id".equals(from.id)),
-            )
-            .await?;
-
-        let row = match result.first() {
+        let row = match Twitter::get_request(&conn, from.id).await? {
             Some(row) => row,
-            _ => return Ok(Completed),
+            _ => return Ok(Ignored),
         };
 
         tracing::trace!("we had waiting Twitter code");
 
-        let request_token = egg_mode::KeyPair::new(
-            row["request_key"].to_string().unwrap(),
-            row["request_secret"].to_string().unwrap(),
-        );
+        let request_token = egg_mode::KeyPair::new(row.request_key, row.request_secret);
 
         let con_token = egg_mode::KeyPair::new(
             handler.config.twitter_consumer_key.clone(),
@@ -75,20 +62,15 @@ impl super::Handler for TextHandler {
 
         tracing::trace!("got access token");
 
-        conn.delete(Delete::from_table("twitter_account").so_that("user_id".equals(from.id)))
-            .await?;
-
-        conn.insert(
-            Insert::single_into("twitter_account")
-                .value("user_id", from.id)
-                .value("consumer_key", access.key.to_string())
-                .value("consumer_secret", access.secret.to_string())
-                .build(),
+        Twitter::set_account(
+            &conn,
+            from.id,
+            TwitterAccount {
+                consumer_key: access.key.to_string(),
+                consumer_secret: access.secret.to_string(),
+            },
         )
         .await?;
-
-        conn.delete(Delete::from_table("twitter_auth").so_that("user_id".equals(from.id)))
-            .await?;
 
         let mut args = fluent::FluentArgs::new();
         args.insert("userName", fluent::FluentValue::from(token.2));

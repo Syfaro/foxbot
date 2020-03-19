@@ -5,6 +5,8 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use tokio01::runtime::current_thread::block_on_all;
 
+use crate::models::Twitter as TwitterModel;
+
 const USER_AGENT: &str = concat!(
     "t.me/FoxBot version ",
     env!("CARGO_PKG_VERSION"),
@@ -50,6 +52,8 @@ pub enum SiteError {
     Twitter(egg_mode::error::Error),
     #[fail(display = "python error")]
     Python(String),
+    #[fail(display = "database error")]
+    Database(quaint::error::Error),
 }
 
 impl From<reqwest::Error> for SiteError {
@@ -81,6 +85,12 @@ impl From<cfscrape::Error> for SiteError {
         SiteError::Python(match e {
             cfscrape::Error::Python(err) => format!("{:?}", err),
         })
+    }
+}
+
+impl From<quaint::error::Error> for SiteError {
+    fn from(e: quaint::error::Error) -> Self {
+        SiteError::Database(e)
     }
 }
 
@@ -337,31 +347,18 @@ impl Site for Twitter {
         user_id: i32,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, SiteError> {
-        use quaint::prelude::*;
-
         let captures = self.matcher.captures(url).unwrap();
         let id = captures["id"].to_owned().parse::<u64>().unwrap();
 
         tracing::trace!(user_id, "attempting to find saved credentials",);
 
-        let conn = self.conn.check_out().await.expect("Unable to get db conn");
-        let result = conn
-            .select(
-                Select::from_table("twitter_account")
-                    .column("consumer_key")
-                    .column("consumer_secret")
-                    .so_that("user_id".equals(user_id)),
-            )
-            .await
-            .expect("Unable to query db");
+        let conn = self.conn.check_out().await?;
+        let account = TwitterModel::get_account(&conn, user_id).await?;
 
-        let token = match result.first() {
-            Some(result) => egg_mode::Token::Access {
+        let token = match account {
+            Some(account) => egg_mode::Token::Access {
                 consumer: self.consumer.clone(),
-                access: egg_mode::KeyPair::new(
-                    result["consumer_key"].to_string().unwrap(),
-                    result["consumer_secret"].to_string().unwrap(),
-                ),
+                access: egg_mode::KeyPair::new(account.consumer_key, account.consumer_secret),
             },
             _ => self.token.clone(),
         };
@@ -497,8 +494,8 @@ impl FurAffinity {
             let cookies = cookies.split("; ");
             for cookie in cookies {
                 let mut parts = cookie.split('=');
-                let name = parts.next().expect("Missing cookie name");
-                let value = parts.next().expect("Missing cookie value");
+                let name = parts.next()?;
+                let value = parts.next()?;
 
                 self.cookies.insert(name.into(), value.into());
             }

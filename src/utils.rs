@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing_futures::Instrument;
 
-use crate::models::{get_user_config, Sites};
+use crate::models::{FileCache, Sites, UserConfig, UserConfigKey};
 use crate::BoxedSite;
 
 type Bundle<'a> = &'a fluent::FluentBundle<fluent::FluentResource>;
@@ -265,20 +265,9 @@ pub async fn match_image(
     fapi: &fuzzysearch::FuzzySearch,
     file: &tgbotapi::PhotoSize,
 ) -> failure::Fallible<Vec<fuzzysearch::File>> {
-    use quaint::prelude::*;
-
     let conn = conn.check_out().await?;
 
-    let result = conn
-        .select(
-            Select::from_table("file_id_cache")
-                .column("hash")
-                .so_that("file_id".equals(file.file_unique_id.to_string())),
-        )
-        .await?;
-
-    if let Some(row) = result.first() {
-        let hash = row["hash"].as_i64().unwrap();
+    if let Some(hash) = FileCache::get(&conn, &file.file_unique_id).await? {
         return lookup_single_hash(&fapi, hash).await;
     }
 
@@ -291,13 +280,7 @@ pub async fn match_image(
 
     let hash = tokio::task::spawn_blocking(move || fuzzysearch::hash_bytes(&data)).await??;
 
-    conn.insert(
-        Insert::single_into("file_id_cache")
-            .value("hash", hash)
-            .value("file_id", file.file_unique_id.clone())
-            .build(),
-    )
-    .await?;
+    FileCache::set(&conn, &file.file_unique_id, hash).await?;
 
     lookup_single_hash(&fapi, hash).await
 }
@@ -335,9 +318,10 @@ pub async fn sort_results(
 
     let conn = conn.check_out().await?;
 
-    let row: Option<Vec<String>> = get_user_config(&conn, "site-sort-order", user_id).await?;
+    let row: Option<Vec<String>> =
+        UserConfig::get(&conn, UserConfigKey::SiteSortOrder, user_id).await?;
     let sites = match row {
-        Some(row) => row.iter().map(|item| Sites::from_str(&item)).collect(),
+        Some(row) => row.iter().map(|item| item.parse().unwrap()).collect(),
         None => Sites::default_order(),
     };
 
@@ -369,7 +353,7 @@ pub async fn use_source_name(
     user_id: i32,
 ) -> failure::Fallible<bool> {
     let conn = conn.check_out().await?;
-    let row = get_user_config(&conn, "source-name", user_id)
+    let row = UserConfig::get(&conn, UserConfigKey::SourceName, user_id)
         .await?
         .unwrap_or(false);
 
