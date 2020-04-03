@@ -388,6 +388,7 @@ async fn receive_webhook(host: String, secret: String, handler: Arc<MessageHandl
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 
+    #[cfg(unix)]
     tokio::spawn(async move {
         use tokio::signal;
 
@@ -398,6 +399,14 @@ async fn receive_webhook(host: String, secret: String, handler: Arc<MessageHandl
             _ = stream.recv() => shutdown_tx.send(true),
             _ = signal::ctrl_c() => shutdown_tx.send(true),
         }
+    });
+
+    #[cfg(not(unix))]
+    tokio::spawn(async move {
+        use tokio::signal;
+
+        signal::ctrl_c().await.expect("Unable to await ctrl-c");
+        shutdown_tx.send(true).expect("Unable to send shutdown");
     });
 
     let graceful = server.with_graceful_shutdown(async {
@@ -427,6 +436,7 @@ async fn poll_updates(bot: Arc<Telegram>, handler: Arc<MessageHandler>) {
 
     let (mut shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel(1);
 
+    #[cfg(unix)]
     tokio::spawn(async move {
         use tokio::signal;
 
@@ -437,6 +447,14 @@ async fn poll_updates(bot: Arc<Telegram>, handler: Arc<MessageHandler>) {
             _ = stream.recv() => shutdown_tx.send(true).await.expect("Unable to send shutdown"),
             _ = signal::ctrl_c() => shutdown_tx.send(true).await.expect("Unable to send shutdown"),
         };
+    });
+
+    #[cfg(not(unix))]
+    tokio::spawn(async move {
+        use tokio::signal;
+
+        signal::ctrl_c().await.expect("Unable to await ctrl-c");
+        shutdown_tx.send(true).await.expect("Unable to send shutdown");
     });
 
     let waiting = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
