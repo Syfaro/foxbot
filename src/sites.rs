@@ -189,6 +189,7 @@ impl Site for Direct {
     ) -> Result<Option<Vec<PostInfo>>, SiteError> {
         let u = url.to_string();
         let mut source_link = None;
+        let mut source_name = None;
 
         if let Ok(result) =
             tokio::time::timeout(std::time::Duration::from_secs(4), self.reverse_search(&u)).await
@@ -197,6 +198,7 @@ impl Site for Direct {
             if let Some(post) = result {
                 tracing::debug!("found ID of post matching: {}", post.id);
                 source_link = Some(post.url());
+                source_name = Some(post.site_name());
             } else {
                 tracing::trace!("no posts matched");
             }
@@ -208,7 +210,7 @@ impl Site for Direct {
             file_type: get_file_ext(url).unwrap().to_string(),
             url: u.clone(),
             source_link,
-            site_name: self.name(),
+            site_name: source_name.unwrap_or_else(|| self.name()),
             ..Default::default()
         }]))
     }
