@@ -316,8 +316,6 @@ async fn handle_request(
 
     match (req.method(), req.uri().path()) {
         (&hyper::Method::POST, path) if path == secret => {
-            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-
             tracing::trace!("handling update");
             let body = req.into_body();
             let bytes = hyper::body::to_bytes(body)
@@ -327,12 +325,18 @@ async fn handle_request(
             let update: Update = match serde_json::from_slice(&bytes) {
                 Ok(update) => update,
                 Err(_) => {
+                    tracing::warn!(
+                        "got weird request, first 20 out of {} bytes:\n{:?}",
+                        bytes.len(),
+                        &bytes[0..20]
+                    );
                     let mut resp = Response::default();
                     *resp.status_mut() = StatusCode::BAD_REQUEST;
                     return Ok(resp);
                 }
             };
 
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let handler_clone = handler.clone();
             tokio::spawn(
                 async move {
