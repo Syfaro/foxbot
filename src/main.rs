@@ -325,11 +325,7 @@ async fn handle_request(
             let update: Update = match serde_json::from_slice(&bytes) {
                 Ok(update) => update,
                 Err(_) => {
-                    tracing::warn!(
-                        "got weird request, first 20 out of {} bytes:\n{:?}",
-                        bytes.len(),
-                        &bytes[0..20]
-                    );
+                    tracing::warn!("got weird request, {} bytes:\n{:x?}", bytes.len(), &bytes);
                     let mut resp = Response::default();
                     *resp.status_mut() = StatusCode::BAD_REQUEST;
                     return Ok(resp);
