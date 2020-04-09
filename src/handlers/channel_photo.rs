@@ -59,7 +59,7 @@ impl super::Handler for ChannelPhotoHandler {
                 ..Default::default()
             };
 
-            handler.bot.make_request(&edit_caption_markup).await?;
+            handler.make_request(&edit_caption_markup).await?;
         // Not a media group, we should create an inline keyboard.
         } else {
             let text = handler
@@ -83,7 +83,7 @@ impl super::Handler for ChannelPhotoHandler {
                 ..Default::default()
             };
 
-            handler.bot.make_request(&edit_reply_markup).await?;
+            handler.make_request(&edit_reply_markup).await?;
         }
 
         Ok(Completed)

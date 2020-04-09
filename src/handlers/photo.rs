@@ -100,7 +100,7 @@ impl super::Handler for PhotoHandler {
             ..Default::default()
         };
 
-        handler.bot.make_request(&send_message).await?;
+        handler.make_request(&send_message).await?;
 
         let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "source")
             .add_tag("good", first.distance.unwrap() < 5)
@@ -132,7 +132,7 @@ async fn no_results(
         ..Default::default()
     };
 
-    handler.bot.make_request(&send_message).await?;
+    handler.make_request(&send_message).await?;
 
     let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "source")
         .add_field("matches", 0)

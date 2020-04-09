@@ -98,8 +98,8 @@ async fn name(
         };
 
         futures::try_join!(
-            handler.bot.make_request(&answer),
-            handler.bot.make_request(&edit_message)
+            handler.make_request(&answer),
+            handler.make_request(&edit_message)
         )?;
 
         return Ok(Completed);
@@ -121,7 +121,7 @@ async fn name(
         ..Default::default()
     };
 
-    handler.bot.make_request(&edit_message).await?;
+    handler.make_request(&edit_message).await?;
 
     Ok(Completed)
 }
@@ -177,7 +177,7 @@ async fn order(
             ..Default::default()
         };
 
-        handler.bot.make_request(&answer).await?;
+        handler.make_request(&answer).await?;
 
         return Ok(Completed);
     }
@@ -200,7 +200,7 @@ async fn order(
             ..Default::default()
         };
 
-        handler.bot.make_request(&answer).await?;
+        handler.make_request(&answer).await?;
 
         return Ok(Completed);
     }
@@ -273,8 +273,8 @@ async fn order(
         };
 
         futures::try_join!(
-            handler.bot.make_request(&edit_message),
-            handler.bot.make_request(&answer)
+            handler.make_request(&edit_message),
+            handler.make_request(&answer)
         )?;
 
         return Ok(Completed);
@@ -302,8 +302,8 @@ async fn order(
     };
 
     futures::try_join!(
-        handler.bot.make_request(&edit_message),
-        handler.bot.make_request(&answer)
+        handler.make_request(&edit_message),
+        handler.make_request(&answer)
     )?;
 
     Ok(Completed)
@@ -360,7 +360,7 @@ async fn send_settings_message(
         ..Default::default()
     };
 
-    Ok(handler.bot.make_request(&message).await?)
+    Ok(handler.make_request(&message).await?)
 }
 
 async fn sort_order_keyboard(

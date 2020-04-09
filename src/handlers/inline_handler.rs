@@ -92,7 +92,7 @@ impl super::Handler for InlineHandler {
             answer_inline.switch_pm_parameter = Some("help".to_string());
         }
 
-        handler.bot.make_request(&answer_inline).await?;
+        handler.make_request(&answer_inline).await?;
 
         Ok(Completed)
     }

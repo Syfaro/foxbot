@@ -88,7 +88,7 @@ impl super::Handler for TextHandler {
             ..Default::default()
         };
 
-        handler.bot.make_request(&message).await?;
+        handler.make_request(&message).await?;
 
         let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "twitter")
             .add_tag("type", "added")

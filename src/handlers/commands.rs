@@ -124,7 +124,7 @@ impl CommandHandler {
             ..Default::default()
         };
 
-        handler.bot.make_request(&send_message).await?;
+        handler.make_request(&send_message).await?;
 
         let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "twitter")
             .add_tag("type", "new")
@@ -204,7 +204,7 @@ impl CommandHandler {
                     reply_to_message_id: Some(message.message_id),
                 };
 
-                handler.bot.make_request(&video).await?;
+                handler.make_request(&video).await?;
             } else {
                 let photo = SendPhoto {
                     chat_id: message.chat_id(),
@@ -218,7 +218,7 @@ impl CommandHandler {
                     ..Default::default()
                 };
 
-                handler.bot.make_request(&photo).await?;
+                handler.make_request(&photo).await?;
             }
         } else {
             for chunk in results.chunks(10) {
@@ -253,7 +253,7 @@ impl CommandHandler {
                     ..Default::default()
                 };
 
-                handler.bot.make_request(&media_group).await?;
+                handler.make_request(&media_group).await?;
             }
         }
 
@@ -276,7 +276,7 @@ impl CommandHandler {
                 ..Default::default()
             };
 
-            handler.bot.make_request(&send_message).await?;
+            handler.make_request(&send_message).await?;
         }
 
         Ok(())
@@ -360,7 +360,6 @@ impl CommandHandler {
         };
 
         handler
-            .bot
             .make_request(&send_message)
             .await
             .map(|_msg| ())
@@ -511,7 +510,7 @@ impl CommandHandler {
             ..Default::default()
         };
 
-        let sent = handler.bot.make_request(&send_message).await?;
+        let sent = handler.make_request(&send_message).await?;
 
         if !has_multiple_matches {
             return Ok(());
@@ -571,7 +570,6 @@ impl CommandHandler {
         };
 
         handler
-            .bot
             .make_request(&edit)
             .await
             .map(|_msg| ())
@@ -596,7 +594,7 @@ impl CommandHandler {
             chat_id: message.chat_id(),
             user_id: user.id,
         };
-        let chat_member = handler.bot.make_request(&get_chat_member).await?;
+        let chat_member = handler.make_request(&get_chat_member).await?;
 
         if !chat_member.status.is_admin() {
             handler
@@ -609,7 +607,7 @@ impl CommandHandler {
             user_id: handler.bot_user.id,
             ..get_chat_member
         };
-        let bot_member = handler.bot.make_request(&get_chat_member).await?;
+        let bot_member = handler.make_request(&get_chat_member).await?;
 
         if !bot_member.status.is_admin() {
             handler

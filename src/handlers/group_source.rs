@@ -107,7 +107,7 @@ impl super::Handler for GroupSourceHandler {
             ..Default::default()
         };
 
-        handler.bot.make_request(&message).await?;
+        handler.make_request(&message).await?;
 
         Ok(Completed)
     }

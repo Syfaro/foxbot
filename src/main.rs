@@ -168,9 +168,9 @@ async fn main() {
 
     run_migrations(&config.database).await;
 
-    let pool = quaint::pooled::Quaint::new(&format!("file:{}", config.database))
-        .await
-        .expect("Unable to connect to database");
+    let pool = quaint::pooled::Quaint::builder(&format!("file:{}", config.database))
+        .expect("Unable to connect to database")
+        .build();
 
     let fapi = Arc::new(fuzzysearch::FuzzySearch::new(
         config.fautil_apitoken.clone(),
@@ -454,7 +454,10 @@ async fn poll_updates(bot: Arc<Telegram>, handler: Arc<MessageHandler>) {
         use tokio::signal;
 
         signal::ctrl_c().await.expect("Unable to await ctrl-c");
-        shutdown_tx.send(true).await.expect("Unable to send shutdown");
+        shutdown_tx
+            .send(true)
+            .await
+            .expect("Unable to send shutdown");
     });
 
     let waiting = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -634,7 +637,7 @@ impl MessageHandler {
             ..Default::default()
         };
 
-        if let Err(e) = self.bot.make_request(&send_message).await {
+        if let Err(e) = self.make_request(&send_message).await {
             tracing::error!("unable to send error message to user: {:?}", e);
             utils::with_user_scope(message.from.as_ref(), None, || {
                 capture_fail(&e);
@@ -683,8 +686,7 @@ impl MessageHandler {
             ..Default::default()
         };
 
-        self.bot
-            .make_request(&send_message)
+        self.make_request(&send_message)
             .await
             .map(|_msg| ())
             .map_err(Into::into)
@@ -714,10 +716,7 @@ impl MessageHandler {
             ..Default::default()
         };
 
-        self.bot
-            .make_request(&send_message)
-            .await
-            .map_err(Into::into)
+        self.make_request(&send_message).await.map_err(Into::into)
     }
 
     #[tracing::instrument(skip(self, update))]
@@ -759,6 +758,47 @@ impl MessageHandler {
                 }
                 _ => (),
             }
+        }
+    }
+
+    pub async fn make_request<T>(&self, request: &T) -> Result<T::Response, Error>
+    where
+        T: TelegramRequest,
+    {
+        use std::time::Duration;
+
+        let mut attempts = 0;
+
+        loop {
+            let err = match self.bot.make_request(request).await {
+                Ok(resp) => return Ok(resp),
+                Err(err) => err,
+            };
+
+            if attempts > 2 {
+                return Err(err);
+            }
+
+            let telegram_error = match err {
+                tgbotapi::Error::Telegram(ref err) => err,
+                _ => return Err(err),
+            };
+
+            let params = match &telegram_error.parameters {
+                Some(params) => params,
+                _ => return Err(err),
+            };
+
+            let retry_after = match params.retry_after {
+                Some(retry_after) => retry_after,
+                _ => return Err(err),
+            };
+
+            tracing::warn!(retry_after, "rate limited");
+
+            tokio::time::delay_for(Duration::from_secs(retry_after as u64)).await;
+
+            attempts += 1;
         }
     }
 }
