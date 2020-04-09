@@ -74,6 +74,8 @@ automatic-enable-bot-not-admin = Sorry, you must give me admin permissions due t
 automatic-enable-success = Automatic group sourcing is now enabled!
 automatic-disable = This feature is now turned off.
 automatic-enable-not-group = This feature is only supported in groups.
+automatic-preview-disable = Sourced image previews disabled.
+automatic-preview-enable = Sourced image previews enabled.
 
 # Error Messages
 error-generic = Oh no, something went wrong! Please send a message to my creator, { -creatorName }, saying what happened.

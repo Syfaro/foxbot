@@ -3054,7 +3054,7 @@ dependencies = [
 [[package]]
 name = "tgbotapi"
 version = "0.1.0"
-source = "git+https://github.com/Syfaro/tgbotapi-rs.git#51c9fef386434204b78379659ad8cbcc3287e421"
+source = "git+https://github.com/Syfaro/tgbotapi-rs.git#4824e7c3835c06e5678a198ea4d6b0ffb6dbb625"
 dependencies = [
  "failure 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "reqwest 0.10.4 (registry+https://github.com/rust-lang/crates.io-index)",

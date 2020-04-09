@@ -38,7 +38,7 @@ impl super::Handler for CommandHandler {
 
         if let Some(username) = command.username {
             let bot_username = handler.bot_user.username.as_ref().unwrap();
-            if &username != bot_username {
+            if username.to_lowercase() != bot_username.to_lowercase() {
                 tracing::debug!("got command for other bot: {}", username);
                 return Ok(Ignored);
             }
@@ -54,6 +54,7 @@ impl super::Handler for CommandHandler {
             "/alts" => self.handle_alts(&handler, message).await,
             "/error" => Err(failure::format_err!("a test error message")),
             "/groupsource" => self.enable_group_source(&handler, message).await,
+            "/grouppreviews" => self.group_nopreviews(&handler, &message).await,
             _ => {
                 tracing::info!("unknown command: {}", command.name);
                 return Ok(Ignored);
@@ -295,8 +296,45 @@ impl CommandHandler {
             ChatAction::Typing,
         );
 
-        let (reply_to_id, message) = if let Some(reply_to_message) = &message.reply_to_message {
-            (message.message_id, &**reply_to_message)
+        let conn = handler.conn.check_out().await?;
+
+        let is_admin: Option<bool> =
+            GroupConfig::get(&conn, message.chat.id, GroupConfigKey::IsAdmin).await?;
+        let is_admin = match is_admin {
+            Some(admin) => admin,
+            None => {
+                let get_chat_member = GetChatMember {
+                    user_id: handler.bot_user.id,
+                    chat_id: message.chat_id(),
+                };
+                let bot_member = handler.make_request(&get_chat_member).await?;
+
+                let is_admin = bot_member.status.is_admin();
+
+                GroupConfig::set(
+                    &conn,
+                    GroupConfigKey::IsAdmin,
+                    message.chat.id,
+                    false,
+                    is_admin,
+                )
+                .await?;
+
+                is_admin
+            }
+        };
+
+        let summoning_id = message.message_id;
+
+        let (mut reply_to_id, message) = if let Some(reply_to_message) = &message.reply_to_message {
+            let reply = &**reply_to_message;
+            let reply_id = if is_admin {
+                reply.message_id
+            } else {
+                message.message_id
+            };
+
+            (reply_id, reply)
         } else {
             (message.message_id, message)
         };
@@ -310,6 +348,26 @@ impl CommandHandler {
                 return Ok(());
             }
         };
+
+        if is_admin {
+            let delete_message = DeleteMessage {
+                chat_id: message.chat_id(),
+                message_id: summoning_id,
+            };
+
+            if let Err(err) = handler.make_request(&delete_message).await {
+                reply_to_id = summoning_id;
+
+                match err {
+                    tgbotapi::Error::Telegram(_err) => {
+                        tracing::warn!("got error trying to delete summoning message");
+                        GroupConfig::delete(&conn, GroupConfigKey::IsAdmin, message.chat.id)
+                            .await?;
+                    }
+                    _ => return Err(err.into()),
+                }
+            }
+        }
 
         let best_photo = find_best_photo(&photo).unwrap();
         let mut matches =
@@ -351,10 +409,16 @@ impl CommandHandler {
             )
             .await;
 
+        let disable_preview =
+            GroupConfig::get::<bool>(&conn, message.chat.id, GroupConfigKey::GroupNoPreviews)
+                .await?
+                .is_some()
+                || result.distance.unwrap() > 5;
+
         let send_message = SendMessage {
             chat_id: message.chat.id.into(),
             text,
-            disable_web_page_preview: Some(result.distance.unwrap() > 5),
+            disable_web_page_preview: Some(disable_preview),
             reply_to_message_id: Some(reply_to_id),
             ..Default::default()
         };
@@ -472,7 +536,7 @@ impl CommandHandler {
             .map(|m| fuzzysearch::File {
                 artists: Some(
                     m.artists
-                        .unwrap_or_else(|| vec![])
+                        .unwrap_or_else(Vec::new)
                         .iter()
                         .map(|artist| artist.to_lowercase())
                         .collect(),
@@ -483,7 +547,7 @@ impl CommandHandler {
 
         for m in matches {
             let v = results
-                .entry(m.artists.clone().unwrap_or_else(|| vec![]))
+                .entry(m.artists.clone().unwrap_or_else(Vec::new))
                 .or_default();
             v.push(m);
         }
@@ -576,16 +640,17 @@ impl CommandHandler {
             .map_err(Into::into)
     }
 
-    async fn enable_group_source(
+    async fn is_valid_admin_group(
         &self,
         handler: &crate::MessageHandler,
         message: &Message,
-    ) -> failure::Fallible<()> {
+        bot_needs_admin: bool,
+    ) -> failure::Fallible<bool> {
         if !message.chat.chat_type.is_group() {
             handler
                 .send_generic_reply(&message, "automatic-enable-not-group")
                 .await?;
-            return Ok(());
+            return Ok(false);
         }
 
         let user = message.from.as_ref().unwrap();
@@ -600,7 +665,11 @@ impl CommandHandler {
             handler
                 .send_generic_reply(&message, "automatic-enable-not-admin")
                 .await?;
-            return Ok(());
+            return Ok(false);
+        }
+
+        if !bot_needs_admin {
+            return Ok(true);
         }
 
         let get_chat_member = GetChatMember {
@@ -613,6 +682,18 @@ impl CommandHandler {
             handler
                 .send_generic_reply(&message, "automatic-enable-bot-not-admin")
                 .await?;
+            return Ok(false);
+        }
+
+        Ok(true)
+    }
+
+    async fn enable_group_source(
+        &self,
+        handler: &crate::MessageHandler,
+        message: &Message,
+    ) -> failure::Fallible<()> {
+        if !self.is_valid_admin_group(&handler, &message, true).await? {
             return Ok(());
         }
 
@@ -637,6 +718,42 @@ impl CommandHandler {
             .await?;
             handler
                 .send_generic_reply(&message, "automatic-enable-success")
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    async fn group_nopreviews(
+        &self,
+        handler: &crate::MessageHandler,
+        message: &Message,
+    ) -> failure::Fallible<()> {
+        if !self.is_valid_admin_group(&handler, &message, false).await? {
+            return Ok(());
+        }
+
+        let conn = handler.conn.check_out().await?;
+
+        let result: Option<bool> =
+            GroupConfig::get(&conn, message.chat.id, GroupConfigKey::GroupNoPreviews).await?;
+
+        if result.is_some() {
+            GroupConfig::delete(&conn, GroupConfigKey::GroupNoPreviews, message.chat.id).await?;
+            handler
+                .send_generic_reply(&message, "automatic-preview-enable")
+                .await?;
+        } else {
+            GroupConfig::set(
+                &conn,
+                GroupConfigKey::GroupNoPreviews,
+                message.chat.id,
+                false,
+                false,
+            )
+            .await?;
+            handler
+                .send_generic_reply(&message, "automatic-preview-disable")
                 .await?;
         }
 

@@ -151,12 +151,16 @@ pub struct GroupConfig;
 
 pub enum GroupConfigKey {
     GroupAdd,
+    IsAdmin,
+    GroupNoPreviews,
 }
 
 impl GroupConfigKey {
     fn as_str(&self) -> &str {
         match self {
             GroupConfigKey::GroupAdd => "group_add",
+            GroupConfigKey::IsAdmin => "is_admin",
+            GroupConfigKey::GroupNoPreviews => "group_no_previews",
         }
     }
 }
