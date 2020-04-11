@@ -36,7 +36,7 @@ pub trait Handler: Send + Sync {
     /// Method called for every update received.
     ///
     /// Returns if the update should be absorbed and not passed to the next handler.
-    /// Errors are logged to log::error and reported to Sentry, if enabled.
+    /// Errors are logged to tracing::error and reported to Sentry, if enabled.
     async fn handle(
         &self,
         handler: &super::MessageHandler,

@@ -1,6 +1,7 @@
 use super::Status::*;
 use crate::needs_field;
 use async_trait::async_trait;
+use failure::ResultExt;
 use tgbotapi::*;
 
 pub struct ErrorReplyHandler {
@@ -71,11 +72,13 @@ impl super::Handler for ErrorReplyHandler {
             .json(&data)
             .header(reqwest::header::AUTHORIZATION, auth)
             .send()
-            .await?;
+            .await
+            .context("unable to send feedback to sentry")?;
 
         handler
             .send_generic_reply(&message, "error-feedback")
-            .await?;
+            .await
+            .context("unable to send user confirmation about received feedback")?;
 
         Ok(Completed)
     }

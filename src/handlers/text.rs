@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use failure::ResultExt;
 use tgbotapi::{requests::*, *};
 use tokio01::runtime::current_thread::block_on_all;
 
@@ -35,9 +36,16 @@ impl super::Handler for TextHandler {
 
         tracing::trace!("checking if message was Twitter code");
 
-        let conn = handler.conn.check_out().await?;
+        let conn = handler
+            .conn
+            .check_out()
+            .await
+            .context("unable to check out database")?;
 
-        let row = match Twitter::get_request(&conn, from.id).await? {
+        let row = match Twitter::get_request(&conn, from.id)
+            .await
+            .context("unable to query twitter requests")?
+        {
             Some(row) => row,
             _ => return Ok(Ignored),
         };
@@ -51,7 +59,8 @@ impl super::Handler for TextHandler {
             handler.config.twitter_consumer_secret.clone(),
         );
 
-        let token = block_on_all(egg_mode::access_token(con_token, &request_token, text))?;
+        let token = block_on_all(egg_mode::access_token(con_token, &request_token, text))
+            .context("unable to get twitter access token")?;
 
         tracing::trace!("got token");
 
@@ -70,7 +79,8 @@ impl super::Handler for TextHandler {
                 consumer_secret: access.secret.to_string(),
             },
         )
-        .await?;
+        .await
+        .context("unable to set twitter account data")?;
 
         let mut args = fluent::FluentArgs::new();
         args.insert("userName", fluent::FluentValue::from(token.2));
@@ -88,7 +98,10 @@ impl super::Handler for TextHandler {
             ..Default::default()
         };
 
-        handler.make_request(&message).await?;
+        handler
+            .make_request(&message)
+            .await
+            .context("unable to send twitter welcome message")?;
 
         let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "twitter")
             .add_tag("type", "added")

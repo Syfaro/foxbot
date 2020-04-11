@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use failure::ResultExt;
 use tgbotapi::{requests::*, *};
 
 use super::Status::*;
@@ -34,7 +35,11 @@ impl super::Handler for ChannelPhotoHandler {
             return Ok(Completed);
         }
 
-        let first = match get_matches(&handler.bot, &handler.fapi, &handler.conn, &sizes).await? {
+        let matches = get_matches(&handler.bot, &handler.fapi, &handler.conn, &sizes)
+            .await
+            .context("unable to get matches")?;
+
+        let first = match matches {
             Some(first) => first,
             _ => return Ok(Completed),
         };
@@ -59,7 +64,10 @@ impl super::Handler for ChannelPhotoHandler {
                 ..Default::default()
             };
 
-            handler.make_request(&edit_caption_markup).await?;
+            handler
+                .make_request(&edit_caption_markup)
+                .await
+                .context("unable to edit channel caption markup")?;
         // Not a media group, we should create an inline keyboard.
         } else {
             let text = handler
@@ -83,7 +91,10 @@ impl super::Handler for ChannelPhotoHandler {
                 ..Default::default()
             };
 
-            handler.make_request(&edit_reply_markup).await?;
+            handler
+                .make_request(&edit_reply_markup)
+                .await
+                .context("unable to edit channel reply markup")?;
         }
 
         Ok(Completed)

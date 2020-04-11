@@ -1,6 +1,7 @@
 use super::Status::*;
 use crate::needs_field;
 use async_trait::async_trait;
+use failure::ResultExt;
 use tgbotapi::{requests::*, *};
 
 use crate::utils::{continuous_action, find_best_photo, get_message, match_image, sort_results};
@@ -100,7 +101,10 @@ impl super::Handler for PhotoHandler {
             ..Default::default()
         };
 
-        handler.make_request(&send_message).await?;
+        handler
+            .make_request(&send_message)
+            .await
+            .context("unable to send photo source reply")?;
 
         let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "source")
             .add_tag("good", first.distance.unwrap() < 5)
@@ -132,7 +136,10 @@ async fn no_results(
         ..Default::default()
     };
 
-    handler.make_request(&send_message).await?;
+    handler
+        .make_request(&send_message)
+        .await
+        .context("unable to send photo no results message")?;
 
     let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "source")
         .add_field("matches", 0)

@@ -1,6 +1,7 @@
 use super::Status::*;
 use crate::needs_field;
 use async_trait::async_trait;
+use failure::ResultExt;
 use tgbotapi::*;
 
 pub struct GroupAddHandler;
@@ -28,7 +29,10 @@ impl super::Handler for GroupAddHandler {
             .iter()
             .any(|member| member.id == handler.bot_user.id)
         {
-            handler.handle_welcome(message, "group-add").await?;
+            handler
+                .handle_welcome(message, "group-add")
+                .await
+                .context("unable to send group add welcome message")?;
         }
 
         Ok(Completed)
