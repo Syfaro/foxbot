@@ -40,60 +40,6 @@ fn get_file_ext(name: &str) -> Option<&str> {
         .flatten()
 }
 
-#[derive(Fail, Debug)]
-pub enum SiteError {
-    #[fail(display = "http error")]
-    Request(reqwest::Error),
-    #[fail(display = "json parsing error")]
-    JSON(serde_json::Error),
-    #[fail(display = "missing required value")]
-    Missing(std::option::NoneError),
-    #[fail(display = "twitter error")]
-    Twitter(egg_mode::error::Error),
-    #[fail(display = "python error")]
-    Python(String),
-    #[fail(display = "database error")]
-    Database(quaint::error::Error),
-}
-
-impl From<reqwest::Error> for SiteError {
-    fn from(e: reqwest::Error) -> Self {
-        SiteError::Request(e)
-    }
-}
-
-impl From<serde_json::Error> for SiteError {
-    fn from(e: serde_json::Error) -> Self {
-        SiteError::JSON(e)
-    }
-}
-
-impl From<egg_mode::error::Error> for SiteError {
-    fn from(e: egg_mode::error::Error) -> Self {
-        SiteError::Twitter(e)
-    }
-}
-
-impl From<std::option::NoneError> for SiteError {
-    fn from(e: std::option::NoneError) -> Self {
-        SiteError::Missing(e)
-    }
-}
-
-impl From<cfscrape::Error> for SiteError {
-    fn from(e: cfscrape::Error) -> Self {
-        SiteError::Python(match e {
-            cfscrape::Error::Python(err) => format!("{:?}", err),
-        })
-    }
-}
-
-impl From<quaint::error::Error> for SiteError {
-    fn from(e: quaint::error::Error) -> Self {
-        SiteError::Database(e)
-    }
-}
-
 #[async_trait]
 pub trait Site {
     fn name(&self) -> &'static str;
@@ -102,7 +48,25 @@ pub trait Site {
         &mut self,
         user_id: i32,
         url: &str,
-    ) -> Result<Option<Vec<PostInfo>>, SiteError>;
+    ) -> failure::Fallible<Option<Vec<PostInfo>>>;
+}
+
+// workaround for NoneError not actually being an Error
+// https://github.com/rust-lang-nursery/failure/issues/59#issuecomment-602862336
+#[derive(Debug, Fail)]
+#[fail(display = "NoneError")]
+struct NoneError;
+
+trait OptionExt {
+    type T;
+    fn unwrap_fail(self) -> Result<Self::T, NoneError>;
+}
+
+impl<U> OptionExt for Option<U> {
+    type T = U;
+    fn unwrap_fail(self) -> Result<Self::T, NoneError> {
+        self.ok_or(NoneError)
+    }
 }
 
 pub struct Direct {
@@ -186,7 +150,7 @@ impl Site for Direct {
         &mut self,
         _user_id: i32,
         url: &str,
-    ) -> Result<Option<Vec<PostInfo>>, SiteError> {
+    ) -> failure::Fallible<Option<Vec<PostInfo>>> {
         let u = url.to_string();
         let mut source_link = None;
         let mut source_name = None;
@@ -271,7 +235,7 @@ impl Site for E621 {
         &mut self,
         _user_id: i32,
         url: &str,
-    ) -> Result<Option<Vec<PostInfo>>, SiteError> {
+    ) -> failure::Fallible<Option<Vec<PostInfo>>> {
         let endpoint = if self.show.is_match(url) {
             let captures = self.show.captures(url).unwrap();
             let id = &captures["id"];
@@ -348,7 +312,7 @@ impl Site for Twitter {
         &mut self,
         user_id: i32,
         url: &str,
-    ) -> Result<Option<Vec<PostInfo>>, SiteError> {
+    ) -> failure::Fallible<Option<Vec<PostInfo>>> {
         let captures = self.matcher.captures(url).unwrap();
         let id = captures["id"].to_owned().parse::<u64>().unwrap();
 
@@ -445,7 +409,7 @@ impl FurAffinity {
         }
     }
 
-    async fn load_direct_url(&self, url: &str) -> Result<Option<PostInfo>, SiteError> {
+    async fn load_direct_url(&self, url: &str) -> failure::Fallible<Option<PostInfo>> {
         let url = if url.starts_with("http://") {
             url.replace("http://", "https://")
         } else {
@@ -481,7 +445,7 @@ impl FurAffinity {
         cookies.join("; ")
     }
 
-    async fn load_submission(&mut self, url: &str) -> Result<Option<PostInfo>, SiteError> {
+    async fn load_submission(&mut self, url: &str) -> failure::Fallible<Option<PostInfo>> {
         let resp = self
             .client
             .get(url)
@@ -492,12 +456,13 @@ impl FurAffinity {
 
         let resp = if resp.status() == 429 || resp.status() == 503 {
             let cfscrape::CfscrapeData { cookies, .. } =
-                cfscrape::get_cookie_string(url, Some(USER_AGENT))?;
+                cfscrape::get_cookie_string(url, Some(USER_AGENT))
+                    .map_err(|err| format_err!("python error: {}", err))?;
             let cookies = cookies.split("; ");
             for cookie in cookies {
                 let mut parts = cookie.split('=');
-                let name = parts.next()?;
-                let value = parts.next()?;
+                let name = parts.next().unwrap_fail()?;
+                let value = parts.next().unwrap_fail()?;
 
                 self.cookies.insert(name.into(), value.into());
             }
@@ -520,7 +485,7 @@ impl FurAffinity {
             None => return Ok(None),
         };
 
-        let image_url = format!("https:{}", img.value().attr("src")?);
+        let image_url = format!("https:{}", img.value().attr("src").unwrap_fail()?);
 
         Ok(Some(PostInfo {
             file_type: get_file_ext(&image_url).unwrap().to_string(),
@@ -548,7 +513,7 @@ impl Site for FurAffinity {
         &mut self,
         _user_id: i32,
         url: &str,
-    ) -> Result<Option<Vec<PostInfo>>, SiteError> {
+    ) -> failure::Fallible<Option<Vec<PostInfo>>> {
         let image = if url.contains("facdn.net/art/") {
             self.load_direct_url(url).await
         } else {
@@ -633,7 +598,7 @@ impl Site for Mastodon {
         &mut self,
         _user_id: i32,
         url: &str,
-    ) -> Result<Option<Vec<PostInfo>>, SiteError> {
+    ) -> failure::Fallible<Option<Vec<PostInfo>>> {
         let captures = self.matcher.captures(url).unwrap();
 
         let base = captures["host"].to_owned();
@@ -695,7 +660,7 @@ impl Site for Weasyl {
         &mut self,
         _user_id: i32,
         url: &str,
-    ) -> Result<Option<Vec<PostInfo>>, SiteError> {
+    ) -> failure::Fallible<Option<Vec<PostInfo>>> {
         let captures = self.matcher.captures(url).unwrap();
         let sub_id = captures["id"].to_owned();
 
@@ -712,22 +677,32 @@ impl Site for Weasyl {
             .await?;
 
         let submissions = resp
-            .as_object()?
-            .get("media")?
-            .as_object()?
-            .get("submission")?
-            .as_array()?;
+            .as_object()
+            .unwrap_fail()?
+            .get("media")
+            .unwrap_fail()?
+            .as_object()
+            .unwrap_fail()?
+            .get("submission")
+            .unwrap_fail()?
+            .as_array()
+            .unwrap_fail()?;
 
         if submissions.is_empty() {
             return Ok(None);
         }
 
         let thumbs = resp
-            .as_object()?
-            .get("media")?
-            .as_object()?
-            .get("thumbnail")?
-            .as_array()?;
+            .as_object()
+            .unwrap_fail()?
+            .get("media")
+            .unwrap_fail()?
+            .as_object()
+            .unwrap_fail()?
+            .get("thumbnail")
+            .unwrap_fail()?
+            .as_array()
+            .unwrap_fail()?;
 
         Ok(Some(
             submissions

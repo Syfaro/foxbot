@@ -386,7 +386,10 @@ impl FileCache {
             .value("file_id", file_id)
             .value("hash", hash)
             .build();
-        let _ = conn.insert(insert).await.context("unable to insert file cache item");
+        let _ = conn
+            .insert(insert)
+            .await
+            .context("unable to insert file cache item");
 
         Ok(())
     }
