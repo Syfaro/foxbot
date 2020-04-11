@@ -152,8 +152,6 @@ async fn run_migrations(database: &str) {
 
 #[tokio::main]
 async fn main() {
-    pretty_env_logger::init();
-
     let config = match envy::from_env::<Config>() {
         Ok(config) => config,
         Err(err) => panic!("{:#?}", err),
@@ -339,7 +337,7 @@ async fn handle_request(
                     tracing::debug!("got update: {:?}", update);
                     handler_clone.handle_update(update).await;
                     count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-                    tracing::event!(tracing::Level::DEBUG, "finished handling message");
+                    tracing::debug!("finished handling message");
                 }
                 .in_current_span(),
             );
@@ -732,12 +730,15 @@ impl MessageHandler {
             .and_then(|message| message.get_command());
 
         for handler in &self.handlers {
-            tracing::trace!(handler = handler.name(), "running handler");
+            tracing::trace!(name = handler.name(), "running handler");
 
             match handler.handle(&self, &update, command.as_ref()).await {
-                Ok(status) if status == handlers::Status::Completed => break,
+                Ok(status) if status == handlers::Status::Completed => {
+                    tracing::debug!(handler = handler.name(), "handled update");
+                    break;
+                }
                 Err(e) => {
-                    log::error!("Error handling update: {:#?}", e);
+                    tracing::error!("Error handling update: {:#?}", e);
 
                     let mut tags = vec![("handler", handler.name().to_string())];
                     if let Some(user) = user {

@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use failure::ResultExt;
 use tgbotapi::{requests::*, *};
 
 use super::Status::*;
@@ -22,7 +23,9 @@ impl super::Handler for SettingsHandler {
     ) -> failure::Fallible<super::Status> {
         if let Some(command) = command {
             if command.name == "/settings" {
-                send_settings_message(&handler, &update.message.as_ref().unwrap()).await?;
+                send_settings_message(&handler, &update.message.as_ref().unwrap())
+                    .await
+                    .context("unable to send settings message")?;
                 return Ok(Completed);
             }
         }
@@ -58,10 +61,16 @@ async fn name(
         .and_then(|from| from.language_code.as_deref());
 
     if data.ends_with(":t") {
-        let conn = handler.conn.check_out().await?;
+        let conn = handler
+            .conn
+            .check_out()
+            .await
+            .context("unable to check out database")?;
 
         let source_name: Option<bool> =
-            UserConfig::get(&conn, UserConfigKey::SourceName, callback_query.from.id).await?;
+            UserConfig::get(&conn, UserConfigKey::SourceName, callback_query.from.id)
+                .await
+                .context("unable to query user source name setting")?;
         let existed = source_name.is_some();
         let source_name = source_name.unwrap_or(false);
 
@@ -74,7 +83,8 @@ async fn name(
             existed,
             source_name,
         )
-        .await?;
+        .await
+        .context("unable to set user source name setting")?;
 
         let text = handler
             .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
@@ -100,7 +110,8 @@ async fn name(
         futures::try_join!(
             handler.make_request(&answer),
             handler.make_request(&edit_message)
-        )?;
+        )
+        .context("unable to send answer or edit message")?;
 
         return Ok(Completed);
     }
@@ -121,7 +132,10 @@ async fn name(
         ..Default::default()
     };
 
-    handler.make_request(&edit_message).await?;
+    handler
+        .make_request(&edit_message)
+        .await
+        .context("unable to send setting message")?;
 
     Ok(Completed)
 }
@@ -130,10 +144,15 @@ async fn name_keyboard(
     handler: &crate::MessageHandler,
     from: &User,
 ) -> failure::Fallible<InlineKeyboardMarkup> {
-    let conn = handler.conn.check_out().await?;
+    let conn = handler
+        .conn
+        .check_out()
+        .await
+        .context("unable to check out database")?;
 
     let enabled = UserConfig::get(&conn, UserConfigKey::SourceName, from.id)
-        .await?
+        .await
+        .context("unable to query user source setting")?
         .unwrap_or(false);
 
     let message_name = if enabled {
@@ -177,7 +196,10 @@ async fn order(
             ..Default::default()
         };
 
-        handler.make_request(&answer).await?;
+        handler
+            .make_request(&answer)
+            .await
+            .context("unable to answer order callback query")?;
 
         return Ok(Completed);
     }
@@ -200,7 +222,10 @@ async fn order(
             ..Default::default()
         };
 
-        handler.make_request(&answer).await?;
+        handler
+            .make_request(&answer)
+            .await
+            .context("unable to answer order callback query")?;
 
         return Ok(Completed);
     }
@@ -216,10 +241,16 @@ async fn order(
         let site = data.split(':').nth(2).unwrap().parse().unwrap();
         let pos: usize = pos.parse().unwrap();
 
-        let conn = handler.conn.check_out().await?;
+        let conn = handler
+            .conn
+            .check_out()
+            .await
+            .context("unable to check out database")?;
 
         let order: Option<Vec<String>> =
-            UserConfig::get(&conn, UserConfigKey::SiteSortOrder, callback_query.from.id).await?;
+            UserConfig::get(&conn, UserConfigKey::SiteSortOrder, callback_query.from.id)
+                .await
+                .context("unable to query user site sort order")?;
         let has_config = order.is_some();
         let mut sites = match order {
             Some(sites) => sites.iter().map(|item| item.parse().unwrap()).collect(),
@@ -246,7 +277,8 @@ async fn order(
             has_config,
             sites,
         )
-        .await?;
+        .await
+        .context("unable to set user sort order")?;
 
         let mut args = fluent::FluentArgs::new();
         args.insert("name", site.as_str().into());
@@ -275,7 +307,8 @@ async fn order(
         futures::try_join!(
             handler.make_request(&edit_message),
             handler.make_request(&answer)
-        )?;
+        )
+        .context("unable to edit message or answer query")?;
 
         return Ok(Completed);
     }
@@ -304,7 +337,8 @@ async fn order(
     futures::try_join!(
         handler.make_request(&edit_message),
         handler.make_request(&answer)
-    )?;
+    )
+    .context("unable to edit message or answer callback query")?;
 
     Ok(Completed)
 }
@@ -360,17 +394,26 @@ async fn send_settings_message(
         ..Default::default()
     };
 
-    Ok(handler.make_request(&message).await?)
+    let sent_message = handler
+        .make_request(&message)
+        .await
+        .context("unable to send settings message")?;
+
+    Ok(sent_message)
 }
 
 async fn sort_order_keyboard(
     conn: &quaint::pooled::Quaint,
     user_id: i32,
 ) -> failure::Fallible<InlineKeyboardMarkup> {
-    let conn = conn.check_out().await?;
+    let conn = conn
+        .check_out()
+        .await
+        .context("unable to check out database")?;
 
-    let row: Option<Vec<String>> =
-        UserConfig::get(&conn, UserConfigKey::SiteSortOrder, user_id).await?;
+    let row: Option<Vec<String>> = UserConfig::get(&conn, UserConfigKey::SiteSortOrder, user_id)
+        .await
+        .context("unable to query user sort order")?;
     let sites = match row {
         Some(row) => row.iter().map(|item| item.parse().unwrap()).collect(),
         None => Sites::default_order(),

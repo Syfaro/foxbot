@@ -1,3 +1,4 @@
+use failure::ResultExt;
 use quaint::pooled::PooledConnection;
 use quaint::prelude::*;
 
@@ -64,7 +65,10 @@ impl Config {
         conn: &PooledConnection,
         select: quaint::ast::Select<'_>,
     ) -> failure::Fallible<Option<T>> {
-        let rows = conn.select(select).await?;
+        let rows = conn
+            .select(select)
+            .await
+            .context("unable to select config")?;
         if rows.is_empty() {
             return Ok(None);
         }
@@ -75,7 +79,7 @@ impl Config {
             _ => return Ok(None),
         };
 
-        let data: T = serde_json::from_str(&value)?;
+        let data: T = serde_json::from_str(&value).context("unable to deserialize config data")?;
 
         Ok(Some(data))
     }
@@ -83,8 +87,12 @@ impl Config {
     async fn delete(
         conn: &PooledConnection,
         delete: quaint::ast::Delete<'_>,
-    ) -> quaint::Result<()> {
-        conn.delete(delete).await
+    ) -> failure::Fallible<()> {
+        conn.delete(delete)
+            .await
+            .context("unable to delete config item")?;
+
+        Ok(())
     }
 }
 
@@ -127,20 +135,24 @@ impl UserConfig {
         update: bool,
         data: T,
     ) -> failure::Fallible<()> {
-        let value = serde_json::to_string(&data)?;
+        let value = serde_json::to_string(&data).context("unable to serialize user config item")?;
 
         if update {
             let update = Update::table(USER_CONFIG)
                 .set("value", value)
                 .so_that("user_id".equals(user_id).and("name".equals(key)));
-            conn.update(update).await?;
+            conn.update(update)
+                .await
+                .context("unable to set user config")?;
         } else {
             let insert = Insert::single_into(USER_CONFIG)
                 .value("user_id", user_id)
                 .value("name", key)
                 .value("value", value)
                 .build();
-            conn.insert(insert).await?;
+            conn.insert(insert)
+                .await
+                .context("unable to insert user config")?;
         }
 
         Ok(())
@@ -183,20 +195,24 @@ impl GroupConfig {
         update: bool,
         data: T,
     ) -> failure::Fallible<()> {
-        let value = serde_json::to_string(&data)?;
+        let value = serde_json::to_string(&data).context("unable to set group config")?;
 
         if update {
             let update = Update::table(GROUP_CONFIG)
                 .set("value", value)
                 .so_that("chat_id".equals(chat_id).and("name".equals(key.as_str())));
-            conn.update(update).await?;
+            conn.update(update)
+                .await
+                .context("unable to update group config")?;
         } else {
             let insert = Insert::single_into(GROUP_CONFIG)
                 .value("chat_id", chat_id)
                 .value("name", key.as_str())
                 .value("value", value)
                 .build();
-            conn.insert(insert).await?;
+            conn.insert(insert)
+                .await
+                .context("unable to insert group config")?;
         }
 
         Ok(())
@@ -206,10 +222,13 @@ impl GroupConfig {
         conn: &PooledConnection,
         key: GroupConfigKey,
         chat_id: i64,
-    ) -> quaint::Result<()> {
+    ) -> failure::Fallible<()> {
         let delete = Delete::from_table(GROUP_CONFIG)
             .so_that("chat_id".equals(chat_id).and("name".equals(key.as_str())));
-        Config::delete(&conn, delete).await
+        Config::delete(&conn, delete)
+            .await
+            .context("unable to delete group config")?;
+        Ok(())
     }
 }
 
@@ -231,18 +250,23 @@ impl Twitter {
     pub async fn get_account(
         conn: &PooledConnection,
         user_id: i32,
-    ) -> quaint::Result<Option<TwitterAccount>> {
+    ) -> failure::Fallible<Option<TwitterAccount>> {
         let select = Select::from_table(TWITTER_ACCOUNT)
             .column("consumer_key")
             .column("consumer_secret")
             .so_that("user_id".equals(user_id));
-        let rows = conn.select(select).await?;
+        let rows = conn
+            .select(select)
+            .await
+            .context("unable to select twitter consumer")?;
 
         if rows.is_empty() {
             return Ok(None);
         }
 
-        let row = rows.into_single()?;
+        let row = rows
+            .into_single()
+            .context("impossible missing twitter consumer")?;
 
         Ok(Some(TwitterAccount {
             consumer_key: row["consumer_key"].to_string().unwrap(),
@@ -254,18 +278,23 @@ impl Twitter {
     pub async fn get_request(
         conn: &PooledConnection,
         user_id: i32,
-    ) -> quaint::Result<Option<TwitterRequest>> {
+    ) -> failure::Fallible<Option<TwitterRequest>> {
         let select = Select::from_table(TWITTER_AUTH)
             .column("request_key")
             .column("request_secret")
             .so_that("user_id".equals(user_id));
-        let rows = conn.select(select).await?;
+        let rows = conn
+            .select(select)
+            .await
+            .context("unable to select twitter request")?;
 
         if rows.is_empty() {
             return Ok(None);
         }
 
-        let row = rows.into_single()?;
+        let row = rows
+            .into_single()
+            .context("impossible missing twitter request")?;
 
         Ok(Some(TwitterRequest {
             request_key: row["request_key"].to_string().unwrap(),
@@ -283,19 +312,25 @@ impl Twitter {
         conn: &PooledConnection,
         user_id: i32,
         creds: TwitterAccount,
-    ) -> quaint::Result<()> {
+    ) -> failure::Fallible<()> {
         let delete = Delete::from_table(TWITTER_ACCOUNT).so_that("user_id".equals(user_id));
-        conn.delete(delete).await?;
+        conn.delete(delete)
+            .await
+            .context("unable to delete previous twitter accounts")?;
 
         let insert = Insert::single_into(TWITTER_ACCOUNT)
             .value("user_id", user_id)
             .value("consumer_key", creds.consumer_key)
             .value("consumer_secret", creds.consumer_secret)
             .build();
-        conn.insert(insert).await?;
+        conn.insert(insert)
+            .await
+            .context("unable to insert twitter account")?;
 
         let delete = Delete::from_table(TWITTER_AUTH).so_that("user_id".equals(user_id));
-        conn.delete(delete).await?;
+        conn.delete(delete)
+            .await
+            .context("unable to delete twitter auth")?;
 
         Ok(())
     }
@@ -304,16 +339,20 @@ impl Twitter {
         conn: &PooledConnection,
         user_id: i32,
         creds: TwitterRequest,
-    ) -> quaint::Result<()> {
+    ) -> failure::Fallible<()> {
         let delete = Delete::from_table(TWITTER_AUTH).so_that("user_id".equals(user_id));
-        conn.delete(delete).await?;
+        conn.delete(delete)
+            .await
+            .context("unable to delete pending twitter auths")?;
 
         let insert = Insert::single_into(TWITTER_AUTH)
             .value("user_id", user_id)
             .value("request_key", creds.request_key)
             .value("request_secret", creds.request_secret)
             .build();
-        conn.insert(insert).await?;
+        conn.insert(insert)
+            .await
+            .context("unable to insert twitter auth")?;
 
         Ok(())
     }
@@ -323,25 +362,35 @@ pub struct FileCache;
 
 impl FileCache {
     /// Look up a file's cached hash by its unique ID.
-    pub async fn get(conn: &PooledConnection, file_id: &str) -> quaint::Result<Option<i64>> {
+    pub async fn get(conn: &PooledConnection, file_id: &str) -> failure::Fallible<Option<i64>> {
         let select = Select::from_table(FILE_ID_CACHE)
             .column("hash")
             .so_that("file_id".equals(file_id));
-        let rows = conn.select(select).await?;
+        let rows = conn
+            .select(select)
+            .await
+            .context("unable to query file cache")?;
 
         if rows.is_empty() {
             return Ok(None);
         }
 
-        let row = rows.into_single()?;
+        let row = rows
+            .into_single()
+            .context("impossible missing file cache")?;
         Ok(Some(row["hash"].as_i64().unwrap()))
     }
 
-    pub async fn set(conn: &PooledConnection, file_id: &str, hash: i64) -> quaint::Result<()> {
+    pub async fn set(conn: &PooledConnection, file_id: &str, hash: i64) -> failure::Fallible<()> {
         let insert = Insert::single_into(FILE_ID_CACHE)
             .value("file_id", file_id)
             .value("hash", hash)
             .build();
-        conn.insert(insert).await.map(|_| ())
+        let _ = conn
+            .insert(insert)
+            .await
+            .context("unable to insert file cache item");
+
+        Ok(())
     }
 }

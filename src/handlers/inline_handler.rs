@@ -4,6 +4,7 @@ use crate::needs_field;
 use crate::sites::PostInfo;
 use crate::utils::*;
 use async_trait::async_trait;
+use failure::ResultExt;
 use tgbotapi::{requests::*, *};
 
 pub struct InlineHandler;
@@ -25,8 +26,8 @@ impl super::Handler for InlineHandler {
         let links: Vec<_> = handler.finder.links(&inline.query).collect();
         let mut results: Vec<PostInfo> = Vec::new();
 
-        log::info!("Got query: {}", inline.query);
-        log::debug!("Found links: {:?}", links);
+        tracing::info!("got query: {}", inline.query);
+        tracing::debug!("found links: {:?}", links);
 
         let influx = handler.influx.clone();
         // Lock sites in order to find which of these links are usable
@@ -51,7 +52,8 @@ impl super::Handler for InlineHandler {
 
                 results.extend(info.results);
             })
-            .await?;
+            .await
+            .context("unable to find images")?;
         }
 
         let mut responses: Vec<InlineQueryResult> = vec![];
@@ -92,7 +94,10 @@ impl super::Handler for InlineHandler {
             answer_inline.switch_pm_parameter = Some("help".to_string());
         }
 
-        handler.make_request(&answer_inline).await?;
+        handler
+            .make_request(&answer_inline)
+            .await
+            .context("unable to answer inline query")?;
 
         Ok(Completed)
     }
@@ -151,7 +156,7 @@ async fn process_result(
         "png" | "jpeg" | "jpg" => Some(build_image_result(&result, thumb_url, &keyboard)),
         "gif" => Some(build_gif_result(&result, thumb_url, &keyboard)),
         other => {
-            log::warn!("Got unusable type: {}", other);
+            tracing::warn!("Got unusable type: {}", other);
             None
         }
     }

@@ -3,6 +3,7 @@ use crate::models::{GroupConfig, GroupConfigKey};
 use crate::needs_field;
 use crate::utils::{continuous_action, find_best_photo, get_message, match_image, sort_results};
 use async_trait::async_trait;
+use failure::ResultExt;
 use tgbotapi::{requests::*, *};
 
 pub struct GroupSourceHandler;
@@ -22,8 +23,15 @@ impl super::Handler for GroupSourceHandler {
         let message = needs_field!(update, message);
         let photo_sizes = needs_field!(message, photo);
 
-        let conn = handler.conn.check_out().await?;
-        match GroupConfig::get(&conn, message.chat.id, GroupConfigKey::GroupAdd).await? {
+        let conn = handler
+            .conn
+            .check_out()
+            .await
+            .context("unable to check out database")?;
+        match GroupConfig::get(&conn, message.chat.id, GroupConfigKey::GroupAdd)
+            .await
+            .context("unable to query group add config")?
+        {
             Some(val) if val => (),
             _ => return Ok(Ignored),
         }
@@ -107,7 +115,10 @@ impl super::Handler for GroupSourceHandler {
             ..Default::default()
         };
 
-        handler.make_request(&message).await?;
+        handler
+            .make_request(&message)
+            .await
+            .context("unable to send group source message")?;
 
         Ok(Completed)
     }

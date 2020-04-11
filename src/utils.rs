@@ -1,3 +1,4 @@
+use failure::ResultExt;
 use sentry::integrations::failure::capture_fail;
 use std::sync::Arc;
 use std::time::Instant;
@@ -34,7 +35,10 @@ where
             if site.url_supported(link).await {
                 tracing::debug!("link {} supported by {}", link, site.name());
 
-                let images = site.get_images(user.id, link).await?;
+                let images = site
+                    .get_images(user.id, link)
+                    .await
+                    .context("unable to extract site images")?;
 
                 match images {
                     Some(results) => {
@@ -265,9 +269,15 @@ pub async fn match_image(
     fapi: &fuzzysearch::FuzzySearch,
     file: &tgbotapi::PhotoSize,
 ) -> failure::Fallible<Vec<fuzzysearch::File>> {
-    let conn = conn.check_out().await?;
+    let conn = conn
+        .check_out()
+        .await
+        .context("unable to check out database")?;
 
-    if let Some(hash) = FileCache::get(&conn, &file.file_unique_id).await? {
+    if let Some(hash) = FileCache::get(&conn, &file.file_unique_id)
+        .await
+        .context("unable to query file cache")?
+    {
         return lookup_single_hash(&fapi, hash).await;
     }
 
@@ -275,12 +285,23 @@ pub async fn match_image(
         file_id: file.file_id.clone(),
     };
 
-    let file_info = bot.make_request(&get_file).await?;
-    let data = bot.download_file(&file_info.file_path.unwrap()).await?;
+    let file_info = bot
+        .make_request(&get_file)
+        .await
+        .context("unable to request file info from telegram")?;
+    let data = bot
+        .download_file(&file_info.file_path.unwrap())
+        .await
+        .context("unable to download file from telegram")?;
 
-    let hash = tokio::task::spawn_blocking(move || fuzzysearch::hash_bytes(&data)).await??;
+    let hash = tokio::task::spawn_blocking(move || fuzzysearch::hash_bytes(&data))
+        .await
+        .context("unable to spawn blocking")?
+        .context("unable to hash bytes")?;
 
-    FileCache::set(&conn, &file.file_unique_id, hash).await?;
+    FileCache::set(&conn, &file.file_unique_id, hash)
+        .await
+        .context("unable to set file cache")?;
 
     lookup_single_hash(&fapi, hash).await
 }
@@ -289,7 +310,10 @@ async fn lookup_single_hash(
     fapi: &fuzzysearch::FuzzySearch,
     hash: i64,
 ) -> failure::Fallible<Vec<fuzzysearch::File>> {
-    let mut matches = fapi.lookup_hashes(vec![hash]).await?;
+    let mut matches = fapi
+        .lookup_hashes(vec![hash])
+        .await
+        .context("unable to lookup hash")?;
 
     for mut m in &mut matches {
         m.distance =
@@ -316,10 +340,14 @@ pub async fn sort_results(
         return Ok(());
     }
 
-    let conn = conn.check_out().await?;
+    let conn = conn
+        .check_out()
+        .await
+        .context("unable to check out database")?;
 
-    let row: Option<Vec<String>> =
-        UserConfig::get(&conn, UserConfigKey::SiteSortOrder, user_id).await?;
+    let row: Option<Vec<String>> = UserConfig::get(&conn, UserConfigKey::SiteSortOrder, user_id)
+        .await
+        .context("unable to get user site sort order")?;
     let sites = match row {
         Some(row) => row.iter().map(|item| item.parse().unwrap()).collect(),
         None => Sites::default_order(),
@@ -352,9 +380,13 @@ pub async fn use_source_name(
     conn: &quaint::pooled::Quaint,
     user_id: i32,
 ) -> failure::Fallible<bool> {
-    let conn = conn.check_out().await?;
+    let conn = conn
+        .check_out()
+        .await
+        .context("unable to check out database")?;
     let row = UserConfig::get(&conn, UserConfigKey::SourceName, user_id)
-        .await?
+        .await
+        .context("unable to query user source name config")?
         .unwrap_or(false);
 
     Ok(row)

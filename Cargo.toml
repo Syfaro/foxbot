@@ -17,8 +17,6 @@ unic-langid = "0.7"
 hyper = "0.13"
 hamming = "0.1"
 
-log = "0.4"
-pretty_env_logger = "0.4"
 sentry = { version = "0.17", features = ["with_debug_meta"] }
 uuid = "0.7"
 failure = "0.1"
