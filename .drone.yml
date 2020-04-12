@@ -9,6 +9,7 @@ platform:
 
 steps:
 - name: test
+  pull: true
   image: rustlang/rust:nightly-slim
   commands:
   - apt-get update -y
@@ -17,6 +18,7 @@ steps:
   - cargo test
 
 - name: sentry-release
+  pull: true
   image: getsentry/sentry-cli
   commands:
   - sentry-cli releases new ${DRONE_COMMIT_SHA}
@@ -32,6 +34,7 @@ steps:
     - master
 
 - name: docker
+  pull: true
   image: plugins/docker
   settings:
     build_args_from_env:
@@ -64,6 +67,7 @@ steps:
     - master
 
 - name: deploy
+  pull: true
   image: appleboy/drone-ssh
   settings:
     host:
