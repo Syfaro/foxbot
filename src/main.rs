@@ -17,6 +17,7 @@ mod migrations;
 pub mod models;
 mod sites;
 mod utils;
+mod video;
 
 // MARK: Statics and types
 
@@ -78,6 +79,14 @@ pub struct Config {
     pub webhook_endpoint: Option<String>,
     pub http_host: Option<String>,
     http_secret: Option<String>,
+
+    // Video handling
+    pub s3_endpoint: String,
+    pub s3_region: String,
+    pub s3_token: String,
+    pub s3_secret: String,
+    pub s3_bucket: String,
+    pub s3_url: String,
 
     // Others
     pub fautil_apitoken: String,

@@ -203,6 +203,7 @@ impl CommandHandler {
                     },
                     video: FileType::URL(result.url.clone()),
                     reply_to_message_id: Some(message.message_id),
+                    ..Default::default()
                 };
 
                 handler.make_request(&video).await?;

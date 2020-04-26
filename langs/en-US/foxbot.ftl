@@ -36,6 +36,12 @@ inline-source = Source
 inline-no-results-title = No results found
 inline-no-results-body = I could not find any results for the provided query.
 
+# Inline Videos
+video-starting = Starting to process video...
+video-too-large = Video was too large, aborting.
+video-finished = Finished transcoding, uploading video...
+video-return-button = Return and send
+
 # Reverse Search
 reverse-no-results = I was unable to find anything, sorry.
 reverse-good-result = I found this (distance of { $distance }): { $link }
