@@ -36,14 +36,3 @@ pub fn process_video(file: &std::path::Path) -> failure::Fallible<String> {
 
     Ok(path)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_process_video() {
-        let path = std::path::Path::new("tests/test.webm");
-        process_video(&path).unwrap();
-    }
-}
