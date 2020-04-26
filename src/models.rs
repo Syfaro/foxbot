@@ -394,3 +394,116 @@ impl FileCache {
         Ok(())
     }
 }
+
+pub struct Video {
+    /// Database identifier of the video.
+    pub id: i64,
+    /// If the video has already been processed. If this is true, there must
+    /// be an mp4_url.
+    pub processed: bool,
+    /// The original source of the video.
+    pub source: String,
+    /// The URL of the original video.
+    pub url: String,
+    /// The URL of the converted video.
+    pub mp4_url: Option<String>,
+}
+
+impl Video {
+    /// Lookup a Video by ID.
+    pub async fn lookup_id(conn: &PooledConnection, id: i64) -> failure::Fallible<Option<Video>> {
+        let select = Select::from_table("videos")
+            .column("id")
+            .column("processed")
+            .column("source")
+            .column("url")
+            .column("mp4_url")
+            .so_that("id".equals(id));
+        let rows = conn
+            .select(select)
+            .await
+            .context("unable to query video ids")?;
+
+        if rows.is_empty() {
+            return Ok(None);
+        }
+
+        let row = rows
+            .into_single()
+            .context("impossible missing video lookup")?;
+
+        Ok(Some(Video {
+            id: row["id"].as_i64().unwrap(),
+            processed: row["processed"].as_bool().unwrap_or(false),
+            source: row["source"].to_string().unwrap(),
+            url: row["url"].to_string().unwrap(),
+            mp4_url: row["mp4_url"].to_string(),
+        }))
+    }
+
+    /// Lookup a Video by URL.
+    pub async fn lookup_url(
+        conn: &PooledConnection,
+        url: &str,
+    ) -> failure::Fallible<Option<Video>> {
+        let select = Select::from_table("videos")
+            .column("id")
+            .column("processed")
+            .column("source")
+            .column("url")
+            .column("mp4_url")
+            .so_that("url".equals(url));
+        let rows = conn
+            .select(select)
+            .await
+            .context("unable to query video urls")?;
+
+        if rows.is_empty() {
+            return Ok(None);
+        }
+
+        let row = rows
+            .into_single()
+            .context("impossible missing video lookup")?;
+
+        Ok(Some(Video {
+            id: row["id"].as_i64().unwrap(),
+            processed: row["processed"].as_bool().unwrap_or(false),
+            source: row["source"].to_string().unwrap(),
+            url: row["url"].to_string().unwrap(),
+            mp4_url: row["mp4_url"].to_string(),
+        }))
+    }
+
+    /// Insert a new URL into the database and return the ID.
+    pub async fn insert_url(
+        conn: &PooledConnection,
+        url: &str,
+        source: &str,
+    ) -> failure::Fallible<u64> {
+        let insert = Insert::single_into("videos")
+            .value("url", url)
+            .value("source", source)
+            .build();
+        let res = conn.insert(insert).await?;
+
+        let id = res.last_insert_id().unwrap();
+
+        Ok(id)
+    }
+
+    /// Update a video's mp4_url when it has been processed.
+    pub async fn set_processed_url(
+        conn: &PooledConnection,
+        url: &str,
+        mp4_url: &str,
+    ) -> failure::Fallible<()> {
+        let update = Update::table("videos")
+            .set("processed", true)
+            .set("mp4_url", mp4_url)
+            .so_that("url".equals(url));
+        conn.update(update).await?;
+
+        Ok(())
+    }
+}

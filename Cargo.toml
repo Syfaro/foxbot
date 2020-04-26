@@ -5,7 +5,7 @@ authors = ["Syfaro <syfaro@huefox.com>"]
 edition = "2018"
 
 [dependencies]
-reqwest = { version = "0.10", features = ["json"] }
+reqwest = { version = "0.10", features = ["json", "stream"] }
 linkify = "0.4"
 rand = "0.7"
 regex = "1"
@@ -28,6 +28,7 @@ envy = "0.4"
 
 egg-mode = "0.13"
 tokio = { version = "0.2", features = ["macros", "time", "stream", "sync", "signal"] }
+tokio-util = { version = "0.3", features = ["codec"] }
 futures = "0.3"
 futures-util = "0.3"
 tokio01 = { version = "0.1", package = "tokio" }
@@ -46,6 +47,10 @@ rusqlite = { version = "0.21", features = ["bundled"] }
 refinery = { version = "0.2", features = ["rusqlite"] }
 barrel = { version = "0.6", features = ["sqlite3"] }
 quaint = { version = "0.2.0-alpha.9", features = ["full"] }
+
+rusoto_core = "0.43"
+rusoto_credential = "0.43"
+rusoto_s3 = "0.43"
 
 [profile.release]
 lto = true
