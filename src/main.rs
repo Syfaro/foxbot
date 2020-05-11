@@ -56,6 +56,8 @@ pub struct Config {
     pub fa_a: String,
     pub fa_b: String,
     pub weasyl_apitoken: String,
+    pub inkbunny_username: String,
+    pub inkbunny_password: String,
 
     // Twitter config
     pub twitter_consumer_key: String,
@@ -194,6 +196,10 @@ async fn main() {
             config.twitter_consumer_key.clone(),
             config.twitter_consumer_secret.clone(),
             pool.clone(),
+        )),
+        Box::new(sites::Inkbunny::new(
+            config.inkbunny_username.clone(),
+            config.inkbunny_password.clone(),
         )),
         Box::new(sites::Mastodon::new()),
         Box::new(sites::Direct::new(fapi.clone())),

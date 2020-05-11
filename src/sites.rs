@@ -750,3 +750,172 @@ impl Site for Weasyl {
         ))
     }
 }
+
+pub struct Inkbunny {
+    client: reqwest::Client,
+    matcher: regex::Regex,
+
+    username: String,
+    password: String,
+
+    sid: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct InkbunnyLogin {
+    sid: String,
+    user_id: i32,
+    ratingsmask: String,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct InkbunnyFile {
+    file_id: String,
+    file_name: String,
+    thumbnail_url_medium_noncustom: String,
+    file_url_screen: String,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct InkbunnySubmission {
+    submission_id: String,
+    files: Vec<InkbunnyFile>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct InkbunnySubmissions {
+    results_count: i32,
+    submissions: Vec<InkbunnySubmission>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(untagged)]
+pub enum InkbunnyResponse<T> {
+    Error { error_code: i32 },
+    Success(T),
+}
+
+impl Inkbunny {
+    const API_LOGIN: &'static str = "https://inkbunny.net/api_login.php";
+    const API_SUBMISSIONS: &'static str = "https://inkbunny.net/api_submissions.php";
+
+    pub async fn get_sid(&mut self) -> failure::Fallible<String> {
+        if let Some(sid) = &self.sid {
+            return Ok(sid.clone());
+        }
+
+        let resp: InkbunnyResponse<InkbunnyLogin> = self
+            .client
+            .post(Self::API_LOGIN)
+            .form(&vec![
+                ("username", &self.username),
+                ("password", &self.password),
+            ])
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        let login = match resp {
+            InkbunnyResponse::Success(login) => login,
+            InkbunnyResponse::Error { error_code: 0 } => {
+                panic!("Invalid Inkbunny username/password")
+            }
+            _ => panic!("Unhandled Inkbunny error code"),
+        };
+
+        if login.ratingsmask != "11111" {
+            panic!("Inkbunny user is missing viewing permissions");
+        }
+
+        self.sid = Some(login.sid.clone());
+        Ok(login.sid)
+    }
+
+    pub async fn get_submissions(&mut self, ids: &[i32]) -> failure::Fallible<InkbunnySubmissions> {
+        let ids: String = ids
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+
+        let submissions = loop {
+            tracing::debug!(?ids, "Attempting to load Inkbunny submissions");
+            let sid = self.get_sid().await?;
+
+            let resp: InkbunnyResponse<InkbunnySubmissions> = self
+                .client
+                .post(Self::API_SUBMISSIONS)
+                .form(&vec![("sid", &sid), ("submission_ids", &ids)])
+                .send()
+                .await?
+                .json()
+                .await?;
+
+            match resp {
+                InkbunnyResponse::Success(submissions) => break submissions,
+                InkbunnyResponse::Error { error_code: 2 } => {
+                    tracing::info!("Inkbunny SID expired");
+                    self.sid = None;
+                    continue;
+                }
+                _ => panic!("Unhandled Inkbunny error"),
+            };
+        };
+
+        Ok(submissions)
+    }
+
+    pub fn new(username: String, password: String) -> Self {
+        let client = reqwest::Client::new();
+
+        Self {
+            client,
+            matcher: regex::Regex::new(r#"https?://inkbunny.net/s/(?P<id>\d+)"#).unwrap(),
+
+            username,
+            password,
+
+            sid: None,
+        }
+    }
+}
+
+#[async_trait]
+impl Site for Inkbunny {
+    fn name(&self) -> &'static str {
+        "Inkbunny"
+    }
+
+    async fn url_supported(&mut self, url: &str) -> bool {
+        self.matcher.is_match(url)
+    }
+
+    async fn get_images(
+        &mut self,
+        _user_id: i32,
+        url: &str,
+    ) -> failure::Fallible<Option<Vec<PostInfo>>> {
+        let captures = self.matcher.captures(url).unwrap();
+        let sub_id: i32 = captures["id"].to_owned().parse().unwrap();
+
+        let submissions = self.get_submissions(&vec![sub_id]).await?;
+
+        let mut results = Vec::with_capacity(1);
+
+        for submission in submissions.submissions {
+            for file in submission.files {
+                results.push(PostInfo {
+                    file_type: get_file_ext(&file.file_url_screen).unwrap().to_owned(),
+                    url: file.file_url_screen.clone(),
+                    thumb: Some(file.thumbnail_url_medium_noncustom.clone()),
+                    source_link: Some(url.to_owned()),
+                    site_name: self.name(),
+                    ..Default::default()
+                });
+            }
+        }
+
+        Ok(Some(results))
+    }
+}
