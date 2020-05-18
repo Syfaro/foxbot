@@ -184,6 +184,7 @@ impl Site for Direct {
 pub struct E621 {
     show: regex::Regex,
     data: regex::Regex,
+    pool: regex::Regex,
 
     client: reqwest::Client,
 }
@@ -211,14 +212,76 @@ struct E621Resp {
     post: E621Post,
 }
 
+#[derive(Debug, Deserialize)]
+struct E621Pool {
+    id: i32,
+    post_count: usize,
+    post_ids: Vec<i32>,
+}
+
 impl E621 {
     pub fn new() -> Self {
         Self {
             show: regex::Regex::new(r"https?://(?P<host>e(?:621|926)\.net)/(?:post/show/|posts/)(?P<id>\d+)(?:/(?P<tags>.+))?").unwrap(),
             data: regex::Regex::new(r"https?://(?P<host>static\d+\.e(?:621|926)\.net)/data/(?:(?P<modifier>sample|preview)/)?[0-9a-f]{2}/[0-9a-f]{2}/(?P<md5>[0-9a-f]{32})\.(?P<ext>.+)").unwrap(),
+            pool: regex::Regex::new(r"https?://(?P<host>e(?:621|926)\.net)/pools/(?P<id>\d+)(?:/(?P<tags>.+))?").unwrap(),
 
             client: reqwest::Client::new(),
         }
+    }
+
+    async fn get_pool(&mut self, url: &str) -> failure::Fallible<Option<Vec<PostInfo>>> {
+        let captures = self.pool.captures(url).unwrap();
+        let id = &captures["id"];
+
+        tracing::trace!("Loading e621 pool {}", id);
+
+        let endpoint = format!("https://e621.net/pools/{}.json", id);
+        let resp: E621Pool = self.load(&endpoint).await?;
+
+        tracing::trace!("e621 pool had {} items", resp.post_count);
+
+        let mut posts = Vec::with_capacity(resp.post_count);
+
+        for post_id in resp.post_ids.iter().rev().take(10).rev() {
+            tracing::trace!("Loading e621 post {} as part of pool {}", post_id, id);
+
+            let url = format!("https://e621.net/posts/{}.json", post_id);
+            let post: E621Resp = self.load(&url).await?;
+
+            posts.push(PostInfo {
+                file_type: post.post.file.ext,
+                url: post.post.file.url,
+                thumb: Some(post.post.preview.url),
+                source_link: Some(format!("https://e621.net/posts/{}", post.post.id)),
+                site_name: self.name(),
+                ..Default::default()
+            });
+        }
+
+        if posts.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(posts))
+        }
+    }
+
+    async fn load<T>(&self, url: &str) -> failure::Fallible<T>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let resp = self
+            .client
+            .get(url)
+            .header(header::USER_AGENT, USER_AGENT)
+            .send()
+            .await
+            .context("unable to request e621 api")?
+            .json()
+            .await
+            .context("unable to parse e621 json")?;
+
+        Ok(resp)
     }
 }
 
@@ -229,7 +292,7 @@ impl Site for E621 {
     }
 
     async fn url_supported(&mut self, url: &str) -> bool {
-        self.show.is_match(url) || self.data.is_match(url)
+        self.show.is_match(url) || self.data.is_match(url) || self.pool.is_match(url)
     }
 
     async fn get_images(
@@ -242,23 +305,16 @@ impl Site for E621 {
             let id = &captures["id"];
 
             format!("https://e621.net/posts/{}.json", id)
-        } else {
+        } else if self.data.is_match(url) {
             let captures = self.data.captures(url).unwrap();
             let md5 = &captures["md5"];
 
             format!("https://e621.net/posts.json?md5={}", md5)
+        } else {
+            return self.get_pool(&url).await;
         };
 
-        let resp: E621Resp = self
-            .client
-            .get(&endpoint)
-            .header(header::USER_AGENT, USER_AGENT)
-            .send()
-            .await
-            .context("unable to request e621 api")?
-            .json()
-            .await
-            .context("unable to parse e621 json")?;
+        let resp: E621Resp = self.load(&endpoint).await?;
 
         Ok(Some(vec![PostInfo {
             file_type: resp.post.file.ext,
@@ -899,7 +955,7 @@ impl Site for Inkbunny {
         let captures = self.matcher.captures(url).unwrap();
         let sub_id: i32 = captures["id"].to_owned().parse().unwrap();
 
-        let submissions = self.get_submissions(&vec![sub_id]).await?;
+        let submissions = self.get_submissions(&[sub_id]).await?;
 
         let mut results = Vec::with_capacity(1);
 
