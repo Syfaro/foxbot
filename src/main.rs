@@ -93,6 +93,7 @@ pub struct Config {
     // Others
     pub fautil_apitoken: String,
     pub database: String,
+    pub cache_images: Option<bool>,
 }
 
 // MARK: Initialization
@@ -254,6 +255,18 @@ async fn main() {
         Box::new(handlers::SettingsHandler),
     ];
 
+    let region = rusoto_core::Region::Custom {
+        name: config.s3_region.clone(),
+        endpoint: config.s3_endpoint.clone(),
+    };
+
+    let client = rusoto_core::request::HttpClient::new().unwrap();
+    let provider = rusoto_credential::StaticProvider::new_minimal(
+        config.s3_token.clone(),
+        config.s3_secret.clone(),
+    );
+    let s3 = rusoto_s3::S3Client::new_with(client, provider, region);
+
     let handler = Arc::new(MessageHandler {
         bot_user,
         langs,
@@ -265,6 +278,7 @@ async fn main() {
         fapi,
         influx: Arc::new(influx),
         finder,
+        s3,
 
         sites: Mutex::new(sites),
         conn: pool,
@@ -535,6 +549,7 @@ pub struct MessageHandler {
     pub fapi: Arc<fuzzysearch::FuzzySearch>,
     pub influx: Arc<influxdb::Client>,
     pub finder: linkify::LinkFinder,
+    pub s3: rusoto_s3::S3Client,
 
     // Configuration
     pub sites: Mutex<Vec<BoxedSite>>, // We always need mutable access, no reason to use a RwLock

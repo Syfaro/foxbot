@@ -64,6 +64,95 @@ where
     Ok(missing)
 }
 
+pub struct ImageInfo {
+    url: String,
+    dimensions: (u32, u32),
+}
+
+#[tracing::instrument(skip(s3, s3_bucket, s3_url))]
+async fn upload_image(
+    s3: &rusoto_s3::S3Client,
+    s3_bucket: &str,
+    s3_url: &str,
+    url: &str,
+    thumb: bool,
+) -> failure::Fallible<ImageInfo> {
+    let data = reqwest::get(url).await?.bytes().await?;
+
+    let info = infer::Infer::new();
+
+    let im = image::load_from_memory(&data)?;
+
+    let (im, buf) = match info.get(&data) {
+        Some(inf) if !thumb && inf.mime == "image/jpeg" => (im, data),
+        _ => {
+            use bytes::buf::BufMutExt;
+            let im = if thumb { im.thumbnail(400, 400) } else { im };
+            let mut buf = bytes::BytesMut::with_capacity(2 * 1024 * 1024).writer();
+            im.write_to(&mut buf, image::ImageOutputFormat::Jpeg(90))?;
+            (im, buf.into_inner().freeze())
+        }
+    };
+
+    use image::GenericImageView;
+    let dimensions = im.dimensions();
+
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.input(&buf);
+    let hash = hasher.result();
+    let hash = hex::encode(hash);
+
+    let name = if thumb { "thumb" } else { "image" };
+
+    let key = format!("{}/{}/{}_{}.jpg", &hash[0..2], &hash[2..4], name, &hash);
+
+    let put = rusoto_s3::PutObjectRequest {
+        acl: Some("public-read".into()),
+        bucket: s3_bucket.to_string(),
+        content_type: Some("image/jpeg".into()),
+        key: key.clone(),
+        body: Some(buf.to_vec().into()),
+        content_length: Some(buf.len() as i64),
+        ..Default::default()
+    };
+
+    use rusoto_s3::S3;
+    s3.put_object(put).await.unwrap();
+
+    let url = format!("{}/{}/{}", s3_url, s3_bucket, key);
+
+    Ok(ImageInfo { url, dimensions })
+}
+
+pub async fn cache_post(
+    s3: &rusoto_s3::S3Client,
+    s3_bucket: &str,
+    s3_url: &str,
+    post: &crate::PostInfo,
+) -> failure::Fallible<crate::PostInfo> {
+    let image = upload_image(&s3, &s3_bucket, &s3_url, &post.url, false).await?;
+
+    let thumb = if let Some(thumb) = &post.thumb {
+        Some(
+            upload_image(&s3, &s3_bucket, &s3_url, &thumb, true)
+                .await?
+                .url,
+        )
+    } else {
+        None
+    };
+
+    let (url, dims) = (image.url, image.dimensions);
+
+    Ok(crate::PostInfo {
+        url,
+        image_dimensions: Some(dims),
+        thumb,
+        ..post.to_owned()
+    })
+}
+
 pub fn find_best_photo(sizes: &[tgbotapi::PhotoSize]) -> Option<&tgbotapi::PhotoSize> {
     sizes.iter().max_by_key(|size| size.height * size.width)
 }

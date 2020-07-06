@@ -115,18 +115,6 @@ impl InlineHandler {
         };
         handler.make_request(&edit_message).await?;
 
-        let region = rusoto_core::Region::Custom {
-            name: handler.config.s3_region.clone(),
-            endpoint: handler.config.s3_endpoint.clone(),
-        };
-
-        let client = rusoto_core::request::HttpClient::new().unwrap();
-        let provider = rusoto_credential::StaticProvider::new_minimal(
-            handler.config.s3_token.clone(),
-            handler.config.s3_secret.clone(),
-        );
-        let s3client = rusoto_s3::S3Client::new_with(client, provider, region);
-
         let file = tokio::fs::File::open(&res).await.unwrap();
         let metadata = file.metadata().await?;
 
@@ -147,7 +135,7 @@ impl InlineHandler {
             ..Default::default()
         };
 
-        s3client.put_object(put).await.unwrap();
+        handler.s3.put_object(put).await.unwrap();
         tokio::fs::remove_file(res).await.unwrap();
 
         let mp4_url = format!(
@@ -245,7 +233,7 @@ impl super::Handler for InlineHandler {
         let mut responses: Vec<(ResultType, InlineQueryResult)> = vec![];
 
         for result in results {
-            if let Some(items) = process_result(&handler, &result, &inline.from).await {
+            if let Some(items) = process_result(&handler, &result, &inline.from).await? {
                 responses.extend(items);
             }
         }
@@ -321,7 +309,7 @@ async fn process_result(
     handler: &crate::MessageHandler,
     result: &PostInfo,
     from: &User,
-) -> Option<Vec<(ResultType, InlineQueryResult)>> {
+) -> failure::Fallible<Option<Vec<(ResultType, InlineQueryResult)>>> {
     let (direct, source) = handler
         .get_fluent_bundle(from.language_code.as_deref(), |bundle| {
             (
@@ -364,7 +352,9 @@ async fn process_result(
     let thumb_url = result.thumb.clone().unwrap_or_else(|| result.url.clone());
 
     match result.file_type.as_ref() {
-        "png" | "jpeg" | "jpg" => Some(build_image_result(&result, thumb_url, &keyboard)),
+        "png" | "jpeg" | "jpg" => Ok(Some(
+            build_image_result(&handler, &result, thumb_url, &keyboard).await?,
+        )),
         "webm" => {
             let source = match &result.source_link {
                 Some(link) => link.to_owned(),
@@ -375,41 +365,71 @@ async fn process_result(
                 .await
                 .expect("unable to process webm results");
 
-            Some(results)
+            Ok(Some(results))
         }
-        "gif" => Some(build_gif_result(&result, thumb_url, &keyboard)),
+        "gif" => Ok(Some(build_gif_result(&result, thumb_url, &keyboard))),
         other => {
             tracing::warn!("Got unusable type: {}", other);
-            None
+            Ok(None)
         }
     }
 }
 
-fn build_image_result(
+async fn build_image_result(
+    handler: &crate::MessageHandler,
     result: &crate::sites::PostInfo,
     thumb_url: String,
     keyboard: &InlineKeyboardMarkup,
-) -> Vec<(ResultType, InlineQueryResult)> {
-    let (full_url, thumb_url) = (result.url.clone(), thumb_url);
+) -> failure::Fallible<Vec<(ResultType, InlineQueryResult)>> {
+    let mut result = result.to_owned();
+    result.thumb = Some(thumb_url);
 
-    let mut photo =
-        InlineQueryResult::photo(generate_id(), full_url.to_owned(), thumb_url.to_owned());
+    let result = match handler.config.cache_images {
+        Some(cache) if cache => {
+            cache_post(
+                &handler.s3,
+                &handler.config.s3_bucket,
+                &handler.config.s3_url,
+                &result,
+            )
+            .await?
+        }
+        _ => result,
+    };
+
+    let mut photo = InlineQueryResult::photo(
+        generate_id(),
+        result.url.to_owned(),
+        result.thumb.clone().unwrap().to_owned(),
+    );
     photo.reply_markup = Some(keyboard.clone());
+
+    if let Some(dims) = result.image_dimensions {
+        if let InlineQueryType::Photo(ref mut photo) = photo.content {
+            photo.photo_width = Some(dims.0);
+            photo.photo_height = Some(dims.1);
+        }
+    }
 
     let mut results = vec![(ResultType::Ready, photo)];
 
     if let Some(message) = &result.extra_caption {
-        let mut photo = InlineQueryResult::photo(generate_id(), full_url, thumb_url);
+        let mut photo = InlineQueryResult::photo(generate_id(), result.url, result.thumb.unwrap());
         photo.reply_markup = Some(keyboard.clone());
 
-        if let InlineQueryType::Photo(ref mut result) = photo.content {
-            result.caption = Some(message.to_string());
+        if let InlineQueryType::Photo(ref mut photo) = photo.content {
+            photo.caption = Some(message.to_string());
+
+            if let Some(dims) = result.image_dimensions {
+                photo.photo_width = Some(dims.0);
+                photo.photo_height = Some(dims.1);
+            }
         }
 
         results.push((ResultType::Ready, photo));
     };
 
-    results
+    Ok(results)
 }
 
 async fn build_webm_result(

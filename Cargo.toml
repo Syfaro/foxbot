@@ -17,6 +17,12 @@ unic-langid = "0.7"
 hyper = "0.13"
 hamming = "0.1"
 
+sha2 = "0.8"
+image = "0.23"
+infer = "0.2"
+bytes = "0.5"
+hex = "0.4"
+
 sentry = { version = "0.17", features = ["with_debug_meta"] }
 uuid = "0.7"
 failure = "0.1"
