@@ -39,6 +39,7 @@ steps:
   settings:
     build_args_from_env:
     - DRONE_COMMIT_SHA
+    debug: true
     password:
       from_secret: docker_password
     registry: registry.huefox.com
