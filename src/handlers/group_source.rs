@@ -6,6 +6,9 @@ use async_trait::async_trait;
 use failure::ResultExt;
 use tgbotapi::{requests::*, *};
 
+const MAX_SOURCE_DISTANCE: u64 = 3;
+const NOISY_SOURCE_COUNT: usize = 4;
+
 pub struct GroupSourceHandler;
 
 #[async_trait]
@@ -56,7 +59,7 @@ impl super::Handler for GroupSourceHandler {
 
         let wanted_matches = matches
             .iter()
-            .filter(|m| m.distance.unwrap() <= 3)
+            .filter(|m| m.distance.unwrap() <= MAX_SOURCE_DISTANCE)
             .collect::<Vec<_>>();
 
         if wanted_matches.is_empty() {
@@ -68,6 +71,12 @@ impl super::Handler for GroupSourceHandler {
             .iter()
             .any(|m| super::channel_photo::link_was_seen(&links, &m.url()))
         {
+            return Ok(Completed);
+        }
+
+        // Prevents memes from getting a million links in chat
+        if wanted_matches.len() >= NOISY_SOURCE_COUNT {
+            tracing::trace!("had too many matches, ignoring");
             return Ok(Completed);
         }
 
