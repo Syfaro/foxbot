@@ -507,3 +507,72 @@ impl Video {
         Ok(())
     }
 }
+
+pub struct CachedPost {
+    pub id: i64,
+    pub post_url: String,
+    pub thumb: bool,
+    pub cdn_url: String,
+    pub dimensions: (u32, u32),
+}
+
+impl CachedPost {
+    pub async fn get(
+        conn: &PooledConnection,
+        post_url: &str,
+        thumb: bool,
+    ) -> failure::Fallible<Option<CachedPost>> {
+        let select = Select::from_table("cached_post")
+            .column("id")
+            .column("post_url")
+            .column("thumb")
+            .column("cdn_url")
+            .column("width")
+            .column("height")
+            .so_that("post_url".equals(post_url).and("thumb".equals(thumb)));
+        let rows = conn
+            .select(select)
+            .await
+            .context("unable to query cached posts")?;
+
+        if rows.is_empty() {
+            return Ok(None);
+        }
+
+        let row = rows
+            .into_single()
+            .context("impossible missing cached post lookup")?;
+
+        Ok(Some(CachedPost {
+            id: row["id"].as_i64().unwrap(),
+            post_url: row["post_url"].to_string().unwrap(),
+            thumb: row["thumb"].as_bool().unwrap(),
+            cdn_url: row["cdn_url"].to_string().unwrap(),
+            dimensions: (
+                row["width"].as_i64().unwrap() as u32,
+                row["height"].as_i64().unwrap() as u32,
+            ),
+        }))
+    }
+
+    pub async fn save(
+        conn: &PooledConnection,
+        post_url: &str,
+        cdn_url: &str,
+        thumb: bool,
+        dimensions: (u32, u32),
+    ) -> failure::Fallible<u64> {
+        let insert = Insert::single_into("cached_post")
+            .value("post_url", post_url)
+            .value("thumb", thumb)
+            .value("cdn_url", cdn_url)
+            .value("width", dimensions.0 as i64)
+            .value("height", dimensions.1 as i64)
+            .build();
+        let res = conn.insert(insert).await?;
+
+        let id = res.last_insert_id().unwrap();
+
+        Ok(id)
+    }
+}

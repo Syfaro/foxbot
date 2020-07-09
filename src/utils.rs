@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing_futures::Instrument;
 
-use crate::models::{FileCache, Sites, UserConfig, UserConfigKey};
+use crate::models::{CachedPost, FileCache, Sites, UserConfig, UserConfigKey};
 use crate::BoxedSite;
 
 type Bundle<'a> = &'a fluent::FluentBundle<fluent::FluentResource>;
@@ -69,14 +69,25 @@ pub struct ImageInfo {
     dimensions: (u32, u32),
 }
 
-#[tracing::instrument(skip(s3, s3_bucket, s3_url))]
+#[tracing::instrument(skip(conn, s3, s3_bucket, s3_url))]
 async fn upload_image(
+    conn: &quaint::pooled::PooledConnection,
     s3: &rusoto_s3::S3Client,
     s3_bucket: &str,
     s3_url: &str,
     url: &str,
     thumb: bool,
 ) -> failure::Fallible<ImageInfo> {
+    if let Some(cached_post) = CachedPost::get(&conn, &url, thumb)
+        .await
+        .context("unable to get cached post")?
+    {
+        return Ok(ImageInfo {
+            url: cached_post.cdn_url,
+            dimensions: cached_post.dimensions,
+        });
+    }
+
     let data = reqwest::get(url).await?.bytes().await?;
 
     let info = infer::Infer::new();
@@ -120,22 +131,28 @@ async fn upload_image(
     use rusoto_s3::S3;
     s3.put_object(put).await.unwrap();
 
-    let url = format!("{}/{}/{}", s3_url, s3_bucket, key);
+    let cdn_url = format!("{}/{}/{}", s3_url, s3_bucket, key);
 
-    Ok(ImageInfo { url, dimensions })
+    CachedPost::save(&conn, &url, &cdn_url, thumb, dimensions).await?;
+
+    Ok(ImageInfo {
+        url: cdn_url,
+        dimensions,
+    })
 }
 
 pub async fn cache_post(
+    conn: &quaint::pooled::PooledConnection,
     s3: &rusoto_s3::S3Client,
     s3_bucket: &str,
     s3_url: &str,
     post: &crate::PostInfo,
 ) -> failure::Fallible<crate::PostInfo> {
-    let image = upload_image(&s3, &s3_bucket, &s3_url, &post.url, false).await?;
+    let image = upload_image(&conn, &s3, &s3_bucket, &s3_url, &post.url, false).await?;
 
     let thumb = if let Some(thumb) = &post.thumb {
         Some(
-            upload_image(&s3, &s3_bucket, &s3_url, &thumb, true)
+            upload_image(&conn, &s3, &s3_bucket, &s3_url, &thumb, true)
                 .await?
                 .url,
         )

@@ -384,9 +384,16 @@ async fn build_image_result(
     let mut result = result.to_owned();
     result.thumb = Some(thumb_url);
 
+    let conn = handler
+        .conn
+        .check_out()
+        .await
+        .context("unable to check out database")?;
+
     let result = match handler.config.cache_images {
         Some(cache) if cache => {
             cache_post(
+                &conn,
                 &handler.s3,
                 &handler.config.s3_bucket,
                 &handler.config.s3_url,
