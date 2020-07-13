@@ -133,7 +133,9 @@ async fn upload_image(
 
     let cdn_url = format!("{}/{}/{}", s3_url, s3_bucket, key);
 
-    CachedPost::save(&conn, &url, &cdn_url, thumb, dimensions).await?;
+    if let Err(err) = CachedPost::save(&conn, &url, &cdn_url, thumb, dimensions).await {
+        sentry::integrations::failure::capture_error(&err);
+    }
 
     Ok(ImageInfo {
         url: cdn_url,
