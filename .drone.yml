@@ -17,6 +17,11 @@ steps:
   - pip3 install cfscrape
   - cargo test
 
+trigger:
+  event:
+    exclude:
+    - promote
+
 ---
 kind: pipeline
 type: docker
@@ -55,6 +60,14 @@ steps:
     - ${DRONE_COMMIT_SHA}
     username:
       from_secret: docker_username
+
+- name: build-debug-symbols
+  image: rustlang/rust:nightly-slim
+  commands:
+  - apt-get update -y
+  - apt-get install pkg-config libssl-dev ca-certificates python3 python3-pip nodejs -y
+  - pip3 install cfscrape
+  - RUSTFLAGS=-g cargo build --release
 
 - name: sentry-finalize
   image: getsentry/sentry-cli

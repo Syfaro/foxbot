@@ -4,7 +4,7 @@ RUN apt-get update -y && apt-get install pkg-config libssl-dev python3 python3-d
 ARG DRONE_COMMIT_SHA
 ENV RELEASE $DRONE_COMMIT_SHA
 COPY . .
-RUN cargo build --release && cp ./target/release/foxbot /bin/foxbot && strip /bin/foxbot
+RUN cargo install --root / --path . && strip /bin/foxbot
 
 FROM debian:buster-slim
 ENV HTTP_HOST=127.0.0.1:8080
