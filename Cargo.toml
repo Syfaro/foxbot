@@ -23,7 +23,7 @@ infer = "0.2"
 bytes = "0.5"
 hex = "0.4"
 
-sentry = { version = "0.19", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "reqwest"] }
+sentry = { version = "0.19", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "reqwest", "debug-logs"] }
 uuid = "0.8"
 anyhow = "1"
 thiserror = "1"

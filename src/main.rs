@@ -287,6 +287,7 @@ async fn main() {
     let _guard = if let Some(dsn) = config.sentry_dsn {
         Some(sentry::init(sentry::ClientOptions {
             dsn: Some(dsn.parse().unwrap()),
+            debug: true,
             release: option_env!("RELEASE").map(std::borrow::Cow::from),
             attach_stacktrace: true,
             ..Default::default()
@@ -295,13 +296,7 @@ async fn main() {
         None
     };
 
-    tracing::info!(
-        "Sentry enabled: {}",
-        _guard
-            .as_ref()
-            .map(|sentry| sentry.is_enabled())
-            .unwrap_or(false)
-    );
+    tracing::info!("Sentry enabled: {}", _guard.as_ref().map(|sentry| sentry.is_enabled()).unwrap_or(false));
 
     let use_webhooks = match config.use_webhooks {
         Some(use_webhooks) if use_webhooks => true,

@@ -2343,6 +2343,7 @@ version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "httpdate 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.4.11 (registry+https://github.com/rust-lang/crates.io-index)",
  "reqwest 0.10.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "sentry-anyhow 0.19.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "sentry-backtrace 0.19.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2392,6 +2393,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "im 14.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.4.11 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "sentry-types 0.19.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
