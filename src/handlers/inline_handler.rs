@@ -4,8 +4,8 @@ use crate::models::Video;
 use crate::needs_field;
 use crate::sites::PostInfo;
 use crate::utils::*;
+use anyhow::Context;
 use async_trait::async_trait;
-use failure::ResultExt;
 use tgbotapi::{requests::*, *};
 
 pub struct InlineHandler;
@@ -21,7 +21,7 @@ impl InlineHandler {
         &self,
         handler: &crate::MessageHandler,
         message: &Message,
-    ) -> failure::Fallible<()> {
+    ) -> anyhow::Result<()> {
         use futures::TryStreamExt;
         use rusoto_s3::S3;
         use tokio::io::AsyncWriteExt;
@@ -180,7 +180,7 @@ impl super::Handler for InlineHandler {
         handler: &crate::MessageHandler,
         update: &Update,
         _command: Option<&Command>,
-    ) -> Result<super::Status, failure::Error> {
+    ) -> anyhow::Result<super::Status> {
         if let Some(message) = &update.message {
             match message.get_command() {
                 Some(cmd) if cmd.name == "/start" => {
@@ -309,7 +309,7 @@ async fn process_result(
     handler: &crate::MessageHandler,
     result: &PostInfo,
     from: &User,
-) -> failure::Fallible<Option<Vec<(ResultType, InlineQueryResult)>>> {
+) -> anyhow::Result<Option<Vec<(ResultType, InlineQueryResult)>>> {
     let (direct, source) = handler
         .get_fluent_bundle(from.language_code.as_deref(), |bundle| {
             (
@@ -380,7 +380,7 @@ async fn build_image_result(
     result: &crate::sites::PostInfo,
     thumb_url: String,
     keyboard: &InlineKeyboardMarkup,
-) -> failure::Fallible<Vec<(ResultType, InlineQueryResult)>> {
+) -> anyhow::Result<Vec<(ResultType, InlineQueryResult)>> {
     let mut result = result.to_owned();
     result.thumb = Some(thumb_url);
 
@@ -445,7 +445,7 @@ async fn build_webm_result(
     thumb_url: String,
     keyboard: &InlineKeyboardMarkup,
     source_link: &str,
-) -> failure::Fallible<Vec<(ResultType, InlineQueryResult)>> {
+) -> anyhow::Result<Vec<(ResultType, InlineQueryResult)>> {
     let conn = conn.check_out().await?;
 
     let video = match Video::lookup_url(&conn, &result.url).await? {

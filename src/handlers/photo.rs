@@ -1,7 +1,7 @@
 use super::Status::*;
 use crate::needs_field;
+use anyhow::Context;
 use async_trait::async_trait;
-use failure::ResultExt;
 use tgbotapi::{requests::*, *};
 
 use crate::utils::{continuous_action, find_best_photo, get_message, match_image, sort_results};
@@ -19,7 +19,7 @@ impl super::Handler for PhotoHandler {
         handler: &crate::MessageHandler,
         update: &Update,
         _command: Option<&Command>,
-    ) -> Result<super::Status, failure::Error> {
+    ) -> anyhow::Result<super::Status> {
         let message = needs_field!(update, message);
         let photos = needs_field!(message, photo);
 
@@ -121,7 +121,7 @@ async fn no_results(
     handler: &crate::MessageHandler,
     message: &Message,
     start: std::time::Instant,
-) -> failure::Fallible<()> {
+) -> anyhow::Result<()> {
     let text = handler
         .get_fluent_bundle(
             message.from.as_ref().unwrap().language_code.as_deref(),

@@ -16,7 +16,7 @@ impl super::Handler for ChosenInlineHandler {
         handler: &crate::MessageHandler,
         update: &Update,
         _command: Option<&Command>,
-    ) -> Result<super::Status, failure::Error> {
+    ) -> anyhow::Result<super::Status> {
         let chosen_result = needs_field!(update, chosen_inline_result);
 
         let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "chosen")

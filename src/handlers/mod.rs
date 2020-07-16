@@ -42,7 +42,7 @@ pub trait Handler: Send + Sync {
         handler: &super::MessageHandler,
         update: &tgbotapi::Update,
         command: Option<&tgbotapi::Command>,
-    ) -> failure::Fallible<Status>;
+    ) -> anyhow::Result<Status>;
 }
 
 #[macro_export]

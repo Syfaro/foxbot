@@ -1,5 +1,4 @@
-use failure::ResultExt;
-use sentry::integrations::failure::capture_fail;
+use anyhow::Context;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing_futures::Instrument;
@@ -22,7 +21,7 @@ pub async fn find_images<'a, C>(
     links: Vec<&'a str>,
     sites: &mut [BoxedSite],
     callback: &mut C,
-) -> failure::Fallible<Vec<&'a str>>
+) -> anyhow::Result<Vec<&'a str>>
 where
     C: FnMut(SiteCallback),
 {
@@ -77,7 +76,7 @@ async fn upload_image(
     s3_url: &str,
     url: &str,
     thumb: bool,
-) -> failure::Fallible<ImageInfo> {
+) -> anyhow::Result<ImageInfo> {
     if let Some(cached_post) = CachedPost::get(&conn, &url, thumb)
         .await
         .context("unable to get cached post")?
@@ -134,7 +133,7 @@ async fn upload_image(
     let cdn_url = format!("{}/{}/{}", s3_url, s3_bucket, key);
 
     if let Err(err) = CachedPost::save(&conn, &url, &cdn_url, thumb, dimensions).await {
-        sentry::integrations::failure::capture_error(&err);
+        sentry::integrations::anyhow::capture_anyhow(&err);
     }
 
     Ok(ImageInfo {
@@ -149,7 +148,7 @@ pub async fn cache_post(
     s3_bucket: &str,
     s3_url: &str,
     post: &crate::PostInfo,
-) -> failure::Fallible<crate::PostInfo> {
+) -> anyhow::Result<crate::PostInfo> {
     let image = upload_image(&conn, &s3, &s3_bucket, &s3_url, &post.url, false).await?;
 
     let thumb = if let Some(thumb) = &post.thumb {
@@ -338,7 +337,7 @@ pub fn continuous_action(
                         if let Err(e) = bot.make_request(&chat_action).await {
                             tracing::warn!("unable to send chat action: {:?}", e);
                             with_user_scope(user.as_ref(), None, || {
-                                capture_fail(&e);
+                                sentry::capture_error(&e);
                             });
                         }
                     }),
@@ -376,7 +375,7 @@ pub async fn match_image(
     conn: &quaint::pooled::Quaint,
     fapi: &fuzzysearch::FuzzySearch,
     file: &tgbotapi::PhotoSize,
-) -> failure::Fallible<Vec<fuzzysearch::File>> {
+) -> anyhow::Result<Vec<fuzzysearch::File>> {
     let conn = conn
         .check_out()
         .await
@@ -417,7 +416,7 @@ pub async fn match_image(
 async fn lookup_single_hash(
     fapi: &fuzzysearch::FuzzySearch,
     hash: i64,
-) -> failure::Fallible<Vec<fuzzysearch::File>> {
+) -> anyhow::Result<Vec<fuzzysearch::File>> {
     let mut matches = fapi
         .lookup_hashes(vec![hash])
         .await
@@ -442,7 +441,7 @@ pub async fn sort_results(
     conn: &quaint::pooled::Quaint,
     user_id: i32,
     results: &mut Vec<fuzzysearch::File>,
-) -> failure::Fallible<()> {
+) -> anyhow::Result<()> {
     // If we have 1 or fewer items, we don't need to do any sorting.
     if results.len() <= 1 {
         return Ok(());
@@ -484,10 +483,7 @@ pub async fn sort_results(
     Ok(())
 }
 
-pub async fn use_source_name(
-    conn: &quaint::pooled::Quaint,
-    user_id: i32,
-) -> failure::Fallible<bool> {
+pub async fn use_source_name(conn: &quaint::pooled::Quaint, user_id: i32) -> anyhow::Result<bool> {
     let conn = conn
         .check_out()
         .await

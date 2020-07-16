@@ -1,9 +1,10 @@
+use anyhow::Context;
 use async_trait::async_trait;
-use failure::ResultExt;
 use fuzzysearch::MatchType;
 use reqwest::header;
 use serde::Deserialize;
 use std::collections::HashMap;
+use thiserror::Error;
 
 use crate::models::Twitter as TwitterModel;
 
@@ -50,13 +51,13 @@ pub trait Site {
         &mut self,
         user_id: i32,
         url: &str,
-    ) -> failure::Fallible<Option<Vec<PostInfo>>>;
+    ) -> anyhow::Result<Option<Vec<PostInfo>>>;
 }
 
 // workaround for NoneError not actually being an Error
 // https://github.com/rust-lang-nursery/failure/issues/59#issuecomment-602862336
-#[derive(Debug, Fail)]
-#[fail(display = "NoneError")]
+#[derive(Debug, Error)]
+#[error("NoneError")]
 struct NoneError;
 
 trait OptionExt {
@@ -152,7 +153,7 @@ impl Site for Direct {
         &mut self,
         _user_id: i32,
         url: &str,
-    ) -> failure::Fallible<Option<Vec<PostInfo>>> {
+    ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let u = url.to_string();
         let mut source_link = None;
         let mut source_name = None;
@@ -231,7 +232,7 @@ impl E621 {
         }
     }
 
-    async fn get_pool(&mut self, url: &str) -> failure::Fallible<Option<Vec<PostInfo>>> {
+    async fn get_pool(&mut self, url: &str) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let captures = self.pool.captures(url).unwrap();
         let id = &captures["id"];
 
@@ -267,7 +268,7 @@ impl E621 {
         }
     }
 
-    async fn load<T>(&self, url: &str) -> failure::Fallible<T>
+    async fn load<T>(&self, url: &str) -> anyhow::Result<T>
     where
         T: serde::de::DeserializeOwned,
     {
@@ -300,7 +301,7 @@ impl Site for E621 {
         &mut self,
         _user_id: i32,
         url: &str,
-    ) -> failure::Fallible<Option<Vec<PostInfo>>> {
+    ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let endpoint = if self.show.is_match(url) {
             let captures = self.show.captures(url).unwrap();
             let id = &captures["id"];
@@ -372,7 +373,7 @@ impl Site for Twitter {
         &mut self,
         user_id: i32,
         url: &str,
-    ) -> failure::Fallible<Option<Vec<PostInfo>>> {
+    ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let captures = self.matcher.captures(url).unwrap();
         let id = captures["id"].to_owned().parse::<u64>().unwrap();
 
@@ -476,7 +477,7 @@ impl FurAffinity {
         }
     }
 
-    async fn load_direct_url(&self, url: &str) -> failure::Fallible<Option<PostInfo>> {
+    async fn load_direct_url(&self, url: &str) -> anyhow::Result<Option<PostInfo>> {
         let url = if url.starts_with("http://") {
             url.replace("http://", "https://")
         } else {
@@ -512,7 +513,7 @@ impl FurAffinity {
         cookies.join("; ")
     }
 
-    async fn load_submission(&mut self, url: &str) -> failure::Fallible<Option<PostInfo>> {
+    async fn load_submission(&mut self, url: &str) -> anyhow::Result<Option<PostInfo>> {
         let resp = self
             .client
             .get(url)
@@ -525,7 +526,7 @@ impl FurAffinity {
         let resp = if resp.status() == 429 || resp.status() == 503 {
             let cfscrape::CfscrapeData { cookies, .. } =
                 cfscrape::get_cookie_string(url, Some(USER_AGENT))
-                    .map_err(|err| format_err!("python error: {}", err))
+                    .map_err(|err| anyhow::format_err!("python error: {}", err))
                     .context("unable to use cfscrape")?;
             let cookies = cookies.split("; ");
             for cookie in cookies {
@@ -592,7 +593,7 @@ impl Site for FurAffinity {
         &mut self,
         _user_id: i32,
         url: &str,
-    ) -> failure::Fallible<Option<Vec<PostInfo>>> {
+    ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let image = if url.contains("facdn.net/art/") {
             self.load_direct_url(url).await
         } else {
@@ -677,7 +678,7 @@ impl Site for Mastodon {
         &mut self,
         _user_id: i32,
         url: &str,
-    ) -> failure::Fallible<Option<Vec<PostInfo>>> {
+    ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let captures = self.matcher.captures(url).unwrap();
 
         let base = captures["host"].to_owned();
@@ -741,7 +742,7 @@ impl Site for Weasyl {
         &mut self,
         _user_id: i32,
         url: &str,
-    ) -> failure::Fallible<Option<Vec<PostInfo>>> {
+    ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let captures = self.matcher.captures(url).unwrap();
         let sub_id = captures["id"].to_owned();
 
@@ -857,7 +858,7 @@ impl Inkbunny {
     const API_LOGIN: &'static str = "https://inkbunny.net/api_login.php";
     const API_SUBMISSIONS: &'static str = "https://inkbunny.net/api_submissions.php";
 
-    pub async fn get_sid(&mut self) -> failure::Fallible<String> {
+    pub async fn get_sid(&mut self) -> anyhow::Result<String> {
         if let Some(sid) = &self.sid {
             return Ok(sid.clone());
         }
@@ -890,7 +891,7 @@ impl Inkbunny {
         Ok(login.sid)
     }
 
-    pub async fn get_submissions(&mut self, ids: &[i32]) -> failure::Fallible<InkbunnySubmissions> {
+    pub async fn get_submissions(&mut self, ids: &[i32]) -> anyhow::Result<InkbunnySubmissions> {
         let ids: String = ids
             .iter()
             .map(|id| id.to_string())
@@ -953,7 +954,7 @@ impl Site for Inkbunny {
         &mut self,
         _user_id: i32,
         url: &str,
-    ) -> failure::Fallible<Option<Vec<PostInfo>>> {
+    ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let captures = self.matcher.captures(url).unwrap();
         let sub_id: i32 = captures["id"].to_owned().parse().unwrap();
 

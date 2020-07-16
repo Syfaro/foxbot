@@ -1,5 +1,5 @@
+use anyhow::Context;
 use async_trait::async_trait;
-use failure::ResultExt;
 use tgbotapi::{requests::*, *};
 
 use super::Status::*;
@@ -20,7 +20,7 @@ impl super::Handler for SettingsHandler {
         handler: &crate::MessageHandler,
         update: &Update,
         command: Option<&Command>,
-    ) -> failure::Fallible<super::Status> {
+    ) -> anyhow::Result<super::Status> {
         if let Some(command) = command {
             if command.name == "/settings" {
                 send_settings_message(&handler, &update.message.as_ref().unwrap())
@@ -53,7 +53,7 @@ async fn name(
     handler: &crate::MessageHandler,
     callback_query: &CallbackQuery,
     data: &str,
-) -> failure::Fallible<super::Status> {
+) -> anyhow::Result<super::Status> {
     let reply_message = needs_field!(callback_query, message);
     let from = reply_message
         .from
@@ -143,7 +143,7 @@ async fn name(
 async fn name_keyboard(
     handler: &crate::MessageHandler,
     from: &User,
-) -> failure::Fallible<InlineKeyboardMarkup> {
+) -> anyhow::Result<InlineKeyboardMarkup> {
     let conn = handler
         .conn
         .check_out()
@@ -182,7 +182,7 @@ async fn order(
     handler: &crate::MessageHandler,
     callback_query: &CallbackQuery,
     data: &str,
-) -> failure::Fallible<super::Status> {
+) -> anyhow::Result<super::Status> {
     if data.ends_with(":e") {
         let text = handler
             .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
@@ -346,7 +346,7 @@ async fn order(
 async fn send_settings_message(
     handler: &crate::MessageHandler,
     message: &Message,
-) -> failure::Fallible<Message> {
+) -> anyhow::Result<Message> {
     let from = message
         .from
         .as_ref()
@@ -405,7 +405,7 @@ async fn send_settings_message(
 async fn sort_order_keyboard(
     conn: &quaint::pooled::Quaint,
     user_id: i32,
-) -> failure::Fallible<InlineKeyboardMarkup> {
+) -> anyhow::Result<InlineKeyboardMarkup> {
     let conn = conn
         .check_out()
         .await

@@ -25,7 +25,7 @@ impl super::Handler for CommandHandler {
         handler: &crate::MessageHandler,
         update: &Update,
         _command: Option<&Command>,
-    ) -> Result<super::Status, failure::Error> {
+    ) -> anyhow::Result<super::Status> {
         let message = needs_field!(update, message);
 
         let command = match message.get_command() {
@@ -51,7 +51,7 @@ impl super::Handler for CommandHandler {
             "/mirror" => self.handle_mirror(&handler, message).await,
             "/source" => self.handle_source(&handler, message).await,
             "/alts" => self.handle_alts(&handler, message).await,
-            "/error" => Err(failure::format_err!("a test error message")),
+            "/error" => Err(anyhow::anyhow!("a test error message")),
             "/groupsource" => self.enable_group_source(&handler, message).await,
             "/grouppreviews" => self.group_nopreviews(&handler, &message).await,
             _ => {
@@ -75,7 +75,7 @@ impl CommandHandler {
         &self,
         handler: &crate::MessageHandler,
         message: &Message,
-    ) -> failure::Fallible<()> {
+    ) -> anyhow::Result<()> {
         let now = std::time::Instant::now();
 
         if message.chat.chat_type != ChatType::Private {
@@ -139,7 +139,7 @@ impl CommandHandler {
         &self,
         handler: &crate::MessageHandler,
         message: &Message,
-    ) -> failure::Fallible<()> {
+    ) -> anyhow::Result<()> {
         let from = message.from.as_ref().unwrap();
 
         let action = continuous_action(
@@ -287,7 +287,7 @@ impl CommandHandler {
         &self,
         handler: &crate::MessageHandler,
         message: &Message,
-    ) -> failure::Fallible<()> {
+    ) -> anyhow::Result<()> {
         let _action = continuous_action(
             handler.bot.clone(),
             12,
@@ -434,7 +434,7 @@ impl CommandHandler {
         &self,
         handler: &crate::MessageHandler,
         message: &Message,
-    ) -> failure::Fallible<()> {
+    ) -> anyhow::Result<()> {
         let _action = continuous_action(
             handler.bot.clone(),
             12,
@@ -645,7 +645,7 @@ impl CommandHandler {
         handler: &crate::MessageHandler,
         message: &Message,
         bot_needs_admin: bool,
-    ) -> failure::Fallible<bool> {
+    ) -> anyhow::Result<bool> {
         if !message.chat.chat_type.is_group() {
             handler
                 .send_generic_reply(&message, "automatic-enable-not-group")
@@ -692,7 +692,7 @@ impl CommandHandler {
         &self,
         handler: &crate::MessageHandler,
         message: &Message,
-    ) -> failure::Fallible<()> {
+    ) -> anyhow::Result<()> {
         if !self.is_valid_admin_group(&handler, &message, true).await? {
             return Ok(());
         }
@@ -728,7 +728,7 @@ impl CommandHandler {
         &self,
         handler: &crate::MessageHandler,
         message: &Message,
-    ) -> failure::Fallible<()> {
+    ) -> anyhow::Result<()> {
         if !self.is_valid_admin_group(&handler, &message, false).await? {
             return Ok(());
         }

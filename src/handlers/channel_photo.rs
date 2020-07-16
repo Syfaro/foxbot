@@ -1,5 +1,5 @@
+use anyhow::Context;
 use async_trait::async_trait;
-use failure::ResultExt;
 use tgbotapi::{requests::*, *};
 
 use super::Status::*;
@@ -19,7 +19,7 @@ impl super::Handler for ChannelPhotoHandler {
         handler: &crate::MessageHandler,
         update: &Update,
         _command: Option<&Command>,
-    ) -> failure::Fallible<super::Status> {
+    ) -> anyhow::Result<super::Status> {
         // Ensure we have a channel_post Message and a photo within.
         let message = needs_field!(update, channel_post);
         let sizes = needs_field!(&message, photo);
@@ -159,7 +159,7 @@ async fn get_matches(
     fapi: &fuzzysearch::FuzzySearch,
     conn: &quaint::pooled::Quaint,
     sizes: &[PhotoSize],
-) -> failure::Fallible<Option<fuzzysearch::File>> {
+) -> anyhow::Result<Option<fuzzysearch::File>> {
     // Find the highest resolution size of the image and download.
     let best_photo = find_best_photo(&sizes).unwrap();
     let matches = match_image(&bot, &conn, &fapi, &best_photo).await?;

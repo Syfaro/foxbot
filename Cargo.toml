@@ -23,9 +23,10 @@ infer = "0.2"
 bytes = "0.5"
 hex = "0.4"
 
-sentry = "0.19"
+sentry = { version = "0.19", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "reqwest"] }
 uuid = "0.8"
-failure = "0.1"
+anyhow = "1"
+thiserror = "1"
 influxdb = "0.0.6"
 
 serde = { version = "1", features = ["derive"] }

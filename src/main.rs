@@ -1,6 +1,6 @@
 #![feature(try_trait)]
 
-use sentry::integrations::failure::{capture_error, capture_fail};
+use sentry::integrations::anyhow::capture_anyhow;
 use sites::{PostInfo, Site};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -8,9 +8,6 @@ use tgbotapi::{requests::*, *};
 use tokio::sync::{Mutex, RwLock};
 use tracing_futures::Instrument;
 use unic_langid::LanguageIdentifier;
-
-#[macro_use]
-extern crate failure;
 
 mod handlers;
 mod migrations;
@@ -291,11 +288,20 @@ async fn main() {
         Some(sentry::init(sentry::ClientOptions {
             dsn: Some(dsn.parse().unwrap()),
             release: option_env!("RELEASE").map(std::borrow::Cow::from),
+            attach_stacktrace: true,
             ..Default::default()
         }))
     } else {
         None
     };
+
+    tracing::info!(
+        "Sentry enabled: {}",
+        _guard
+            .as_ref()
+            .map(|sentry| sentry.is_enabled())
+            .unwrap_or(false)
+    );
 
     let use_webhooks = match config.use_webhooks {
         Some(use_webhooks) if use_webhooks => true,
@@ -377,7 +383,7 @@ async fn handle_request(
                 .add_field("duration", now.elapsed().as_millis() as i64);
 
             if let Err(e) = handler.influx.query(&point).await {
-                capture_fail(&e);
+                capture_anyhow(&anyhow::anyhow!("InfluxDB error: {:?}", e));
                 tracing::error!("unable to send http request info to InfluxDB: {:?}", e);
             }
 
@@ -512,7 +518,7 @@ async fn poll_updates(bot: Arc<Telegram>, handler: Arc<MessageHandler>) {
         let updates = match updates {
             Ok(updates) => updates,
             Err(e) => {
-                capture_fail(&e);
+                sentry::capture_error(&e);
                 tracing::error!("unable to get updates: {:?}", e);
                 std::thread::sleep(std::time::Duration::from_secs(5));
                 continue;
@@ -671,13 +677,13 @@ impl MessageHandler {
         if let Err(e) = self.make_request(&send_message).await {
             tracing::error!("unable to send error message to user: {:?}", e);
             utils::with_user_scope(message.from.as_ref(), None, || {
-                capture_fail(&e);
+                sentry::capture_error(&e);
             });
         }
     }
 
     #[tracing::instrument(skip(self, message))]
-    async fn handle_welcome(&self, message: &Message, command: &str) -> failure::Fallible<()> {
+    async fn handle_welcome(&self, message: &Message, command: &str) -> anyhow::Result<()> {
         use rand::seq::SliceRandom;
 
         let from = message.from.as_ref().unwrap();
@@ -724,11 +730,7 @@ impl MessageHandler {
     }
 
     #[tracing::instrument(skip(self, message))]
-    async fn send_generic_reply(
-        &self,
-        message: &Message,
-        name: &str,
-    ) -> failure::Fallible<Message> {
+    async fn send_generic_reply(&self, message: &Message, name: &str) -> anyhow::Result<Message> {
         let language_code = message
             .from
             .as_ref()
@@ -782,10 +784,10 @@ impl MessageHandler {
                     }
 
                     if let Some(msg) = &update.message {
-                        self.report_error(&msg, Some(tags), || capture_error(&e))
+                        self.report_error(&msg, Some(tags), || capture_anyhow(&e))
                             .await;
                     } else {
-                        capture_error(&e);
+                        capture_anyhow(&e);
                     }
 
                     break;

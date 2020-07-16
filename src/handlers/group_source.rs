@@ -2,8 +2,8 @@ use super::Status::*;
 use crate::models::{GroupConfig, GroupConfigKey};
 use crate::needs_field;
 use crate::utils::{continuous_action, find_best_photo, get_message, match_image, sort_results};
+use anyhow::Context;
 use async_trait::async_trait;
-use failure::ResultExt;
 use tgbotapi::{requests::*, *};
 
 const MAX_SOURCE_DISTANCE: u64 = 3;
@@ -22,7 +22,7 @@ impl super::Handler for GroupSourceHandler {
         handler: &crate::MessageHandler,
         update: &Update,
         _command: Option<&Command>,
-    ) -> Result<super::Status, failure::Error> {
+    ) -> anyhow::Result<super::Status> {
         let message = needs_field!(update, message);
         let photo_sizes = needs_field!(message, photo);
 

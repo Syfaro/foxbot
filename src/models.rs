@@ -1,4 +1,4 @@
-use failure::ResultExt;
+use anyhow::Context;
 use quaint::pooled::PooledConnection;
 use quaint::prelude::*;
 
@@ -64,7 +64,7 @@ impl Config {
     async fn get<T: serde::de::DeserializeOwned>(
         conn: &PooledConnection,
         select: quaint::ast::Select<'_>,
-    ) -> failure::Fallible<Option<T>> {
+    ) -> anyhow::Result<Option<T>> {
         let rows = conn
             .select(select)
             .await
@@ -87,7 +87,7 @@ impl Config {
     async fn delete(
         conn: &PooledConnection,
         delete: quaint::ast::Delete<'_>,
-    ) -> failure::Fallible<()> {
+    ) -> anyhow::Result<()> {
         conn.delete(delete)
             .await
             .context("unable to delete config item")?;
@@ -120,7 +120,7 @@ impl UserConfig {
         conn: &PooledConnection,
         key: UserConfigKey,
         user_id: i32,
-    ) -> failure::Fallible<Option<T>> {
+    ) -> anyhow::Result<Option<T>> {
         let select = Select::from_table(USER_CONFIG)
             .so_that("user_id".equals(user_id).and("name".equals(key.as_str())));
 
@@ -134,7 +134,7 @@ impl UserConfig {
         user_id: i32,
         update: bool,
         data: T,
-    ) -> failure::Fallible<()> {
+    ) -> anyhow::Result<()> {
         let value = serde_json::to_string(&data).context("unable to serialize user config item")?;
 
         if update {
@@ -182,7 +182,7 @@ impl GroupConfig {
         conn: &PooledConnection,
         chat_id: i64,
         name: GroupConfigKey,
-    ) -> failure::Fallible<Option<T>> {
+    ) -> anyhow::Result<Option<T>> {
         let select = Select::from_table(GROUP_CONFIG)
             .so_that("chat_id".equals(chat_id).and("name".equals(name.as_str())));
         Config::get(&conn, select).await
@@ -194,7 +194,7 @@ impl GroupConfig {
         chat_id: i64,
         update: bool,
         data: T,
-    ) -> failure::Fallible<()> {
+    ) -> anyhow::Result<()> {
         let value = serde_json::to_string(&data).context("unable to set group config")?;
 
         if update {
@@ -222,7 +222,7 @@ impl GroupConfig {
         conn: &PooledConnection,
         key: GroupConfigKey,
         chat_id: i64,
-    ) -> failure::Fallible<()> {
+    ) -> anyhow::Result<()> {
         let delete = Delete::from_table(GROUP_CONFIG)
             .so_that("chat_id".equals(chat_id).and("name".equals(key.as_str())));
         Config::delete(&conn, delete)
@@ -250,7 +250,7 @@ impl Twitter {
     pub async fn get_account(
         conn: &PooledConnection,
         user_id: i32,
-    ) -> failure::Fallible<Option<TwitterAccount>> {
+    ) -> anyhow::Result<Option<TwitterAccount>> {
         let select = Select::from_table(TWITTER_ACCOUNT)
             .column("consumer_key")
             .column("consumer_secret")
@@ -278,7 +278,7 @@ impl Twitter {
     pub async fn get_request(
         conn: &PooledConnection,
         user_id: i32,
-    ) -> failure::Fallible<Option<TwitterRequest>> {
+    ) -> anyhow::Result<Option<TwitterRequest>> {
         let select = Select::from_table(TWITTER_AUTH)
             .column("request_key")
             .column("request_secret")
@@ -312,7 +312,7 @@ impl Twitter {
         conn: &PooledConnection,
         user_id: i32,
         creds: TwitterAccount,
-    ) -> failure::Fallible<()> {
+    ) -> anyhow::Result<()> {
         let delete = Delete::from_table(TWITTER_ACCOUNT).so_that("user_id".equals(user_id));
         conn.delete(delete)
             .await
@@ -339,7 +339,7 @@ impl Twitter {
         conn: &PooledConnection,
         user_id: i32,
         creds: TwitterRequest,
-    ) -> failure::Fallible<()> {
+    ) -> anyhow::Result<()> {
         let delete = Delete::from_table(TWITTER_AUTH).so_that("user_id".equals(user_id));
         conn.delete(delete)
             .await
@@ -362,7 +362,7 @@ pub struct FileCache;
 
 impl FileCache {
     /// Look up a file's cached hash by its unique ID.
-    pub async fn get(conn: &PooledConnection, file_id: &str) -> failure::Fallible<Option<i64>> {
+    pub async fn get(conn: &PooledConnection, file_id: &str) -> anyhow::Result<Option<i64>> {
         let select = Select::from_table(FILE_ID_CACHE)
             .column("hash")
             .so_that("file_id".equals(file_id));
@@ -381,7 +381,7 @@ impl FileCache {
         Ok(Some(row["hash"].as_i64().unwrap()))
     }
 
-    pub async fn set(conn: &PooledConnection, file_id: &str, hash: i64) -> failure::Fallible<()> {
+    pub async fn set(conn: &PooledConnection, file_id: &str, hash: i64) -> anyhow::Result<()> {
         let insert = Insert::single_into(FILE_ID_CACHE)
             .value("file_id", file_id)
             .value("hash", hash)
@@ -411,7 +411,7 @@ pub struct Video {
 
 impl Video {
     /// Lookup a Video by ID.
-    pub async fn lookup_id(conn: &PooledConnection, id: i64) -> failure::Fallible<Option<Video>> {
+    pub async fn lookup_id(conn: &PooledConnection, id: i64) -> anyhow::Result<Option<Video>> {
         let select = Select::from_table("videos")
             .column("id")
             .column("processed")
@@ -442,10 +442,7 @@ impl Video {
     }
 
     /// Lookup a Video by URL.
-    pub async fn lookup_url(
-        conn: &PooledConnection,
-        url: &str,
-    ) -> failure::Fallible<Option<Video>> {
+    pub async fn lookup_url(conn: &PooledConnection, url: &str) -> anyhow::Result<Option<Video>> {
         let select = Select::from_table("videos")
             .column("id")
             .column("processed")
@@ -480,7 +477,7 @@ impl Video {
         conn: &PooledConnection,
         url: &str,
         source: &str,
-    ) -> failure::Fallible<u64> {
+    ) -> anyhow::Result<u64> {
         let insert = Insert::single_into("videos")
             .value("url", url)
             .value("source", source)
@@ -497,7 +494,7 @@ impl Video {
         conn: &PooledConnection,
         url: &str,
         mp4_url: &str,
-    ) -> failure::Fallible<()> {
+    ) -> anyhow::Result<()> {
         let update = Update::table("videos")
             .set("processed", true)
             .set("mp4_url", mp4_url)
@@ -521,7 +518,7 @@ impl CachedPost {
         conn: &PooledConnection,
         post_url: &str,
         thumb: bool,
-    ) -> failure::Fallible<Option<CachedPost>> {
+    ) -> anyhow::Result<Option<CachedPost>> {
         let select = Select::from_table("cached_post")
             .column("id")
             .column("post_url")
@@ -561,7 +558,7 @@ impl CachedPost {
         cdn_url: &str,
         thumb: bool,
         dimensions: (u32, u32),
-    ) -> failure::Fallible<u64> {
+    ) -> anyhow::Result<u64> {
         let insert = Insert::single_into("cached_post")
             .value("post_url", post_url)
             .value("thumb", thumb)

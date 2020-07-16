@@ -1,5 +1,5 @@
+use anyhow::Context;
 use async_trait::async_trait;
-use failure::ResultExt;
 use tgbotapi::{requests::*, *};
 
 use super::Status::*;
@@ -20,7 +20,7 @@ impl super::Handler for TextHandler {
         handler: &crate::MessageHandler,
         update: &Update,
         _command: Option<&Command>,
-    ) -> Result<super::Status, failure::Error> {
+    ) -> anyhow::Result<super::Status> {
         let message = needs_field!(update, message);
         let text = needs_field!(message, text);
 

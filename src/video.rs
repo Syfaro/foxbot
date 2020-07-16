@@ -9,7 +9,7 @@ impl std::fmt::Display for FfmpegError {
 
 impl std::error::Error for FfmpegError {}
 
-pub fn process_video(file: &std::path::Path) -> failure::Fallible<String> {
+pub fn process_video(file: &std::path::Path) -> anyhow::Result<String> {
     let id = crate::generate_id();
 
     let path = format!("videos/{}.mp4", id);
