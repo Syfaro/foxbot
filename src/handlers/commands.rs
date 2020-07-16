@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
 use tgbotapi::{requests::*, *};
-use tokio01::runtime::current_thread::block_on_all;
 
 use super::Status::*;
 use crate::models::{GroupConfig, GroupConfigKey, Twitter, TwitterRequest};
@@ -93,7 +92,7 @@ impl CommandHandler {
             handler.config.twitter_consumer_secret.clone(),
         );
 
-        let request_token = block_on_all(egg_mode::request_token(&con_token, "oob"))?;
+        let request_token = egg_mode::auth::request_token(&con_token, "oob").await?;
 
         let conn = handler.conn.check_out().await?;
         Twitter::set_request(
@@ -106,7 +105,7 @@ impl CommandHandler {
         )
         .await?;
 
-        let url = egg_mode::authorize_url(&request_token);
+        let url = egg_mode::auth::authorize_url(&request_token);
 
         let mut args = fluent::FluentArgs::new();
         args.insert("link", fluent::FluentValue::from(url));

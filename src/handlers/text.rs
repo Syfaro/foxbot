@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use failure::ResultExt;
 use tgbotapi::{requests::*, *};
-use tokio01::runtime::current_thread::block_on_all;
 
 use super::Status::*;
 use crate::models::{Twitter, TwitterAccount};
@@ -59,7 +58,8 @@ impl super::Handler for TextHandler {
             handler.config.twitter_consumer_secret.clone(),
         );
 
-        let token = block_on_all(egg_mode::access_token(con_token, &request_token, text))
+        let token = egg_mode::auth::access_token(con_token, &request_token, text)
+            .await
             .context("unable to get twitter access token")?;
 
         tracing::trace!("got token");

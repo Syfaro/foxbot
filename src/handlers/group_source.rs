@@ -120,6 +120,7 @@ impl super::Handler for GroupSourceHandler {
             chat_id: message.chat_id(),
             reply_to_message_id: Some(message.message_id),
             disable_web_page_preview: Some(true),
+            disable_notification: Some(true),
             text,
             ..Default::default()
         };

@@ -4,7 +4,6 @@ use fuzzysearch::MatchType;
 use reqwest::header;
 use serde::Deserialize;
 use std::collections::HashMap;
-use tokio01::runtime::current_thread::block_on_all;
 
 use crate::models::Twitter as TwitterModel;
 
@@ -337,7 +336,7 @@ pub struct Twitter {
 }
 
 impl Twitter {
-    pub fn new(
+    pub async fn new(
         consumer_key: String,
         consumer_secret: String,
         conn: quaint::pooled::Quaint,
@@ -345,7 +344,7 @@ impl Twitter {
         use egg_mode::KeyPair;
 
         let consumer = KeyPair::new(consumer_key, consumer_secret);
-        let token = block_on_all(egg_mode::bearer_token(&consumer)).unwrap();
+        let token = egg_mode::auth::bearer_token(&consumer).await.unwrap();
 
         Self {
             matcher: regex::Regex::new(
@@ -396,7 +395,7 @@ impl Site for Twitter {
             _ => self.token.clone(),
         };
 
-        let tweet = match block_on_all(egg_mode::tweet::show(id, &token)) {
+        let tweet = match egg_mode::tweet::show(id, &token).await {
             Ok(tweet) => tweet.response,
             Err(e) => return Err(e.into()),
         };

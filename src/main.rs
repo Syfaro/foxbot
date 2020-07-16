@@ -193,11 +193,14 @@ async fn main() {
             config.fautil_apitoken.clone(),
         )),
         Box::new(sites::Weasyl::new(config.weasyl_apitoken.clone())),
-        Box::new(sites::Twitter::new(
-            config.twitter_consumer_key.clone(),
-            config.twitter_consumer_secret.clone(),
-            pool.clone(),
-        )),
+        Box::new(
+            sites::Twitter::new(
+                config.twitter_consumer_key.clone(),
+                config.twitter_consumer_secret.clone(),
+                pool.clone(),
+            )
+            .await,
+        ),
         Box::new(sites::Inkbunny::new(
             config.inkbunny_username.clone(),
             config.inkbunny_password.clone(),
@@ -285,7 +288,6 @@ async fn main() {
     });
 
     let _guard = if let Some(dsn) = config.sentry_dsn {
-        sentry::integrations::panic::register_panic_handler();
         Some(sentry::init(sentry::ClientOptions {
             dsn: Some(dsn.parse().unwrap()),
             release: option_env!("RELEASE").map(std::borrow::Cow::from),

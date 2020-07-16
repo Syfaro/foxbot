@@ -9,7 +9,7 @@ reqwest = { version = "0.10", features = ["json", "stream"] }
 linkify = "0.4"
 rand = "0.7"
 regex = "1"
-scraper = "0.11"
+scraper = "0.12"
 async-trait = "0.1"
 fluent = "0.9"
 fluent-langneg = "0.11"
@@ -17,14 +17,14 @@ unic-langid = "0.7"
 hyper = "0.13"
 hamming = "0.1"
 
-sha2 = "0.8"
+sha2 = "0.9"
 image = "0.23"
 infer = "0.2"
 bytes = "0.5"
 hex = "0.4"
 
-sentry = { version = "0.17", features = ["with_debug_meta"] }
-uuid = "0.7"
+sentry = "0.19"
+uuid = "0.8"
 failure = "0.1"
 influxdb = "0.0.6"
 
@@ -32,12 +32,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 envy = "0.4"
 
-egg-mode = "0.13"
+egg-mode = "0.15"
 tokio = { version = "0.2", features = ["macros", "time", "stream", "sync", "signal"] }
 tokio-util = { version = "0.3", features = ["codec"] }
 futures = "0.3"
 futures-util = "0.3"
-tokio01 = { version = "0.1", package = "tokio" }
 
 tgbotapi = { git = "https://github.com/Syfaro/tgbotapi-rs.git" }
 cfscrape = { git = "https://github.com/Syfaro/cfscrape-rs.git" }
@@ -54,9 +53,9 @@ refinery = { version = "0.2", features = ["rusqlite"] }
 barrel = { version = "0.6", features = ["sqlite3"] }
 quaint = { version = "0.2.0-alpha.13", features = ["full-sqlite"] }
 
-rusoto_core = "0.43"
-rusoto_credential = "0.43"
-rusoto_s3 = "0.43"
+rusoto_core = "0.44"
+rusoto_credential = "0.44"
+rusoto_s3 = "0.44"
 
 [profile.release]
 lto = true
