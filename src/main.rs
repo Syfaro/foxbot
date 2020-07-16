@@ -543,7 +543,7 @@ pub struct MessageHandler {
     // State
     pub bot_user: User,
     langs: HashMap<LanguageIdentifier, Vec<String>>,
-    best_lang: RwLock<HashMap<String, fluent::FluentBundle<fluent::FluentResource>>>,
+    best_lang: RwLock<HashMap<String, fluent::concurrent::FluentBundle<fluent::FluentResource>>>,
     handlers: Vec<BoxedHandler>,
 
     // API clients
@@ -564,7 +564,7 @@ pub struct MessageHandler {
 impl MessageHandler {
     async fn get_fluent_bundle<C, R>(&self, requested: Option<&str>, callback: C) -> R
     where
-        C: FnOnce(&fluent::FluentBundle<fluent::FluentResource>) -> R,
+        C: FnOnce(&fluent::concurrent::FluentBundle<fluent::FluentResource>) -> R,
     {
         let requested = if let Some(requested) = requested {
             requested
@@ -601,8 +601,9 @@ impl MessageHandler {
 
         let current_locale = resolved_locales.get(0).expect("No locales were available");
 
-        let mut bundle =
-            fluent::FluentBundle::<fluent::FluentResource>::new(resolved_locales.clone());
+        let mut bundle = fluent::concurrent::FluentBundle::<fluent::FluentResource>::new(
+            resolved_locales.clone(),
+        );
         let resources = self
             .langs
             .get(current_locale)

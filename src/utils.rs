@@ -7,7 +7,7 @@ use tracing_futures::Instrument;
 use crate::models::{CachedPost, FileCache, Sites, UserConfig, UserConfigKey};
 use crate::BoxedSite;
 
-type Bundle<'a> = &'a fluent::FluentBundle<fluent::FluentResource>;
+type Bundle<'a> = &'a fluent::concurrent::FluentBundle<fluent::FluentResource>;
 
 pub struct SiteCallback<'a> {
     pub site: &'a BoxedSite,
