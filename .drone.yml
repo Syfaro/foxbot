@@ -1,7 +1,7 @@
 ---
 kind: pipeline
 type: docker
-name: default
+name: test
 
 platform:
   os: linux
@@ -17,6 +17,16 @@ steps:
   - pip3 install cfscrape
   - cargo test
 
+---
+kind: pipeline
+type: docker
+name: deploy
+
+platform:
+  os: linux
+  arch: amd64
+
+steps:
 - name: sentry-release
   pull: always
   image: getsentry/sentry-cli
@@ -29,9 +39,6 @@ steps:
       from_secret: sentry_org
     SENTRY_PROJECT:
       from_secret: sentry_project
-  when:
-    branch:
-    - master
 
 - name: docker
   pull: always
@@ -48,13 +55,12 @@ steps:
     - ${DRONE_COMMIT_SHA}
     username:
       from_secret: docker_username
-  when:
-    branch:
-    - master
 
 - name: sentry-finalize
   image: getsentry/sentry-cli
   commands:
+  - sentry-cli releases set-commits ${DRONE_COMMIT_SHA} --auto
+  - sentry-cli upload-dif ./target/release/foxbot --wait
   - sentry-cli releases finalize ${DRONE_COMMIT_SHA}
   environment:
     SENTRY_AUTH_TOKEN:
@@ -63,9 +69,6 @@ steps:
       from_secret: sentry_org
     SENTRY_PROJECT:
       from_secret: sentry_project
-  when:
-    branch:
-    - master
 
 - name: deploy
   pull: always
@@ -80,9 +83,6 @@ steps:
     - bash /deploy/foxbot.sh
     username:
       from_secret: deploy_username
-  when:
-    branch:
-    - master
 
 - name: sentry-deploy
   image: getsentry/sentry-cli
@@ -95,8 +95,11 @@ steps:
       from_secret: sentry_org
     SENTRY_PROJECT:
       from_secret: sentry_project
-  when:
-    branch:
-    - master
+
+trigger:
+  event:
+  - promote
+  target:
+  - production
 
 ...
