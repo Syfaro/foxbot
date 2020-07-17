@@ -527,8 +527,6 @@ impl CommandHandler {
             return Ok(());
         }
 
-        let has_multiple_matches = matches.len() > 1;
-
         let mut results: HashMap<Vec<String>, Vec<fuzzysearch::File>> = HashMap::new();
 
         let matches: Vec<fuzzysearch::File> = matches
@@ -566,6 +564,13 @@ impl CommandHandler {
 
         drop(_action);
 
+        if used_hashes.is_empty() {
+            handler
+                .send_generic_reply(&message, "reverse-no-results")
+                .await?;
+            return Ok(());
+        }
+
         let send_message = SendMessage {
             chat_id: message.chat_id(),
             text: text.clone(),
@@ -575,10 +580,6 @@ impl CommandHandler {
         };
 
         let sent = handler.make_request(&send_message).await?;
-
-        if !has_multiple_matches {
-            return Ok(());
-        }
 
         let matches = handler.fapi.lookup_hashes(used_hashes).await?;
 

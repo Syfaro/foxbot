@@ -296,7 +296,13 @@ async fn main() {
         None
     };
 
-    tracing::info!("Sentry enabled: {}", _guard.as_ref().map(|sentry| sentry.is_enabled()).unwrap_or(false));
+    tracing::info!(
+        "Sentry enabled: {}",
+        _guard
+            .as_ref()
+            .map(|sentry| sentry.is_enabled())
+            .unwrap_or(false)
+    );
 
     let use_webhooks = match config.use_webhooks {
         Some(use_webhooks) if use_webhooks => true,
@@ -769,6 +775,8 @@ impl MessageHandler {
                 }
                 Err(e) => {
                     tracing::error!("Error handling update: {:#?}", e);
+
+                    tracing::error!("{:?}", e.backtrace());
 
                     let mut tags = vec![("handler", handler.name().to_string())];
                     if let Some(user) = user {
