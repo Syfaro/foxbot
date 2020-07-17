@@ -510,7 +510,7 @@ impl FurAffinity {
             submission: scraper::Selector::parse("#submissionImg").unwrap(),
             client: reqwest::Client::new(),
             matcher: regex::Regex::new(
-                r#"(?:https?://)?(?:www\.)?furaffinity.net/(?:view|full)/(?P<id>\d+)\/?"#,
+                r#"(?:https?://)?(?:www\.)?furaffinity\.net/(?:view|full)/(?P<id>\d+)/?"#,
             )
             .unwrap(),
         }
