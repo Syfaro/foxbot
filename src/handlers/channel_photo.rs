@@ -52,11 +52,7 @@ impl super::Handler for ChannelPhotoHandler {
         let sites = handler.sites.lock().await;
 
         // If this link was already in the message, we can ignore it.
-        if link_was_seen(
-            &sites,
-            &extract_links(&message, &handler.finder),
-            &first.url,
-        ) {
+        if link_was_seen(&sites, &extract_links(&message), &first.url) {
             return Ok(Completed);
         }
 

@@ -42,13 +42,18 @@ impl super::Handler for GroupSourceHandler {
             _ => return Ok(Ignored),
         }
 
-        let action = continuous_action(
-            handler.bot.clone(),
-            6,
-            message.chat_id(),
-            message.from.clone(),
-            ChatAction::Typing,
-        );
+        let links = extract_links(&message);
+        let action = if links.is_empty() {
+            Some(continuous_action(
+                handler.bot.clone(),
+                6,
+                message.chat_id(),
+                message.from.clone(),
+                ChatAction::Typing,
+            ))
+        } else {
+            None
+        };
 
         let best_photo = find_best_photo(&photo_sizes).unwrap();
         let mut matches =
@@ -71,7 +76,6 @@ impl super::Handler for GroupSourceHandler {
 
         let sites = handler.sites.lock().await;
 
-        let links = extract_links(&message, &handler.finder);
         if wanted_matches
             .iter()
             .any(|m| link_was_seen(&sites, &links, &m.url()))
