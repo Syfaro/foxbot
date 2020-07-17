@@ -89,8 +89,21 @@ pub struct Config {
 
     // Others
     pub fautil_apitoken: String,
-    pub database: String,
     pub cache_images: Option<bool>,
+
+    // SQLite database
+    #[cfg(feature = "sqlite")]
+    pub database: String,
+
+    // Postgres database
+    #[cfg(feature = "postgres")]
+    pub db_host: String,
+    #[cfg(feature = "postgres")]
+    pub db_user: String,
+    #[cfg(feature = "postgres")]
+    pub db_pass: String,
+    #[cfg(feature = "postgres")]
+    pub db_name: String,
 }
 
 // MARK: Initialization
@@ -151,12 +164,57 @@ fn configure_tracing(collector: String) {
         .expect("Unable to set default tracing subscriber");
 }
 
+#[cfg(feature = "sqlite")]
 async fn run_migrations(database: &str) {
     let mut conn = rusqlite::Connection::open(database).expect("Unable to open database");
 
     migrations::runner()
         .run(&mut conn)
         .expect("Unable to migrate database");
+}
+
+#[cfg(feature = "postgres")]
+async fn run_migrations(host: &str, user: &str, pass: &str, name: &str) {
+    let dsn = format!(
+        "host={} user={} password={} dbname={}",
+        host, user, pass, name
+    );
+
+    let (mut client, conn) = tokio_postgres::connect(&dsn, tokio_postgres::NoTls)
+        .await
+        .expect("Unable to connect to database");
+
+    tokio::spawn(async move {
+        if let Err(e) = conn.await {
+            tracing::error!("Error in tokio-postgres migrations runner: {:?}", e);
+        }
+    });
+
+    migrations::runner()
+        .run_async(&mut client)
+        .await
+        .expect("Unable to migrate database");
+}
+
+#[cfg(feature = "sqlite")]
+async fn setup_db(config: &Config) -> String {
+    run_migrations(&config.database).await;
+    format!("file:{}", config.database)
+}
+
+#[cfg(feature = "postgres")]
+async fn setup_db(config: &Config) -> String {
+    run_migrations(
+        &config.db_host,
+        &config.db_user,
+        &config.db_pass,
+        &config.db_name,
+    )
+    .await;
+    format!(
+        "postgres://{}:{}@{}/{}",
+        config.db_user, config.db_pass, config.db_host, config.db_name
+    )
 }
 
 #[tokio::main]
@@ -173,9 +231,9 @@ async fn main() {
 
     configure_tracing(jaeger_collector);
 
-    run_migrations(&config.database).await;
+    let url = setup_db(&config).await;
 
-    let pool = quaint::pooled::Quaint::builder(&format!("file:{}", config.database))
+    let pool = quaint::pooled::Quaint::builder(&url)
         .expect("Unable to connect to database")
         .build();
 

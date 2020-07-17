@@ -484,7 +484,13 @@ impl Video {
             .build();
         let res = conn.insert(insert).await?;
 
-        let id = res.last_insert_id().unwrap();
+        let id = if cfg!(feature = "sqlite") {
+            res.last_insert_id().unwrap()
+        } else if cfg!(feature = "postgres") {
+            Self::lookup_url(&conn, &url).await?.unwrap().id as u64
+        } else {
+            unreachable!();
+        };
 
         Ok(id)
     }
@@ -568,7 +574,13 @@ impl CachedPost {
             .build();
         let res = conn.insert(insert).await?;
 
-        let id = res.last_insert_id().unwrap();
+        let id = if cfg!(feature = "sqlite") {
+            res.last_insert_id().unwrap()
+        } else if cfg!(feature = "postgres") {
+            Self::get(&conn, &post_url, thumb).await?.unwrap().id as u64
+        } else {
+            unreachable!();
+        };
 
         Ok(id)
     }
