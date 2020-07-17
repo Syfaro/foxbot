@@ -1,7 +1,10 @@
 use super::Status::*;
 use crate::models::{GroupConfig, GroupConfigKey};
 use crate::needs_field;
-use crate::utils::{continuous_action, find_best_photo, get_message, match_image, sort_results};
+use crate::utils::{
+    continuous_action, extract_links, find_best_photo, get_message, link_was_seen, match_image,
+    sort_results,
+};
 use anyhow::Context;
 use async_trait::async_trait;
 use tgbotapi::{requests::*, *};
@@ -66,13 +69,17 @@ impl super::Handler for GroupSourceHandler {
             return Ok(Completed);
         }
 
-        let links = super::channel_photo::extract_links(&message, &handler.finder);
+        let sites = handler.sites.lock().await;
+
+        let links = extract_links(&message, &handler.finder);
         if wanted_matches
             .iter()
-            .any(|m| super::channel_photo::link_was_seen(&links, &m.url()))
+            .any(|m| link_was_seen(&sites, &links, &m.url()))
         {
             return Ok(Completed);
         }
+
+        drop(sites);
 
         // Prevents memes from getting a million links in chat
         if wanted_matches.len() >= NOISY_SOURCE_COUNT {

@@ -46,6 +46,7 @@ fn get_file_ext(name: &str) -> Option<&str> {
 #[async_trait]
 pub trait Site {
     fn name(&self) -> &'static str;
+    fn url_id(&self, url: &str) -> Option<String>;
     async fn url_supported(&mut self, url: &str) -> bool;
     async fn get_images(
         &mut self,
@@ -116,6 +117,14 @@ impl Direct {
 impl Site for Direct {
     fn name(&self) -> &'static str {
         "direct link"
+    }
+
+    fn url_id(&self, url: &str) -> Option<String> {
+        if !Direct::EXTENSIONS.iter().any(|ext| url.ends_with(ext)) {
+            return None;
+        }
+
+        Some(url.to_owned())
     }
 
     async fn url_supported(&mut self, url: &str) -> bool {
@@ -224,9 +233,9 @@ struct E621Pool {
 impl E621 {
     pub fn new() -> Self {
         Self {
-            show: regex::Regex::new(r"https?://(?P<host>e(?:621|926)\.net)/(?:post/show/|posts/)(?P<id>\d+)(?:/(?P<tags>.+))?").unwrap(),
-            data: regex::Regex::new(r"https?://(?P<host>static\d+\.e(?:621|926)\.net)/data/(?:(?P<modifier>sample|preview)/)?[0-9a-f]{2}/[0-9a-f]{2}/(?P<md5>[0-9a-f]{32})\.(?P<ext>.+)").unwrap(),
-            pool: regex::Regex::new(r"https?://(?P<host>e(?:621|926)\.net)/pools/(?P<id>\d+)(?:/(?P<tags>.+))?").unwrap(),
+            show: regex::Regex::new(r"(?:https?://)?(?P<host>e(?:621|926)\.net)/(?:post/show/|posts/)(?P<id>\d+)(?:/(?P<tags>.+))?").unwrap(),
+            data: regex::Regex::new(r"(?:https?://)?(?P<host>static\d+\.e(?:621|926)\.net)/data/(?:(?P<modifier>sample|preview)/)?[0-9a-f]{2}/[0-9a-f]{2}/(?P<md5>[0-9a-f]{32})\.(?P<ext>.+)").unwrap(),
+            pool: regex::Regex::new(r"(?:https?://)?(?P<host>e(?:621|926)\.net)/pools/(?P<id>\d+)(?:/(?P<tags>.+))?").unwrap(),
 
             client: reqwest::Client::new(),
         }
@@ -291,6 +300,17 @@ impl E621 {
 impl Site for E621 {
     fn name(&self) -> &'static str {
         "e621"
+    }
+
+    fn url_id(&self, url: &str) -> Option<String> {
+        let captures = match self.show.captures(url) {
+            Some(captures) => captures,
+            _ => return None,
+        };
+
+        let sub_id = &captures["id"];
+
+        Some(format!("e621-{}", sub_id))
     }
 
     async fn url_supported(&mut self, url: &str) -> bool {
@@ -363,6 +383,20 @@ impl Twitter {
 impl Site for Twitter {
     fn name(&self) -> &'static str {
         "Twitter"
+    }
+
+    fn url_id(&self, url: &str) -> Option<String> {
+        let captures = match self.matcher.captures(url) {
+            Some(captures) => captures,
+            _ => return None,
+        };
+
+        let sub_id: u64 = match captures["id"].to_owned().parse() {
+            Ok(id) => id,
+            _ => return None,
+        };
+
+        Some(format!("Twitter-{}", sub_id))
     }
 
     async fn url_supported(&mut self, url: &str) -> bool {
@@ -460,6 +494,7 @@ pub struct FurAffinity {
     fapi: fuzzysearch::FuzzySearch,
     submission: scraper::Selector,
     client: reqwest::Client,
+    matcher: regex::Regex,
 }
 
 impl FurAffinity {
@@ -474,6 +509,10 @@ impl FurAffinity {
             fapi: fuzzysearch::FuzzySearch::new(util_api),
             submission: scraper::Selector::parse("#submissionImg").unwrap(),
             client: reqwest::Client::new(),
+            matcher: regex::Regex::new(
+                r#"(?:https?://)?(?:www\.)?furaffinity.net/(?:view|full)/(?P<id>\d+)\/?"#,
+            )
+            .unwrap(),
         }
     }
 
@@ -583,6 +622,20 @@ impl Site for FurAffinity {
         "FurAffinity"
     }
 
+    fn url_id(&self, url: &str) -> Option<String> {
+        let captures = match self.matcher.captures(url) {
+            Some(captures) => captures,
+            _ => return None,
+        };
+
+        let sub_id: i32 = match captures["id"].to_owned().parse() {
+            Ok(id) => id,
+            _ => return None,
+        };
+
+        Some(format!("FurAffinity-{}", sub_id))
+    }
+
     async fn url_supported(&mut self, url: &str) -> bool {
         url.contains("furaffinity.net/view/")
             || url.contains("furaffinity.net/full/")
@@ -637,6 +690,17 @@ impl Mastodon {
 impl Site for Mastodon {
     fn name(&self) -> &'static str {
         "Mastodon"
+    }
+
+    fn url_id(&self, url: &str) -> Option<String> {
+        let captures = match self.matcher.captures(url) {
+            Some(captures) => captures,
+            _ => return None,
+        };
+
+        let sub_id = &captures["id"];
+
+        Some(format!("Mastodon-{}", sub_id))
     }
 
     async fn url_supported(&mut self, url: &str) -> bool {
@@ -732,6 +796,20 @@ impl Weasyl {
 impl Site for Weasyl {
     fn name(&self) -> &'static str {
         "Weasyl"
+    }
+
+    fn url_id(&self, url: &str) -> Option<String> {
+        let captures = match self.matcher.captures(url) {
+            Some(captures) => captures,
+            _ => return None,
+        };
+
+        let sub_id: i32 = match captures["id"].to_owned().parse() {
+            Ok(id) => id,
+            _ => return None,
+        };
+
+        Some(format!("Weasyl-{}", sub_id))
     }
 
     async fn url_supported(&mut self, url: &str) -> bool {
@@ -944,6 +1022,20 @@ impl Inkbunny {
 impl Site for Inkbunny {
     fn name(&self) -> &'static str {
         "Inkbunny"
+    }
+
+    fn url_id(&self, url: &str) -> Option<String> {
+        let captures = match self.matcher.captures(url) {
+            Some(captures) => captures,
+            _ => return None,
+        };
+
+        let sub_id: i32 = match captures["id"].to_owned().parse() {
+            Ok(id) => id,
+            _ => return None,
+        };
+
+        Some(format!("Inkbunny-{}", sub_id))
     }
 
     async fn url_supported(&mut self, url: &str) -> bool {
