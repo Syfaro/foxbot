@@ -31,7 +31,7 @@ pub fn migration() -> String {
     "
         CREATE TABLE group_config (
             id SERIAL PRIMARY KEY,
-            chat_id INTEGER NOT NULL,
+            chat_id BIGINT NOT NULL,
             name TEXT NOT NULL,
             value TEXT NOT NULL
         );
@@ -40,7 +40,7 @@ pub fn migration() -> String {
 
         CREATE TABLE user_group_config (
             id SERIAL PRIMARY KEY,
-            chat_id INTEGER NOT NULL,
+            chat_id BIGINT NOT NULL,
             user_id INTEGER NOT NULL,
             name TEXT NOT NULL,
             value TEXT NOT NULL

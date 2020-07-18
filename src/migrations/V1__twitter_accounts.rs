@@ -36,6 +36,6 @@ pub fn migration() -> String {
             user_id INTEGER UNIQUE,
             request_key TEXT NOT NULL,
             request_secret TEXT NOT NULL
-        )
+        );
     ".to_string()
 }

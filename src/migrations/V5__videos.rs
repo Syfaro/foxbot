@@ -24,6 +24,6 @@ pub fn migration() -> String {
             source TEXT NOT NULL,
             url TEXT UNIQUE NOT NULL,
             mp4_url TEXT UNIQUE
-        )
+        );
     ".to_string()
 }
