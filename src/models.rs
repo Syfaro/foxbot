@@ -473,6 +473,7 @@ impl Video {
     }
 
     /// Insert a new URL into the database and return the ID.
+    #[cfg(feature = "sqlite")]
     pub async fn insert_url(
         conn: &PooledConnection,
         url: &str,
@@ -484,13 +485,26 @@ impl Video {
             .build();
         let res = conn.insert(insert).await?;
 
-        let id = if cfg!(feature = "sqlite") {
-            res.last_insert_id().unwrap()
-        } else if cfg!(feature = "postgres") {
-            Self::lookup_url(&conn, &url).await?.unwrap().id as u64
-        } else {
-            unreachable!();
-        };
+        let id = res.last_insert_id().unwrap();
+
+        Ok(id)
+    }
+
+    /// Insert a new URL into the database and return the ID.
+    #[cfg(feature = "postgres")]
+    pub async fn insert_url(
+        conn: &PooledConnection,
+        url: &str,
+        source: &str,
+    ) -> anyhow::Result<u64> {
+        let insert = Insert::single_into("videos")
+            .value("url", url)
+            .value("source", source)
+            .build()
+            .returning(vec!["id"]);
+        let res = conn.insert(insert).await?;
+
+        let id = res.into_single()?["id"].as_i64().unwrap() as u64;
 
         Ok(id)
     }
@@ -558,6 +572,7 @@ impl CachedPost {
         }))
     }
 
+    #[cfg(feature = "sqlite")]
     pub async fn save(
         conn: &PooledConnection,
         post_url: &str,
@@ -574,13 +589,30 @@ impl CachedPost {
             .build();
         let res = conn.insert(insert).await?;
 
-        let id = if cfg!(feature = "sqlite") {
-            res.last_insert_id().unwrap()
-        } else if cfg!(feature = "postgres") {
-            Self::get(&conn, &post_url, thumb).await?.unwrap().id as u64
-        } else {
-            unreachable!();
-        };
+        let id = res.last_insert_id().unwrap();
+
+        Ok(id)
+    }
+
+    #[cfg(feature = "postgres")]
+    pub async fn save(
+        conn: &PooledConnection,
+        post_url: &str,
+        cdn_url: &str,
+        thumb: bool,
+        dimensions: (u32, u32),
+    ) -> anyhow::Result<u64> {
+        let insert = Insert::single_into("cached_post")
+            .value("post_url", post_url)
+            .value("thumb", thumb)
+            .value("cdn_url", cdn_url)
+            .value("width", dimensions.0 as i64)
+            .value("height", dimensions.1 as i64)
+            .build()
+            .returning(vec!["id"]);
+        let res = conn.insert(insert).await?;
+
+        let id = res.into_single()?["id"].as_i64().unwrap() as u64;
 
         Ok(id)
     }
