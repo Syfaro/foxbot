@@ -1,6 +1,7 @@
-use barrel::{types, Migration, backend::Sqlite};
-
+#[cfg(feature = "sqlite")]
 pub fn migration() -> String {
+    use barrel::{types, Migration, backend::Sqlite};
+
     let mut m = Migration::new();
 
     m.create_table("cached_post", |t| {
@@ -15,4 +16,20 @@ pub fn migration() -> String {
     });
 
     m.make::<Sqlite>()
+}
+
+#[cfg(feature = "postgres")]
+pub fn migration() -> String {
+    "
+        CREATE TABLE cached_post (
+            id SERIAL PRIMARY KEY,
+            post_url TEXT NOT NULL,
+            thumb BOOLEAN NOT NULL,
+            cdn_url TEXT NOT NULL,
+            width INTEGER NOT NULL,
+            height INTEGER NOT NULL
+        );
+
+        CREATE UNIQUE INDEX ON cached_post (post_url, thumb);
+    ".to_string()
 }

@@ -1,6 +1,7 @@
-use barrel::{types, Migration, backend::Sqlite};
-
+#[cfg(feature = "sqlite")]
 pub fn migration() -> String {
+    use barrel::{types, Migration, backend::Sqlite};
+
     let mut m = Migration::new();
 
     m.create_table("group_config", |t| {
@@ -23,4 +24,28 @@ pub fn migration() -> String {
     });
 
     m.make::<Sqlite>()
+}
+
+#[cfg(feature = "postgres")]
+pub fn migration() -> String {
+    "
+        CREATE TABLE group_config (
+            id SERIAL PRIMARY KEY,
+            chat_id BIGINT NOT NULL,
+            name TEXT NOT NULL,
+            value TEXT NOT NULL
+        );
+
+        CREATE UNIQUE INDEX ON group_config (chat_id, name);
+
+        CREATE TABLE user_group_config (
+            id SERIAL PRIMARY KEY,
+            chat_id BIGINT NOT NULL,
+            user_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            value TEXT NOT NULL
+        );
+
+        CREATE UNIQUE INDEX ON user_group_config (chat_id, user_id, name);
+    ".to_string()
 }

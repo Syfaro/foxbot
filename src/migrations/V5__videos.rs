@@ -1,6 +1,7 @@
-use barrel::{types, Migration, backend::Sqlite};
-
+#[cfg(feature = "sqlite")]
 pub fn migration() -> String {
+    use barrel::{types, Migration, backend::Sqlite};
+
     let mut m = Migration::new();
 
     m.create_table("videos", |t| {
@@ -12,4 +13,17 @@ pub fn migration() -> String {
     });
 
     m.make::<Sqlite>()
+}
+
+#[cfg(feature = "postgres")]
+pub fn migration() -> String {
+    "
+        CREATE TABLE videos (
+            id SERIAL PRIMARY KEY,
+            processed BOOLEAN NOT NULL DEFAULT FALSE,
+            source TEXT NOT NULL,
+            url TEXT UNIQUE NOT NULL,
+            mp4_url TEXT UNIQUE
+        );
+    ".to_string()
 }
