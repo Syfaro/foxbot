@@ -92,19 +92,21 @@ pub struct Config {
     pub size_images: Option<bool>,
     pub cache_images: Option<bool>,
 
+    redis_dsn: String,
+
     // SQLite database
     #[cfg(feature = "sqlite")]
-    pub database: String,
+    database: String,
 
     // Postgres database
     #[cfg(feature = "postgres")]
-    pub db_host: String,
+    db_host: String,
     #[cfg(feature = "postgres")]
-    pub db_user: String,
+    db_user: String,
     #[cfg(feature = "postgres")]
-    pub db_pass: String,
+    db_pass: String,
     #[cfg(feature = "postgres")]
-    pub db_name: String,
+    db_name: String,
 }
 
 // MARK: Initialization
@@ -326,6 +328,17 @@ async fn main() {
     );
     let s3 = rusoto_s3::S3Client::new_with(client, provider, region);
 
+    use redis::IntoConnectionInfo;
+    let redis = redis::aio::ConnectionManager::new(
+        config
+            .redis_dsn
+            .clone()
+            .into_connection_info()
+            .expect("Unable to parse Redis DSN"),
+    )
+    .await
+    .expect("Unable to open Redis connection");
+
     let handler = Arc::new(MessageHandler {
         bot_user,
         langs,
@@ -341,6 +354,7 @@ async fn main() {
 
         sites: Mutex::new(sites),
         conn: pool,
+        redis,
     });
 
     let _guard = if let Some(dsn) = config.sentry_dsn {
@@ -625,6 +639,7 @@ pub struct MessageHandler {
 
     // Storage
     pub conn: quaint::pooled::Quaint,
+    pub redis: redis::aio::ConnectionManager,
 }
 
 impl MessageHandler {
@@ -711,34 +726,110 @@ impl MessageHandler {
             .map(|from| from.language_code.clone())
             .flatten();
 
+        use redis::AsyncCommands;
+        let mut conn = self.redis.clone();
+        let key_list = format!("errors:{}", message.chat.id);
+        let key_message_id = format!("errors:message-id:{}", message.chat.id);
+        let recent_error_count: i32 = conn.llen(&key_list).await.ok().unwrap_or(0);
+
+        if let Err(e) = conn.lpush::<_, _, ()>(&key_list, u.to_string()).await {
+            tracing::error!("unable to insert error uuid in redis: {:?}", e);
+            sentry::capture_error(&e);
+        };
+
+        if let Err(e) = conn.expire::<_, ()>(&key_list, 60 * 5).await {
+            tracing::error!("unable to set redis error expire: {:?}", e);
+            sentry::capture_error(&e);
+        }
+
+        if let Err(e) = conn.expire::<_, ()>(&key_message_id, 60 * 5).await {
+            tracing::error!("unable to set redis error message id expire: {:?}", e);
+            sentry::capture_error(&e);
+        }
+
         let msg = self
             .get_fluent_bundle(lang_code.as_deref(), |bundle| {
                 if u.is_nil() {
-                    utils::get_message(&bundle, "error-generic", None)
+                    if recent_error_count > 0 {
+                        let mut args = fluent::FluentArgs::new();
+                        args.insert("count", recent_error_count.into());
+
+                        utils::get_message(&bundle, "error-generic-count", Some(args))
+                    } else {
+                        utils::get_message(&bundle, "error-generic", None)
+                    }
                 } else {
                     let f = format!("`{}`", u.to_string());
 
                     let mut args = fluent::FluentArgs::new();
                     args.insert("uuid", fluent::FluentValue::from(f));
 
-                    utils::get_message(&bundle, "error-uuid", Some(args))
+                    let name = if recent_error_count > 0 {
+                        args.insert("count", recent_error_count.into());
+
+                        "error-uuid-count"
+                    } else {
+                        "error-uuid"
+                    };
+
+                    utils::get_message(&bundle, name, Some(args))
                 }
             })
             .await;
 
-        let send_message = SendMessage {
-            chat_id: message.chat_id(),
-            text: msg.unwrap(),
-            parse_mode: Some(ParseMode::Markdown),
-            reply_to_message_id: Some(message.message_id),
-            ..Default::default()
-        };
+        if recent_error_count > 0 {
+            let message_id: i32 = match conn.get(&key_message_id).await {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("unable to get error message-id to edit: {:?}", e);
+                    utils::with_user_scope(message.from.as_ref(), None, || {
+                        sentry::capture_error(&e);
+                    });
 
-        if let Err(e) = self.make_request(&send_message).await {
-            tracing::error!("unable to send error message to user: {:?}", e);
-            utils::with_user_scope(message.from.as_ref(), None, || {
-                sentry::capture_error(&e);
-            });
+                    return;
+                }
+            };
+
+            let edit_message = EditMessageText {
+                chat_id: message.chat_id(),
+                message_id: Some(message_id),
+                text: msg.unwrap(),
+                parse_mode: Some(ParseMode::Markdown),
+                ..Default::default()
+            };
+
+            if let Err(e) = self.make_request(&edit_message).await {
+                tracing::error!("unable to edit error message to user: {:?}", e);
+                utils::with_user_scope(message.from.as_ref(), None, || {
+                    sentry::capture_error(&e);
+                });
+            }
+        } else {
+            let send_message = SendMessage {
+                chat_id: message.chat_id(),
+                text: msg.unwrap(),
+                parse_mode: Some(ParseMode::Markdown),
+                reply_to_message_id: Some(message.message_id),
+                ..Default::default()
+            };
+
+            match self.make_request(&send_message).await {
+                Ok(resp) => {
+                    if let Err(e) = conn
+                        .set_ex::<_, _, ()>(key_message_id, resp.message_id, 60 * 5)
+                        .await
+                    {
+                        tracing::error!("unable to set redis error message id: {:?}", e);
+                        sentry::capture_error(&e);
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("unable to send error message to user: {:?}", e);
+                    utils::with_user_scope(message.from.as_ref(), None, || {
+                        sentry::capture_error(&e);
+                    });
+                }
+            }
         }
     }
 
