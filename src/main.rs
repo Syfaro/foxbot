@@ -87,8 +87,9 @@ pub struct Config {
     pub s3_bucket: String,
     pub s3_url: String,
 
-    // Others
     pub fautil_apitoken: String,
+
+    pub size_images: Option<bool>,
     pub cache_images: Option<bool>,
 
     // SQLite database
