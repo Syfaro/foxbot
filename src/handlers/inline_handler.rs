@@ -390,18 +390,22 @@ async fn build_image_result(
         .await
         .context("unable to check out database")?;
 
-    let result = match handler.config.cache_images {
-        Some(cache) if cache => {
-            cache_post(
-                &conn,
-                &handler.s3,
-                &handler.config.s3_bucket,
-                &handler.config.s3_url,
-                &result,
-            )
-            .await?
-        }
-        _ => result,
+    // Check if we should cache images, top priority option. If not, check if
+    // we should size them (this should probably always be true). And finally,
+    // if no other options are set we should pass the result through untouched.
+    let result = if handler.config.cache_images.unwrap_or(false) {
+        cache_post(
+            &conn,
+            &handler.s3,
+            &handler.config.s3_bucket,
+            &handler.config.s3_url,
+            &result,
+        )
+        .await?
+    } else if handler.config.size_images.unwrap_or(false) {
+        size_post(&result).await?
+    } else {
+        result
     };
 
     let mut photo = InlineQueryResult::photo(

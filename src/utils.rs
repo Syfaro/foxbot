@@ -68,6 +68,13 @@ pub struct ImageInfo {
     dimensions: (u32, u32),
 }
 
+/// Processes an image for inline query results.
+///
+/// * Checks if URL already exists in cache, if so, returns that
+/// * Downloads image
+/// * Converts image to JPEG if not already and resizes if thumbnail
+/// * Uploads to S3 bucket
+/// * Saves in cache
 #[tracing::instrument(skip(conn, s3, s3_bucket, s3_url))]
 async fn upload_image(
     conn: &quaint::pooled::PooledConnection,
@@ -142,6 +149,24 @@ async fn upload_image(
     })
 }
 
+/// Download URL from post and calculate image dimensions, returning a new
+/// PostInfo.
+pub async fn size_post(post: &crate::PostInfo) -> anyhow::Result<crate::PostInfo> {
+    use image::GenericImageView;
+
+    let data = reqwest::get(&post.url).await?.bytes().await?;
+    let im = image::load_from_memory(&data)?;
+    let dimensions = im.dimensions();
+
+    Ok(crate::PostInfo {
+        image_dimensions: Some(dimensions),
+        ..post.to_owned()
+    })
+}
+
+/// Download URL from post, calculate image dimensions, convert to JPEG and
+/// generate thumbnail, and upload to S3 bucket. Returns a new PostInfo with
+/// the updated URLs and dimensions.
 pub async fn cache_post(
     conn: &quaint::pooled::PooledConnection,
     s3: &rusoto_s3::S3Client,
