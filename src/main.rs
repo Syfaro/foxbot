@@ -112,12 +112,11 @@ pub struct Config {
 /// Configure tracing with Jaeger.
 fn configure_tracing(collector: String) {
     use opentelemetry::{
-        api::{KeyValue, Provider, Sampler},
-        exporter::trace::jaeger,
-        sdk::Config as TelemConfig,
+        api::{KeyValue, Provider},
+        sdk::{Config as TelemConfig, Sampler},
     };
-    use std::net::ToSocketAddrs;
     use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::prelude::*;
 
     let env = if cfg!(debug_assertions) {
         "debug"
@@ -125,44 +124,44 @@ fn configure_tracing(collector: String) {
         "release"
     };
 
-    let addr = collector
-        .to_socket_addrs()
-        .expect("Unable to resolve JAEGER_COLLECTOR")
-        .next()
-        .expect("Unable to find JAEGER_COLLECTOR");
+    let fmt_layer = tracing_subscriber::fmt::layer();
+    let filter_layer = tracing_subscriber::EnvFilter::try_from_default_env()
+        .or_else(|_| tracing_subscriber::EnvFilter::try_new("info"))
+        .unwrap();
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .finish();
+    let registry = tracing_subscriber::registry()
+        .with(filter_layer)
+        .with(fmt_layer);
 
-    let exporter = jaeger::Exporter::builder()
-        .with_collector_endpoint(addr)
-        .with_process(jaeger::Process {
-            service_name: "foxbot",
+    let exporter = opentelemetry_jaeger::Exporter::builder()
+        .with_agent_endpoint(collector)
+        .with_process(opentelemetry_jaeger::Process {
+            service_name: "foxbot".to_string(),
             tags: vec![
                 KeyValue::new("environment", env),
                 KeyValue::new("version", env!("CARGO_PKG_VERSION")),
             ],
         })
-        .init();
+        .init()
+        .expect("Unable to create jaeger exporter");
 
     let provider = opentelemetry::sdk::Provider::builder()
-        .with_exporter(exporter)
+        .with_simple_exporter(exporter)
         .with_config(TelemConfig {
-            default_sampler: Sampler::Always,
+            default_sampler: Box::new(Sampler::Always),
             ..Default::default()
         })
         .build();
 
     opentelemetry::global::set_provider(provider);
 
-    let tracer = opentelemetry::global::trace_provider().get_tracer("telegram");
+    let tracer = opentelemetry::global::trace_provider().get_tracer("foxbot");
+    let telem_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+    let registry = registry.with(telem_layer);
 
-    let telem_layer = tracing_opentelemetry::OpentelemetryLayer::with_tracer(tracer);
-    let fmt_layer = tracing_subscriber::fmt::Layer::default();
-
-    let subscriber = tracing_subscriber::Registry::default()
-        .with(telem_layer)
-        .with(fmt_layer);
-
-    tracing::subscriber::set_global_default(subscriber)
-        .expect("Unable to set default tracing subscriber");
+    registry.init();
 }
 
 #[cfg(feature = "sqlite")]
@@ -187,7 +186,7 @@ async fn run_migrations(host: &str, user: &str, pass: &str, name: &str) {
 
     tokio::spawn(async move {
         if let Err(e) = conn.await {
-            tracing::error!("Error in tokio-postgres migrations runner: {:?}", e);
+            tracing::error!("error in tokio-postgres migrations runner: {:?}", e);
         }
     });
 
@@ -357,7 +356,7 @@ async fn main() {
     };
 
     tracing::info!(
-        "Sentry enabled: {}",
+        "sentry enabled: {}",
         _guard
             .as_ref()
             .map(|sentry| sentry.is_enabled())
@@ -408,7 +407,7 @@ async fn handle_request(
 
     let now = std::time::Instant::now();
 
-    tracing::trace!("got HTTP request: {} {}", req.method(), req.uri().path());
+    tracing::trace!(method = ?req.method(), path = req.uri().path(), "got HTTP request");
 
     match (req.method(), req.uri().path()) {
         (&hyper::Method::POST, path) if path == secret => {
@@ -416,12 +415,12 @@ async fn handle_request(
             let body = req.into_body();
             let bytes = hyper::body::to_bytes(body)
                 .await
-                .expect("Unable to read body bytes");
+                .expect("unable to read body bytes");
 
             let update: Update = match serde_json::from_slice(&bytes) {
                 Ok(update) => update,
                 Err(err) => {
-                    tracing::error!(?err, "error decoding incoming json");
+                    tracing::error!("error decoding incoming json: {:?}", err);
                     let mut resp = Response::default();
                     *resp.status_mut() = StatusCode::BAD_REQUEST;
                     return Ok(resp);
@@ -489,7 +488,7 @@ async fn receive_webhook(host: String, secret: String, handler: Arc<MessageHandl
         use tokio::signal;
 
         let mut stream = signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("Unable to create terminate signal stream");
+            .expect("unable to create terminate signal stream");
 
         tokio::select! {
             _ = stream.recv() => shutdown_tx.send(true),
@@ -501,13 +500,13 @@ async fn receive_webhook(host: String, secret: String, handler: Arc<MessageHandl
     tokio::spawn(async move {
         use tokio::signal;
 
-        signal::ctrl_c().await.expect("Unable to await ctrl-c");
-        shutdown_tx.send(true).expect("Unable to send shutdown");
+        signal::ctrl_c().await.expect("unable to await ctrl-c");
+        shutdown_tx.send(true).expect("unable to send shutdown");
     });
 
     let graceful = server.with_graceful_shutdown(async {
         shutdown_rx.await.ok();
-        tracing::error!("Shutting down HTTP server");
+        tracing::error!("shutting down HTTP server");
     });
 
     if let Err(e) = graceful.await {
@@ -520,7 +519,7 @@ async fn receive_webhook(host: String, secret: String, handler: Arc<MessageHandl
             break;
         }
 
-        tracing::warn!("Waiting for {} requests to complete before shutdown", count);
+        tracing::warn!("waiting for {} requests to complete before shutdown", count);
         tokio::time::delay_for(std::time::Duration::from_millis(200)).await;
     }
 }
@@ -537,11 +536,11 @@ async fn poll_updates(bot: Arc<Telegram>, handler: Arc<MessageHandler>) {
         use tokio::signal;
 
         let mut stream = signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("Unable to create terminate signal stream");
+            .expect("unable to create terminate signal stream");
 
         tokio::select! {
-            _ = stream.recv() => shutdown_tx.send(true).await.expect("Unable to send shutdown"),
-            _ = signal::ctrl_c() => shutdown_tx.send(true).await.expect("Unable to send shutdown"),
+            _ = stream.recv() => shutdown_tx.send(true).await.expect("unable to send shutdown"),
+            _ = signal::ctrl_c() => shutdown_tx.send(true).await.expect("unable to send shutdown"),
         };
     });
 
@@ -549,11 +548,11 @@ async fn poll_updates(bot: Arc<Telegram>, handler: Arc<MessageHandler>) {
     tokio::spawn(async move {
         use tokio::signal;
 
-        signal::ctrl_c().await.expect("Unable to await ctrl-c");
+        signal::ctrl_c().await.expect("unable to await ctrl-c");
         shutdown_tx
             .send(true)
             .await
-            .expect("Unable to send shutdown");
+            .expect("unable to send shutdown");
     });
 
     let waiting = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -561,14 +560,14 @@ async fn poll_updates(bot: Arc<Telegram>, handler: Arc<MessageHandler>) {
     loop {
         let updates = tokio::select! {
             _ = shutdown_rx.recv() => {
-                tracing::error!("Got shutdown request");
+                tracing::error!("got shutdown request");
                 loop {
                     let count = waiting.load(std::sync::atomic::Ordering::SeqCst);
                     if count == 0 {
                         break;
                     }
 
-                    tracing::warn!("Finishing {} requests before shutdown", count);
+                    tracing::warn!("finishing {} requests before shutdown", count);
                     tokio::time::delay_for(std::time::Duration::from_millis(200)).await;
                 }
                 break;
@@ -639,25 +638,25 @@ impl MessageHandler {
             "en-US"
         };
 
-        tracing::trace!("looking up language bundle for {}", requested);
+        tracing::trace!(lang = requested, "looking up language bundle");
 
         {
             let lock = self.best_lang.read().await;
             if lock.contains_key(requested) {
-                let bundle = lock.get(requested).expect("Should have contained");
+                let bundle = lock.get(requested).expect("should have contained");
                 return callback(bundle);
             }
         }
 
-        tracing::info!("got new language {}, building bundle", requested);
+        tracing::info!(lang = requested, "got new language, building bundle");
 
         let requested_locale = requested
             .parse::<LanguageIdentifier>()
-            .expect("Requested locale is invalid");
+            .expect("requested locale is invalid");
         let requested_locales: Vec<LanguageIdentifier> = vec![requested_locale];
         let default_locale = L10N_LANGS[0]
             .parse::<LanguageIdentifier>()
-            .expect("Unable to parse langid");
+            .expect("unable to parse langid");
         let available: Vec<LanguageIdentifier> = self.langs.keys().map(Clone::clone).collect();
         let resolved_locales = fluent_langneg::negotiate_languages(
             &requested_locales,
@@ -666,7 +665,7 @@ impl MessageHandler {
             fluent_langneg::NegotiationStrategy::Filtering,
         );
 
-        let current_locale = resolved_locales.get(0).expect("No locales were available");
+        let current_locale = resolved_locales.get(0).expect("no locales were available");
 
         let mut bundle = fluent::concurrent::FluentBundle::<fluent::FluentResource>::new(
             resolved_locales.clone(),
@@ -674,14 +673,14 @@ impl MessageHandler {
         let resources = self
             .langs
             .get(current_locale)
-            .expect("Missing known locale");
+            .expect("missing known locale");
 
         for resource in resources {
             let resource = fluent::FluentResource::try_new(resource.to_string())
-                .expect("Unable to parse FTL string");
+                .expect("unable to parse FTL string");
             bundle
                 .add_resource(resource)
-                .expect("Unable to add resource");
+                .expect("unable to add resource");
         }
 
         bundle.set_use_isolating(false);
@@ -692,7 +691,7 @@ impl MessageHandler {
         }
 
         let lock = self.best_lang.read().await;
-        let bundle = lock.get(requested).expect("Value just inserted is missing");
+        let bundle = lock.get(requested).expect("value just inserted is missing");
         callback(bundle)
     }
 
@@ -822,10 +821,15 @@ impl MessageHandler {
 
     #[tracing::instrument(skip(self, update))]
     async fn handle_update(&self, update: Update) {
-        let user = update
-            .message
-            .as_ref()
-            .and_then(|message| message.from.as_ref());
+        sentry::configure_scope(|mut scope| {
+            utils::add_sentry_tracing(&mut scope);
+        });
+
+        let user = utils::user_from_update(&update);
+
+        if let Some(user) = user {
+            tracing::trace!(user_id = user.id, "found user associated with update");
+        }
 
         let command = update
             .message
@@ -833,7 +837,7 @@ impl MessageHandler {
             .and_then(|message| message.get_command());
 
         for handler in &self.handlers {
-            tracing::trace!(name = handler.name(), "running handler");
+            tracing::trace!(handler = handler.name(), "running handler");
 
             match handler.handle(&self, &update, command.as_ref()).await {
                 Ok(status) if status == handlers::Status::Completed => {
@@ -841,9 +845,7 @@ impl MessageHandler {
                     break;
                 }
                 Err(e) => {
-                    tracing::error!("Error handling update: {:#?}", e);
-
-                    tracing::error!("{:?}", e.backtrace());
+                    tracing::error!("error handling update: {:?}", e);
 
                     let mut tags = vec![("handler", handler.name().to_string())];
                     if let Some(user) = user {

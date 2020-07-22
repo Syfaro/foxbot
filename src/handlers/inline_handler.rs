@@ -200,8 +200,8 @@ impl super::Handler for InlineHandler {
         let links: Vec<_> = handler.finder.links(&inline.query).collect();
         let mut results: Vec<PostInfo> = Vec::new();
 
-        tracing::info!("got query: {}", inline.query);
-        tracing::debug!("found links: {:?}", links);
+        tracing::info!(query = ?inline.query, "got query");
+        tracing::debug!(?links, "found links");
 
         let influx = handler.influx.clone();
         // Lock sites in order to find which of these links are usable
@@ -369,7 +369,7 @@ async fn process_result(
         }
         "gif" => Ok(Some(build_gif_result(&result, thumb_url, &keyboard))),
         other => {
-            tracing::warn!("Got unusable type: {}", other);
+            tracing::warn!(file_type = other, "got unusable type");
             Ok(None)
         }
     }
@@ -411,7 +411,7 @@ async fn build_image_result(
     let mut photo = InlineQueryResult::photo(
         generate_id(),
         result.url.to_owned(),
-        result.thumb.clone().unwrap().to_owned(),
+        result.thumb.clone().unwrap(),
     );
     photo.reply_markup = Some(keyboard.clone());
 

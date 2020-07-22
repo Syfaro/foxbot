@@ -87,7 +87,10 @@ impl super::Handler for GroupSourceHandler {
 
         // Prevents memes from getting a million links in chat
         if wanted_matches.len() >= NOISY_SOURCE_COUNT {
-            tracing::trace!("had too many matches, ignoring");
+            tracing::trace!(
+                count = wanted_matches.len(),
+                "had too many matches, ignoring"
+            );
             return Ok(Completed);
         }
 
