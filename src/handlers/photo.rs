@@ -60,7 +60,10 @@ impl super::Handler for PhotoHandler {
             .skip(1)
             .take_while(|m| m.distance.unwrap() == first.distance.unwrap())
             .collect();
-        tracing::debug!("match has distance of {}", first.distance.unwrap());
+        tracing::debug!(
+            distance = first.distance.unwrap(),
+            "discovered match distance"
+        );
 
         let name = if first.distance.unwrap() < 5 {
             "reverse-good-result"

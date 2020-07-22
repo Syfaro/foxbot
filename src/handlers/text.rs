@@ -33,7 +33,7 @@ impl super::Handler for TextHandler {
             return Ok(Ignored);
         }
 
-        tracing::trace!("checking if message was Twitter code");
+        tracing::trace!(?text, "checking if message was Twitter code");
 
         let conn = handler
             .conn
@@ -49,7 +49,7 @@ impl super::Handler for TextHandler {
             _ => return Ok(Ignored),
         };
 
-        tracing::trace!("we had waiting Twitter code");
+        tracing::trace!(?text, "we had waiting Twitter code");
 
         let request_token = egg_mode::KeyPair::new(row.request_key, row.request_secret);
 

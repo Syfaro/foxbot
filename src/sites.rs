@@ -172,14 +172,14 @@ impl Site for Direct {
         {
             tracing::trace!("got result from reverse search");
             if let Some(post) = result {
-                tracing::debug!("found ID of post matching: {}", post.id);
+                tracing::debug!(id = post.id, "found ID of post matching");
                 source_link = Some(post.url());
                 source_name = Some(post.site_name());
             } else {
                 tracing::trace!("no posts matched");
             }
         } else {
-            tracing::debug!("reverse search timed out");
+            tracing::warn!("reverse search timed out");
         }
 
         Ok(Some(vec![PostInfo {
@@ -245,17 +245,17 @@ impl E621 {
         let captures = self.pool.captures(url).unwrap();
         let id = &captures["id"];
 
-        tracing::trace!("Loading e621 pool {}", id);
+        tracing::trace!(pool_id = id, "loading e621 pool");
 
         let endpoint = format!("https://e621.net/pools/{}.json", id);
         let resp: E621Pool = self.load(&endpoint).await?;
 
-        tracing::trace!("e621 pool had {} items", resp.post_count);
+        tracing::trace!(count = resp.post_count, "discovered e621 pool items");
 
         let mut posts = Vec::with_capacity(resp.post_count);
 
         for post_id in resp.post_ids.iter().rev().take(10).rev() {
-            tracing::trace!("Loading e621 post {} as part of pool {}", post_id, id);
+            tracing::trace!(pool_id = id, post_id, "loading e621 post as part of pool");
 
             let url = format!("https://e621.net/posts/{}.json", post_id);
             let post: E621Resp = self.load(&url).await?;
@@ -977,7 +977,7 @@ impl Inkbunny {
             .join(",");
 
         let submissions = loop {
-            tracing::debug!(?ids, "Attempting to load Inkbunny submissions");
+            tracing::debug!(?ids, "loading Inkbunny submissions");
             let sid = self.get_sid().await?;
 
             let resp: InkbunnyResponse<InkbunnySubmissions> = self

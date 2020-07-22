@@ -38,12 +38,12 @@ impl super::Handler for CommandHandler {
         if let Some(username) = command.username {
             let bot_username = handler.bot_user.username.as_ref().unwrap();
             if username.to_lowercase() != bot_username.to_lowercase() {
-                tracing::debug!("got command for other bot: {}", username);
+                tracing::debug!(?username, "got command for other bot");
                 return Ok(Ignored);
             }
         }
 
-        tracing::debug!("got command {}", command.name);
+        tracing::debug!(command = ?command.name, "got command");
 
         match command.name.as_ref() {
             "/help" | "/start" => handler.handle_welcome(message, &command.name).await,
@@ -55,7 +55,7 @@ impl super::Handler for CommandHandler {
             "/groupsource" => self.enable_group_source(&handler, message).await,
             "/grouppreviews" => self.group_nopreviews(&handler, &message).await,
             _ => {
-                tracing::info!("unknown command: {}", command.name);
+                tracing::info!(command = ?command.name, "unknown command");
                 return Ok(Ignored);
             }
         }?;
