@@ -312,6 +312,7 @@ async fn main() {
         Box::new(handlers::TextHandler),
         Box::new(handlers::ErrorReplyHandler::new()),
         Box::new(handlers::SettingsHandler),
+        Box::new(handlers::ErrorCleanup),
     ];
 
     let region = rusoto_core::Region::Custom {
@@ -731,6 +732,13 @@ impl MessageHandler {
             text: msg.unwrap(),
             parse_mode: Some(ParseMode::Markdown),
             reply_to_message_id: Some(message.message_id),
+            reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
+                inline_keyboard: vec![vec![InlineKeyboardButton {
+                    text: "Delete".to_string(),
+                    callback_data: Some("delete".to_string()),
+                    ..Default::default()
+                }]],
+            })),
             ..Default::default()
         };
 
