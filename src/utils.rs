@@ -445,6 +445,7 @@ pub async fn match_image(
         .context("unable to download file from telegram")?;
 
     let hash = tokio::task::spawn_blocking(move || fuzzysearch::hash_bytes(&data))
+        .instrument(tracing::debug_span!("hash_bytes"))
         .await
         .context("unable to spawn blocking")?
         .context("unable to hash bytes")?;
