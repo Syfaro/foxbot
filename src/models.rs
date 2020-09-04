@@ -407,6 +407,8 @@ pub struct Video {
     pub url: String,
     /// The URL of the converted video.
     pub mp4_url: Option<String>,
+    pub chat_id: Option<i64>,
+    pub message_id: Option<i32>,
 }
 
 impl Video {
@@ -418,6 +420,8 @@ impl Video {
             .column("source")
             .column("url")
             .column("mp4_url")
+            .column("chat_id")
+            .column("message_id")
             .so_that("id".equals(id));
         let rows = conn
             .select(select)
@@ -438,6 +442,8 @@ impl Video {
             source: row["source"].to_string().unwrap(),
             url: row["url"].to_string().unwrap(),
             mp4_url: row["mp4_url"].to_string(),
+            chat_id: row["chat_id"].as_i64(),
+            message_id: row["message_id"].as_i64().map(|id| id as i32),
         }))
     }
 
@@ -449,6 +455,8 @@ impl Video {
             .column("source")
             .column("url")
             .column("mp4_url")
+            .column("chat_id")
+            .column("message_id")
             .so_that("url".equals(url));
         let rows = conn
             .select(select)
@@ -469,6 +477,8 @@ impl Video {
             source: row["source"].to_string().unwrap(),
             url: row["url"].to_string().unwrap(),
             mp4_url: row["mp4_url"].to_string(),
+            chat_id: row["chat_id"].as_i64(),
+            message_id: row["message_id"].as_i64().map(|id| id as i32),
         }))
     }
 
@@ -512,13 +522,28 @@ impl Video {
     /// Update a video's mp4_url when it has been processed.
     pub async fn set_processed_url(
         conn: &PooledConnection,
-        url: &str,
+        id: i64,
         mp4_url: &str,
     ) -> anyhow::Result<()> {
         let update = Update::table("videos")
             .set("processed", true)
             .set("mp4_url", mp4_url)
-            .so_that("url".equals(url));
+            .so_that("id".equals(id));
+        conn.update(update).await?;
+
+        Ok(())
+    }
+
+    pub async fn set_message_id(
+        conn: &PooledConnection,
+        id: i64,
+        chat_id: i64,
+        message_id: i32,
+    ) -> anyhow::Result<()> {
+        let update = Update::table("videos")
+            .set("chat_id", chat_id)
+            .set("message_id", message_id)
+            .so_that("id".equals(id));
         conn.update(update).await?;
 
         Ok(())

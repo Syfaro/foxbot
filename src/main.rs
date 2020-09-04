@@ -9,12 +9,12 @@ use tokio::sync::{Mutex, RwLock};
 use tracing_futures::Instrument;
 use unic_langid::LanguageIdentifier;
 
+mod coconut;
 mod handlers;
 mod migrations;
 pub mod models;
 mod sites;
 mod utils;
-mod video;
 
 // MARK: Statics and types
 
@@ -88,6 +88,9 @@ pub struct Config {
     pub s3_url: String,
 
     pub fautil_apitoken: String,
+
+    pub coconut_apitoken: String,
+    pub coconut_webhook: String,
 
     pub size_images: Option<bool>,
     pub cache_images: Option<bool>,
@@ -326,6 +329,15 @@ async fn main() {
     );
     let s3 = rusoto_s3::S3Client::new_with(client, provider, region);
 
+    let coconut = coconut::Coconut::new(
+        config.coconut_apitoken.clone(),
+        config.coconut_webhook.clone(),
+        config.s3_endpoint.clone(),
+        config.s3_token.clone(),
+        config.s3_secret.clone(),
+        config.s3_bucket.clone(),
+    );
+
     let handler = Arc::new(MessageHandler {
         bot_user,
         langs,
@@ -338,6 +350,7 @@ async fn main() {
         influx: Arc::new(influx),
         finder,
         s3,
+        coconut,
 
         sites: Mutex::new(sites),
         conn: pool,
@@ -409,7 +422,10 @@ async fn handle_request(
 
     tracing::trace!(method = ?req.method(), path = req.uri().path(), "got HTTP request");
 
-    match (req.method(), req.uri().path()) {
+    let path = req.uri().path();
+    let uri = req.uri().clone();
+
+    match (req.method(), path) {
         (&hyper::Method::POST, path) if path == secret => {
             tracing::trace!("handling update");
             let body = req.into_body();
@@ -448,6 +464,73 @@ async fn handle_request(
             }
 
             Ok(Response::new(Body::from("✓")))
+        }
+        (&hyper::Method::GET, "/health") => Ok(Response::new(Body::from("✓"))),
+        (&hyper::Method::POST, "/video") => {
+            let body = req.into_body();
+            let bytes = hyper::body::to_bytes(body)
+                .await
+                .expect("unable to read body bytes");
+
+            tracing::debug!("Got video body: {:?}", bytes);
+
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let handler_clone = handler.clone();
+            tokio::spawn(
+                async move {
+                    let update: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    let url = update
+                        .get("output_urls")
+                        .unwrap()
+                        .as_object()
+                        .unwrap()
+                        .get("mp4:720p")
+                        .unwrap()
+                        .as_str()
+                        .unwrap();
+
+                    let id: i64 = uri.to_string().split('=').last().unwrap().parse().unwrap();
+
+                    tracing::debug!("got video update for id {}: {:?}", id, update);
+
+                    let conn = handler_clone.conn.check_out().await.unwrap();
+                    let video = crate::models::Video::lookup_id(&conn, id)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    crate::models::Video::set_processed_url(&conn, id, &url)
+                        .await
+                        .unwrap();
+
+                    let video_return_button = handler_clone
+                        .get_fluent_bundle(None, |bundle| {
+                            crate::utils::get_message(&bundle, "video-return-button", None).unwrap()
+                        })
+                        .await;
+                    let send_video = SendVideo {
+                        chat_id: video.chat_id.unwrap().into(),
+                        video: FileType::URL(url.to_owned()),
+                        reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(
+                            InlineKeyboardMarkup {
+                                inline_keyboard: vec![vec![InlineKeyboardButton {
+                                    text: video_return_button,
+                                    switch_inline_query: Some(video.source.to_owned()),
+                                    ..Default::default()
+                                }]],
+                            },
+                        )),
+                        supports_streaming: Some(true),
+                        ..Default::default()
+                    };
+                    handler_clone.make_request(&send_video).await.unwrap();
+
+                    count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                    tracing::debug!("finished handling video");
+                }
+                .in_current_span(),
+            );
+
+            Ok(Response::new(Body::from("OK")))
         }
         _ => {
             let mut not_found = Response::default();
@@ -618,6 +701,7 @@ pub struct MessageHandler {
     pub influx: Arc<influxdb::Client>,
     pub finder: linkify::LinkFinder,
     pub s3: rusoto_s3::S3Client,
+    pub coconut: coconut::Coconut,
 
     // Configuration
     pub sites: Mutex<Vec<BoxedSite>>, // We always need mutable access, no reason to use a RwLock

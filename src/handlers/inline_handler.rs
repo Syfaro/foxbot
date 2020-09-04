@@ -22,11 +22,6 @@ impl InlineHandler {
         handler: &crate::MessageHandler,
         message: &Message,
     ) -> anyhow::Result<()> {
-        use futures::TryStreamExt;
-        use rusoto_s3::S3;
-        use tokio::io::AsyncWriteExt;
-        use tokio::stream::StreamExt;
-
         let text = message.text.as_ref().unwrap();
         let id = match text.split('-').nth(1) {
             Some(id) => id,
@@ -36,6 +31,14 @@ impl InlineHandler {
             Ok(id) => id,
             Err(_err) => return Ok(()),
         };
+
+        let conn = handler.conn.check_out().await?;
+        let video = Video::lookup_id(&conn, id).await?.expect("missing video");
+
+        handler
+            .coconut
+            .start_video(&video.url, &video.id.to_string())
+            .await?;
 
         let lang = message
             .from
@@ -55,115 +58,7 @@ impl InlineHandler {
         };
         let sent = handler.make_request(&send_message).await?;
 
-        let conn = handler.conn.check_out().await?;
-        let video = Video::lookup_id(&conn, id).await?.expect("missing video");
-
-        let _ = std::fs::create_dir("videos");
-
-        let name = format!("videos/{}.webm", generate_id());
-        let path = std::path::Path::new(&name);
-
-        let mut stream = reqwest::get(&video.url).await?.bytes_stream();
-        let mut file = tokio::fs::File::create(&path).await?;
-        let mut size: usize = 0;
-
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
-            size += chunk.len();
-
-            if size > 50_000_000 {
-                drop(file);
-                tokio::fs::remove_file(&path).await?;
-                let video_too_large = handler
-                    .get_fluent_bundle(lang, |bundle| {
-                        get_message(&bundle, "video-too-large", None).unwrap()
-                    })
-                    .await;
-                let edit_message = EditMessageText {
-                    message_id: Some(sent.message_id),
-                    chat_id: message.chat_id(),
-                    text: video_too_large,
-                    ..Default::default()
-                };
-                handler.make_request(&edit_message).await?;
-                return Ok(());
-            }
-
-            file.write(&chunk).await?;
-        }
-
-        let name_clone = name.clone();
-        let res = tokio::task::spawn_blocking(move || {
-            let name = name_clone;
-            crate::video::process_video(std::path::Path::new(&name))
-        })
-        .await??;
-
-        drop(file);
-        tokio::fs::remove_file(&path).await?;
-
-        let video_finished = handler
-            .get_fluent_bundle(lang, |bundle| {
-                get_message(&bundle, "video-finished", None).unwrap()
-            })
-            .await;
-        let edit_message = EditMessageText {
-            message_id: Some(sent.message_id),
-            chat_id: message.chat_id(),
-            text: video_finished,
-            ..Default::default()
-        };
-        handler.make_request(&edit_message).await?;
-
-        let file = tokio::fs::File::open(&res).await.unwrap();
-        let metadata = file.metadata().await?;
-
-        let byte_stream =
-            tokio_util::codec::FramedRead::new(file, tokio_util::codec::BytesCodec::new())
-                .map_ok(|bytes| bytes.freeze());
-        let byte_stream = rusoto_core::ByteStream::new(byte_stream);
-
-        let key = format!("{}.mp4", generate_id());
-
-        let put = rusoto_s3::PutObjectRequest {
-            acl: Some("public-read".into()),
-            bucket: handler.config.s3_bucket.clone(),
-            content_type: Some("video/mp4".into()),
-            key: key.clone(),
-            body: Some(byte_stream),
-            content_length: Some(metadata.len() as i64),
-            ..Default::default()
-        };
-
-        handler.s3.put_object(put).await.unwrap();
-        tokio::fs::remove_file(res).await.unwrap();
-
-        let mp4_url = format!(
-            "{}/{}/{}",
-            handler.config.s3_url, handler.config.s3_bucket, key
-        );
-
-        Video::set_processed_url(&conn, &video.url, &mp4_url).await?;
-
-        let video_return_button = handler
-            .get_fluent_bundle(lang, |bundle| {
-                get_message(&bundle, "video-return-button", None).unwrap()
-            })
-            .await;
-        let send_video = SendVideo {
-            chat_id: message.chat_id(),
-            video: FileType::URL(mp4_url),
-            reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
-                inline_keyboard: vec![vec![InlineKeyboardButton {
-                    text: video_return_button,
-                    switch_inline_query: Some(video.source.to_owned()),
-                    ..Default::default()
-                }]],
-            })),
-            supports_streaming: Some(true),
-            ..Default::default()
-        };
-        handler.make_request(&send_video).await?;
+        Video::set_message_id(&conn, id, sent.chat.id, sent.message_id).await?;
 
         Ok(())
     }
