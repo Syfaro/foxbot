@@ -24,8 +24,6 @@ impl super::Handler for TextHandler {
         let message = needs_field!(update, message);
         let text = needs_field!(message, text);
 
-        let now = std::time::Instant::now();
-
         let from = message.from.as_ref().unwrap();
 
         if text.trim().parse::<i32>().is_err() {
@@ -102,12 +100,6 @@ impl super::Handler for TextHandler {
             .make_request(&message)
             .await
             .context("unable to send twitter welcome message")?;
-
-        let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "twitter")
-            .add_tag("type", "added")
-            .add_field("duration", now.elapsed().as_millis() as i64);
-
-        let _ = handler.influx.query(&point).await;
 
         Ok(Completed)
     }

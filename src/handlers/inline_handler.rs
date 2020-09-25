@@ -203,27 +203,11 @@ impl super::Handler for InlineHandler {
         tracing::info!(query = ?inline.query, "got query");
         tracing::debug!(?links, "found links");
 
-        let influx = handler.influx.clone();
         // Lock sites in order to find which of these links are usable
         {
             let mut sites = handler.sites.lock().await;
             let links = links.iter().map(|link| link.as_str()).collect();
             find_images(&inline.from, links, &mut sites, &mut |info| {
-                let influx = influx.clone();
-                let duration = info.duration;
-                let count = info.results.len();
-                let name = info.site.name();
-
-                // Log a point to InfluxDB with information about our inline query
-                tokio::spawn(async move {
-                    let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "inline")
-                        .add_tag("site", name.replace(" ", "_"))
-                        .add_field("count", count as i32)
-                        .add_field("duration", duration);
-
-                    influx.query(&point).await
-                });
-
                 results.extend(info.results);
             })
             .await
