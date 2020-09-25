@@ -16,6 +16,16 @@ mod sites;
 mod utils;
 mod video;
 
+// MARK: Monitoring configuration
+
+lazy_static::lazy_static! {
+    static ref REQUEST_DURATION: prometheus::Histogram = prometheus::register_histogram!("foxbot_request_duration_seconds", "Time to start processing request").unwrap();
+    static ref HANDLING_DURATION: prometheus::Histogram = prometheus::register_histogram!("foxbot_handling_duration_seconds", "Request processing time duration").unwrap();
+    static ref ACTIVE_HANDLERS: prometheus::Gauge = prometheus::register_gauge!("foxbot_handlers_total", "Number of active handlers").unwrap();
+    static ref HANDLER_DURATION: prometheus::HistogramVec = prometheus::register_histogram_vec!("foxbot_handler_duration_seconds", "Time for a handler to complete", &["handler"]).unwrap();
+    static ref TELEGRAM_ERROR: prometheus::Counter = prometheus::register_counter!("foxbot_telegram_error_total", "Number of errors returned by Telegram").unwrap();
+}
+
 // MARK: Statics and types
 
 type BoxedSite = Box<dyn Site + Send + Sync>;
@@ -60,12 +70,6 @@ pub struct Config {
     pub twitter_consumer_key: String,
     pub twitter_consumer_secret: String,
 
-    // InfluxDB config
-    influx_host: String,
-    influx_db: String,
-    influx_user: String,
-    influx_pass: String,
-
     // Logging
     jaeger_collector: Option<String>,
     pub sentry_dsn: Option<String>,
@@ -76,7 +80,7 @@ pub struct Config {
     telegram_apitoken: String,
     pub use_webhooks: Option<bool>,
     pub webhook_endpoint: Option<String>,
-    pub http_host: Option<String>,
+    pub http_host: String,
     http_secret: Option<String>,
 
     // Video handling
@@ -266,9 +270,6 @@ async fn main() {
 
     let bot = Arc::new(Telegram::new(config.telegram_apitoken.clone()));
 
-    let influx = influxdb::Client::new(config.influx_host.clone(), config.influx_db.clone())
-        .with_auth(config.influx_user.clone(), config.influx_pass.clone());
-
     let mut finder = linkify::LinkFinder::new();
     finder.kinds(&[linkify::LinkKind::Url]);
 
@@ -335,7 +336,6 @@ async fn main() {
 
         bot: bot.clone(),
         fapi,
-        influx: Arc::new(influx),
         finder,
         s3,
 
@@ -363,10 +363,7 @@ async fn main() {
             .unwrap_or(false)
     );
 
-    let use_webhooks = match config.use_webhooks {
-        Some(use_webhooks) if use_webhooks => true,
-        _ => false,
-    };
+    let use_webhooks = matches!(config.use_webhooks, Some(use_webhooks) if use_webhooks);
 
     if use_webhooks {
         let webhook_endpoint = config.webhook_endpoint.expect("Missing WEBHOOK_ENDPOINT");
@@ -377,7 +374,7 @@ async fn main() {
             panic!(e);
         }
         receive_webhook(
-            config.http_host.expect("Missing HTTP_HOST"),
+            config.http_host,
             config.http_secret.expect("Missing HTTP_SECRET"),
             handler,
         )
@@ -387,6 +384,11 @@ async fn main() {
         if let Err(e) = bot.make_request(&delete_webhook).await {
             panic!(e);
         }
+        let handler_clone = handler.clone();
+        let host = config.http_host.clone();
+        tokio::spawn(async move {
+            receive_webhook(host, "invalid".to_string(), handler_clone).await;
+        });
         poll_updates(bot, handler).await;
     }
 }
@@ -405,12 +407,23 @@ async fn handle_request(
 ) -> hyper::Result<hyper::Response<hyper::Body>> {
     use hyper::{Body, Response, StatusCode};
 
-    let now = std::time::Instant::now();
-
     tracing::trace!(method = ?req.method(), path = req.uri().path(), "got HTTP request");
 
     match (req.method(), req.uri().path()) {
+        (&hyper::Method::GET, path) if path == "/metrics" => {
+            tracing::trace!("encoding metrics");
+
+            use prometheus::Encoder;
+            let encoder = prometheus::TextEncoder::new();
+            let metric_families = prometheus::gather();
+            let mut buf = vec![];
+            encoder.encode(&metric_families, &mut buf).unwrap();
+
+            Ok(Response::new(Body::from(buf)))
+        }
         (&hyper::Method::POST, path) if path == secret => {
+            let _hist = REQUEST_DURATION.start_timer();
+
             tracing::trace!("handling update");
             let body = req.into_body();
             let bytes = hyper::body::to_bytes(body)
@@ -428,24 +441,18 @@ async fn handle_request(
             };
 
             count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            ACTIVE_HANDLERS.inc();
             let handler_clone = handler.clone();
             tokio::spawn(
                 async move {
                     tracing::debug!("got update: {:?}", update);
                     handler_clone.handle_update(update).await;
                     count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                    ACTIVE_HANDLERS.dec();
                     tracing::debug!("finished handling message");
                 }
                 .in_current_span(),
             );
-
-            let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "http")
-                .add_field("duration", now.elapsed().as_millis() as i64);
-
-            if let Err(e) = handler.influx.query(&point).await {
-                capture_anyhow(&anyhow::anyhow!("InfluxDB error: {:?}", e));
-                tracing::error!("unable to send http request info to InfluxDB: {:?}", e);
-            }
 
             Ok(Response::new(Body::from("✓")))
         }
@@ -593,9 +600,11 @@ async fn poll_updates(bot: Arc<Telegram>, handler: Arc<MessageHandler>) {
 
             tokio::spawn(async move {
                 waiting.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                ACTIVE_HANDLERS.inc();
                 handler.handle_update(update).await;
                 tracing::debug!("finished handling update");
                 waiting.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                ACTIVE_HANDLERS.dec();
             });
 
             update_req.offset = Some(id + 1);
@@ -615,7 +624,6 @@ pub struct MessageHandler {
     // API clients
     pub bot: Arc<Telegram>,
     pub fapi: Arc<fuzzysearch::FuzzySearch>,
-    pub influx: Arc<influxdb::Client>,
     pub finder: linkify::LinkFinder,
     pub s3: rusoto_s3::S3Client,
 
@@ -821,6 +829,8 @@ impl MessageHandler {
 
     #[tracing::instrument(skip(self, update))]
     async fn handle_update(&self, update: Update) {
+        let _hist = HANDLING_DURATION.start_timer();
+
         sentry::configure_scope(|mut scope| {
             utils::add_sentry_tracing(&mut scope);
         });
@@ -838,14 +848,20 @@ impl MessageHandler {
 
         for handler in &self.handlers {
             tracing::trace!(handler = handler.name(), "running handler");
+            let hist = HANDLER_DURATION
+                .get_metric_with_label_values(&[handler.name()])
+                .unwrap()
+                .start_timer();
 
             match handler.handle(&self, &update, command.as_ref()).await {
                 Ok(status) if status == handlers::Status::Completed => {
                     tracing::debug!(handler = handler.name(), "handled update");
+                    hist.stop_and_record();
                     break;
                 }
                 Err(e) => {
                     tracing::error!("error handling update: {:?}", e);
+                    hist.stop_and_record();
 
                     let mut tags = vec![("handler", handler.name().to_string())];
                     if let Some(user) = user {
@@ -864,7 +880,9 @@ impl MessageHandler {
 
                     break;
                 }
-                _ => (),
+                _ => {
+                    hist.stop_and_discard();
+                }
             }
         }
     }
@@ -883,22 +901,21 @@ impl MessageHandler {
                 Err(err) => err,
             };
 
+            TELEGRAM_ERROR.inc();
+
             if attempts > 2 {
                 return Err(err);
             }
 
-            let telegram_error = match err {
-                tgbotapi::Error::Telegram(ref err) => err,
-                _ => return Err(err),
-            };
-
-            let params = match &telegram_error.parameters {
-                Some(params) => params,
-                _ => return Err(err),
-            };
-
-            let retry_after = match params.retry_after {
-                Some(retry_after) => retry_after,
+            let retry_after = match err {
+                tgbotapi::Error::Telegram(tgbotapi::TelegramError {
+                    parameters:
+                        Some(tgbotapi::ResponseParameters {
+                            retry_after: Some(retry_after),
+                            ..
+                        }),
+                    ..
+                }) => retry_after,
                 _ => return Err(err),
             };
 

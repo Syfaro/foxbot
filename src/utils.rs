@@ -294,7 +294,7 @@ pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (S
         let mut args = fluent::FluentArgs::new();
         args.insert("name", artist_name.into());
         s.push_str(&get_message(&bundle, "alternate-posted-by", Some(args)).unwrap());
-        s.push_str("\n");
+        s.push('\n');
         let mut subs: Vec<fuzzysearch::File> = item.1.to_vec();
         subs.sort_by(|a, b| a.id.partial_cmp(&b.id).unwrap());
         subs.dedup_by(|a, b| a.id == b.id);
@@ -305,10 +305,10 @@ pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (S
             args.insert("link", sub.url().into());
             args.insert("distance", sub.distance.unwrap().into());
             s.push_str(&get_message(&bundle, "alternate-distance", Some(args)).unwrap());
-            s.push_str("\n");
+            s.push('\n');
             used_hashes.push(sub.hash.unwrap());
         }
-        s.push_str("\n");
+        s.push('\n');
     }
 
     (s, used_hashes)
@@ -387,13 +387,10 @@ pub fn continuous_action(
             )
             .fuse();
 
-            let was_ended = if let futures::future::Either::Right(_) =
-                futures::future::select(timer, rx).await
-            {
-                true
-            } else {
-                false
-            };
+            let was_ended = matches!(
+                futures::future::select(timer, rx).await,
+                futures::future::Either::Right(_)
+            );
 
             tracing::trace!(count, was_ended, "chat action ended");
         }
