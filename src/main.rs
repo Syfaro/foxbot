@@ -760,7 +760,7 @@ impl MessageHandler {
                 if u.is_nil() {
                     if recent_error_count > 0 {
                         let mut args = fluent::FluentArgs::new();
-                        args.insert("count", recent_error_count.into());
+                        args.insert("count", (recent_error_count + 1).into());
 
                         utils::get_message(&bundle, "error-generic-count", Some(args))
                     } else {
@@ -785,6 +785,14 @@ impl MessageHandler {
             })
             .await;
 
+        let delete_markup = Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
+            inline_keyboard: vec![vec![InlineKeyboardButton {
+                text: "Delete".to_string(),
+                callback_data: Some("delete".to_string()),
+                ..Default::default()
+            }]],
+        }));
+
         if recent_error_count > 0 {
             let message_id: i32 = match conn.get(&key_message_id).await {
                 Ok(id) => id,
@@ -803,6 +811,7 @@ impl MessageHandler {
                 message_id: Some(message_id),
                 text: msg.unwrap(),
                 parse_mode: Some(ParseMode::Markdown),
+                reply_markup: delete_markup,
                 ..Default::default()
             };
 
@@ -811,6 +820,9 @@ impl MessageHandler {
                 utils::with_user_scope(message.from.as_ref(), None, || {
                     sentry::capture_error(&e);
                 });
+
+                let _ = conn.del::<_, ()>(&key_list).await;
+                let _ = conn.del::<_, ()>(&key_message_id).await;
             }
         } else {
             let send_message = SendMessage {
@@ -818,13 +830,7 @@ impl MessageHandler {
                 text: msg.unwrap(),
                 parse_mode: Some(ParseMode::Markdown),
                 reply_to_message_id: Some(message.message_id),
-                reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
-                    inline_keyboard: vec![vec![InlineKeyboardButton {
-                        text: "Delete".to_string(),
-                        callback_data: Some("delete".to_string()),
-                        ..Default::default()
-                    }]],
-                })),
+                reply_markup: delete_markup,
                 ..Default::default()
             };
 
