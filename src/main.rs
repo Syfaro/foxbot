@@ -771,8 +771,6 @@ impl MessageHandler {
                     args.insert("uuid", fluent::FluentValue::from(f));
 
                     let name = if recent_error_count > 0 {
-                        args.insert("count", recent_error_count.into());
-
                         "error-uuid-count"
                     } else {
                         "error-uuid"
