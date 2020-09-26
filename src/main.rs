@@ -757,19 +757,17 @@ impl MessageHandler {
 
         let msg = self
             .get_fluent_bundle(lang_code.as_deref(), |bundle| {
+                let mut args = fluent::FluentArgs::new();
+                args.insert("count", (recent_error_count + 1).into());
+
                 if u.is_nil() {
                     if recent_error_count > 0 {
-                        let mut args = fluent::FluentArgs::new();
-                        args.insert("count", (recent_error_count + 1).into());
-
                         utils::get_message(&bundle, "error-generic-count", Some(args))
                     } else {
                         utils::get_message(&bundle, "error-generic", None)
                     }
                 } else {
                     let f = format!("`{}`", u.to_string());
-
-                    let mut args = fluent::FluentArgs::new();
                     args.insert("uuid", fluent::FluentValue::from(f));
 
                     let name = if recent_error_count > 0 {
@@ -783,7 +781,8 @@ impl MessageHandler {
                     utils::get_message(&bundle, name, Some(args))
                 }
             })
-            .await;
+            .await
+            .unwrap();
 
         let delete_markup = Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
             inline_keyboard: vec![vec![InlineKeyboardButton {
@@ -809,7 +808,7 @@ impl MessageHandler {
             let edit_message = EditMessageText {
                 chat_id: message.chat_id(),
                 message_id: Some(message_id),
-                text: msg.unwrap(),
+                text: msg,
                 parse_mode: Some(ParseMode::Markdown),
                 reply_markup: delete_markup,
                 ..Default::default()
@@ -827,7 +826,7 @@ impl MessageHandler {
         } else {
             let send_message = SendMessage {
                 chat_id: message.chat_id(),
-                text: msg.unwrap(),
+                text: msg,
                 parse_mode: Some(ParseMode::Markdown),
                 reply_to_message_id: Some(message.message_id),
                 reply_markup: delete_markup,
