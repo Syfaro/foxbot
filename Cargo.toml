@@ -59,6 +59,7 @@ tracing-opentelemetry = "0.5"
 
 refinery = "0.2"
 quaint = "0.2.0-alpha.13"
+redis = { version = "0.17", features = ["connection-manager"] }
 rusqlite = { version = "0.21", features = ["bundled"], optional = true }
 tokio-postgres = { version = "0.5", optional = true }
 barrel = { version = "0.6", features = ["sqlite3"], optional = true }
