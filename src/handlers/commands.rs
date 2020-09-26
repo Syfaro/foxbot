@@ -12,6 +12,10 @@ use crate::utils::{
 
 // TODO: there's a lot of shared code between these commands.
 
+lazy_static::lazy_static! {
+    static ref USED_COMMANDS: prometheus::HistogramVec = prometheus::register_histogram_vec!("foxbot_commands_duration_seconds", "Processing duration for each command", &["command"]).unwrap();
+}
+
 pub struct CommandHandler;
 
 #[async_trait]
@@ -33,17 +37,19 @@ impl super::Handler for CommandHandler {
             None => return Ok(Ignored),
         };
 
-        let now = std::time::Instant::now();
-
         if let Some(username) = command.username {
             let bot_username = handler.bot_user.username.as_ref().unwrap();
             if username.to_lowercase() != bot_username.to_lowercase() {
-                tracing::debug!("got command for other bot: {}", username);
+                tracing::debug!(?username, "got command for other bot");
                 return Ok(Ignored);
             }
         }
 
-        tracing::debug!("got command {}", command.name);
+        let _hist = USED_COMMANDS
+            .get_metric_with_label_values(&[command.name.as_ref()])
+            .unwrap()
+            .start_timer();
+        tracing::debug!(command = ?command.name, "got command");
 
         match command.name.as_ref() {
             "/help" | "/start" => handler.handle_welcome(message, &command.name).await,
@@ -55,16 +61,10 @@ impl super::Handler for CommandHandler {
             "/groupsource" => self.enable_group_source(&handler, message).await,
             "/grouppreviews" => self.group_nopreviews(&handler, &message).await,
             _ => {
-                tracing::info!("unknown command: {}", command.name);
+                tracing::info!(command = ?command.name, "unknown command");
                 return Ok(Ignored);
             }
         }?;
-
-        let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "command")
-            .add_tag("command", command.name)
-            .add_field("duration", now.elapsed().as_millis() as i64);
-
-        let _ = handler.influx.query(&point).await;
 
         Ok(Completed)
     }
@@ -76,8 +76,6 @@ impl CommandHandler {
         handler: &crate::MessageHandler,
         message: &Message,
     ) -> anyhow::Result<()> {
-        let now = std::time::Instant::now();
-
         if message.chat.chat_type != ChatType::Private {
             handler
                 .send_generic_reply(&message, "twitter-private")
@@ -125,12 +123,6 @@ impl CommandHandler {
         };
 
         handler.make_request(&send_message).await?;
-
-        let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "twitter")
-            .add_tag("type", "new")
-            .add_field("duration", now.elapsed().as_millis() as i64);
-
-        let _ = handler.influx.query(&point).await;
 
         Ok(())
     }

@@ -23,8 +23,6 @@ impl super::Handler for PhotoHandler {
         let message = needs_field!(update, message);
         let photos = needs_field!(message, photo);
 
-        let now = std::time::Instant::now();
-
         if message.chat.chat_type != ChatType::Private {
             return Ok(Ignored);
         }
@@ -50,7 +48,7 @@ impl super::Handler for PhotoHandler {
         let first = match matches.get(0) {
             Some(item) => item,
             _ => {
-                no_results(&handler, &message, now).await?;
+                no_results(&handler, &message).await?;
                 return Ok(Completed);
             }
         };
@@ -60,7 +58,10 @@ impl super::Handler for PhotoHandler {
             .skip(1)
             .take_while(|m| m.distance.unwrap() == first.distance.unwrap())
             .collect();
-        tracing::debug!("match has distance of {}", first.distance.unwrap());
+        tracing::debug!(
+            distance = first.distance.unwrap(),
+            "discovered match distance"
+        );
 
         let name = if first.distance.unwrap() < 5 {
             "reverse-good-result"
@@ -106,22 +107,11 @@ impl super::Handler for PhotoHandler {
             .await
             .context("unable to send photo source reply")?;
 
-        let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "source")
-            .add_tag("good", first.distance.unwrap() < 5)
-            .add_field("matches", matches.len() as i64)
-            .add_field("duration", now.elapsed().as_millis() as i64);
-
-        let _ = handler.influx.query(&point).await;
-
         Ok(Completed)
     }
 }
 
-async fn no_results(
-    handler: &crate::MessageHandler,
-    message: &Message,
-    start: std::time::Instant,
-) -> anyhow::Result<()> {
+async fn no_results(handler: &crate::MessageHandler, message: &Message) -> anyhow::Result<()> {
     let text = handler
         .get_fluent_bundle(
             message.from.as_ref().unwrap().language_code.as_deref(),
@@ -140,12 +130,6 @@ async fn no_results(
         .make_request(&send_message)
         .await
         .context("unable to send photo no results message")?;
-
-    let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "source")
-        .add_field("matches", 0)
-        .add_field("duration", start.elapsed().as_millis() as i64);
-
-    let _ = handler.influx.query(&point).await;
 
     Ok(())
 }

@@ -32,7 +32,7 @@ where
             let start = Instant::now();
 
             if site.url_supported(link).await {
-                tracing::debug!("link {} supported by {}", link, site.name());
+                tracing::debug!(link, site = site.name(), "found supported link");
 
                 let images = site
                     .get_images(user.id, link)
@@ -41,7 +41,7 @@ where
 
                 match images {
                     Some(results) => {
-                        tracing::debug!("found images: {:?}", results);
+                        tracing::debug!(site = site.name(), "found images: {:?}", results);
                         callback(SiteCallback {
                             site: &site,
                             link,
@@ -51,7 +51,7 @@ where
                         continue 'link;
                     }
                     _ => {
-                        tracing::debug!("no images found");
+                        tracing::debug!(site = site.name(), "no images found");
                         missing.push(link);
                         continue 'link;
                     }
@@ -216,14 +216,32 @@ pub fn get_message(
     }
 }
 
+pub fn add_sentry_tracing(scope: &mut sentry::Scope) {
+    use opentelemetry::api::HttpTextFormat;
+    use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+    let current_context = tracing::Span::current().context();
+
+    let mut carrier = std::collections::HashMap::new();
+    let propagator = opentelemetry::api::B3Propagator::new(true);
+    propagator.inject_context(&current_context, &mut carrier);
+
+    let data: &str = carrier.get("X-B3").unwrap();
+    scope.set_extra("x-b3", data.to_owned().into());
+}
+
 type SentryTags<'a> = Option<Vec<(&'a str, String)>>;
 
 pub fn with_user_scope<C, R>(from: Option<&tgbotapi::User>, tags: SentryTags, callback: C) -> R
 where
     C: FnOnce() -> R,
 {
+    tracing::trace!(?tags, ?from, "updating sentry scope");
+
     sentry::with_scope(
-        |scope| {
+        |mut scope| {
+            add_sentry_tracing(&mut scope);
+
             if let Some(user) = from {
                 scope.set_user(Some(sentry::User {
                     id: Some(user.id.to_string()),
@@ -260,7 +278,7 @@ pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (S
 
     for item in items {
         let total_dist: u64 = item.1.iter().map(|item| item.distance.unwrap()).sum();
-        tracing::trace!("total distance: {}", total_dist);
+        tracing::trace!(distance = total_dist, "discovered total distance");
         if total_dist > (6 * item.1.len() as u64) {
             tracing::trace!("too high, aborting");
             continue;
@@ -276,21 +294,21 @@ pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (S
         let mut args = fluent::FluentArgs::new();
         args.insert("name", artist_name.into());
         s.push_str(&get_message(&bundle, "alternate-posted-by", Some(args)).unwrap());
-        s.push_str("\n");
+        s.push('\n');
         let mut subs: Vec<fuzzysearch::File> = item.1.to_vec();
         subs.sort_by(|a, b| a.id.partial_cmp(&b.id).unwrap());
         subs.dedup_by(|a, b| a.id == b.id);
         subs.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
         for sub in subs {
-            tracing::trace!("looking at {}-{}", sub.site_name(), sub.id);
+            tracing::trace!(site = sub.site_name(), id = sub.id, "looking at submission");
             let mut args = fluent::FluentArgs::new();
             args.insert("link", sub.url().into());
             args.insert("distance", sub.distance.unwrap().into());
             s.push_str(&get_message(&bundle, "alternate-distance", Some(args)).unwrap());
-            s.push_str("\n");
+            s.push('\n');
             used_hashes.push(sub.hash.unwrap());
         }
-        s.push_str("\n");
+        s.push('\n');
     }
 
     (s, used_hashes)
@@ -308,7 +326,7 @@ pub fn parse_known_bots(message: &tgbotapi::Message) -> Option<Vec<String>> {
         None => return None,
     };
 
-    tracing::trace!("evaluating if known bot: {}", from.id);
+    tracing::trace!(from_id = from.id, "evaluating if known bot");
 
     match from.id {
         // FAwatchbot
@@ -369,13 +387,10 @@ pub fn continuous_action(
             )
             .fuse();
 
-            let was_ended = if let futures::future::Either::Right(_) =
-                futures::future::select(timer, rx).await
-            {
-                true
-            } else {
-                false
-            };
+            let was_ended = matches!(
+                futures::future::select(timer, rx).await,
+                futures::future::Either::Right(_)
+            );
 
             tracing::trace!(count, was_ended, "chat action ended");
         }
@@ -389,7 +404,7 @@ impl Drop for ContinuousAction {
     fn drop(&mut self) {
         let tx = std::mem::replace(&mut self.tx, None);
         if let Some(tx) = tx {
-            tx.send(true).unwrap();
+            let _ = tx.send(true);
         }
     }
 }
@@ -427,6 +442,7 @@ pub async fn match_image(
         .context("unable to download file from telegram")?;
 
     let hash = tokio::task::spawn_blocking(move || fuzzysearch::hash_bytes(&data))
+        .instrument(tracing::debug_span!("hash_bytes"))
         .await
         .context("unable to spawn blocking")?
         .context("unable to hash bytes")?;
@@ -615,6 +631,38 @@ pub async fn get_matches(
     let best_photo = find_best_photo(&sizes).unwrap();
     let matches = match_image(&bot, &conn, &fapi, &best_photo).await?;
     Ok(matches.into_iter().next())
+}
+
+pub fn user_from_update(update: &tgbotapi::Update) -> Option<&tgbotapi::User> {
+    use tgbotapi::*;
+
+    match &update {
+        Update {
+            message: Some(Message { from, .. }),
+            ..
+        } => from.as_ref(),
+        Update {
+            edited_message: Some(Message { from, .. }),
+            ..
+        } => from.as_ref(),
+        Update {
+            channel_post: Some(Message { from, .. }),
+            ..
+        } => from.as_ref(),
+        Update {
+            edited_channel_post: Some(Message { from, .. }),
+            ..
+        } => from.as_ref(),
+        Update {
+            inline_query: Some(InlineQuery { from, .. }),
+            ..
+        } => Some(&from),
+        Update {
+            callback_query: Some(CallbackQuery { from, .. }),
+            ..
+        } => Some(&from),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

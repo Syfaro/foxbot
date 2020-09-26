@@ -16,6 +16,16 @@ mod sites;
 mod utils;
 mod video;
 
+// MARK: Monitoring configuration
+
+lazy_static::lazy_static! {
+    static ref REQUEST_DURATION: prometheus::Histogram = prometheus::register_histogram!("foxbot_request_duration_seconds", "Time to start processing request").unwrap();
+    static ref HANDLING_DURATION: prometheus::Histogram = prometheus::register_histogram!("foxbot_handling_duration_seconds", "Request processing time duration").unwrap();
+    static ref ACTIVE_HANDLERS: prometheus::Gauge = prometheus::register_gauge!("foxbot_handlers_total", "Number of active handlers").unwrap();
+    static ref HANDLER_DURATION: prometheus::HistogramVec = prometheus::register_histogram_vec!("foxbot_handler_duration_seconds", "Time for a handler to complete", &["handler"]).unwrap();
+    static ref TELEGRAM_ERROR: prometheus::Counter = prometheus::register_counter!("foxbot_telegram_error_total", "Number of errors returned by Telegram").unwrap();
+}
+
 // MARK: Statics and types
 
 type BoxedSite = Box<dyn Site + Send + Sync>;
@@ -60,12 +70,6 @@ pub struct Config {
     pub twitter_consumer_key: String,
     pub twitter_consumer_secret: String,
 
-    // InfluxDB config
-    influx_host: String,
-    influx_db: String,
-    influx_user: String,
-    influx_pass: String,
-
     // Logging
     jaeger_collector: Option<String>,
     pub sentry_dsn: Option<String>,
@@ -76,7 +80,7 @@ pub struct Config {
     telegram_apitoken: String,
     pub use_webhooks: Option<bool>,
     pub webhook_endpoint: Option<String>,
-    pub http_host: Option<String>,
+    pub http_host: String,
     http_secret: Option<String>,
 
     // Video handling
@@ -114,12 +118,11 @@ pub struct Config {
 /// Configure tracing with Jaeger.
 fn configure_tracing(collector: String) {
     use opentelemetry::{
-        api::{KeyValue, Provider, Sampler},
-        exporter::trace::jaeger,
-        sdk::Config as TelemConfig,
+        api::{KeyValue, Provider},
+        sdk::{Config as TelemConfig, Sampler},
     };
-    use std::net::ToSocketAddrs;
     use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::prelude::*;
 
     let env = if cfg!(debug_assertions) {
         "debug"
@@ -127,44 +130,44 @@ fn configure_tracing(collector: String) {
         "release"
     };
 
-    let addr = collector
-        .to_socket_addrs()
-        .expect("Unable to resolve JAEGER_COLLECTOR")
-        .next()
-        .expect("Unable to find JAEGER_COLLECTOR");
+    let fmt_layer = tracing_subscriber::fmt::layer();
+    let filter_layer = tracing_subscriber::EnvFilter::try_from_default_env()
+        .or_else(|_| tracing_subscriber::EnvFilter::try_new("info"))
+        .unwrap();
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .finish();
+    let registry = tracing_subscriber::registry()
+        .with(filter_layer)
+        .with(fmt_layer);
 
-    let exporter = jaeger::Exporter::builder()
-        .with_collector_endpoint(addr)
-        .with_process(jaeger::Process {
-            service_name: "foxbot",
+    let exporter = opentelemetry_jaeger::Exporter::builder()
+        .with_agent_endpoint(collector)
+        .with_process(opentelemetry_jaeger::Process {
+            service_name: "foxbot".to_string(),
             tags: vec![
                 KeyValue::new("environment", env),
                 KeyValue::new("version", env!("CARGO_PKG_VERSION")),
             ],
         })
-        .init();
+        .init()
+        .expect("Unable to create jaeger exporter");
 
     let provider = opentelemetry::sdk::Provider::builder()
-        .with_exporter(exporter)
+        .with_simple_exporter(exporter)
         .with_config(TelemConfig {
-            default_sampler: Sampler::Always,
+            default_sampler: Box::new(Sampler::Always),
             ..Default::default()
         })
         .build();
 
     opentelemetry::global::set_provider(provider);
 
-    let tracer = opentelemetry::global::trace_provider().get_tracer("telegram");
+    let tracer = opentelemetry::global::trace_provider().get_tracer("foxbot");
+    let telem_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+    let registry = registry.with(telem_layer);
 
-    let telem_layer = tracing_opentelemetry::OpentelemetryLayer::with_tracer(tracer);
-    let fmt_layer = tracing_subscriber::fmt::Layer::default();
-
-    let subscriber = tracing_subscriber::Registry::default()
-        .with(telem_layer)
-        .with(fmt_layer);
-
-    tracing::subscriber::set_global_default(subscriber)
-        .expect("Unable to set default tracing subscriber");
+    registry.init();
 }
 
 #[cfg(feature = "sqlite")]
@@ -189,7 +192,7 @@ async fn run_migrations(host: &str, user: &str, pass: &str, name: &str) {
 
     tokio::spawn(async move {
         if let Err(e) = conn.await {
-            tracing::error!("Error in tokio-postgres migrations runner: {:?}", e);
+            tracing::error!("error in tokio-postgres migrations runner: {:?}", e);
         }
     });
 
@@ -269,9 +272,6 @@ async fn main() {
 
     let bot = Arc::new(Telegram::new(config.telegram_apitoken.clone()));
 
-    let influx = influxdb::Client::new(config.influx_host.clone(), config.influx_db.clone())
-        .with_auth(config.influx_user.clone(), config.influx_pass.clone());
-
     let mut finder = linkify::LinkFinder::new();
     finder.kinds(&[linkify::LinkKind::Url]);
 
@@ -314,6 +314,7 @@ async fn main() {
         Box::new(handlers::TextHandler),
         Box::new(handlers::ErrorReplyHandler::new()),
         Box::new(handlers::SettingsHandler),
+        Box::new(handlers::ErrorCleanup),
     ];
 
     let region = rusoto_core::Region::Custom {
@@ -348,7 +349,6 @@ async fn main() {
 
         bot: bot.clone(),
         fapi,
-        influx: Arc::new(influx),
         finder,
         s3,
 
@@ -370,17 +370,14 @@ async fn main() {
     };
 
     tracing::info!(
-        "Sentry enabled: {}",
+        "sentry enabled: {}",
         _guard
             .as_ref()
             .map(|sentry| sentry.is_enabled())
             .unwrap_or(false)
     );
 
-    let use_webhooks = match config.use_webhooks {
-        Some(use_webhooks) if use_webhooks => true,
-        _ => false,
-    };
+    let use_webhooks = matches!(config.use_webhooks, Some(use_webhooks) if use_webhooks);
 
     if use_webhooks {
         let webhook_endpoint = config.webhook_endpoint.expect("Missing WEBHOOK_ENDPOINT");
@@ -391,7 +388,7 @@ async fn main() {
             panic!(e);
         }
         receive_webhook(
-            config.http_host.expect("Missing HTTP_HOST"),
+            config.http_host,
             config.http_secret.expect("Missing HTTP_SECRET"),
             handler,
         )
@@ -401,6 +398,11 @@ async fn main() {
         if let Err(e) = bot.make_request(&delete_webhook).await {
             panic!(e);
         }
+        let handler_clone = handler.clone();
+        let host = config.http_host.clone();
+        tokio::spawn(async move {
+            receive_webhook(host, "invalid".to_string(), handler_clone).await;
+        });
         poll_updates(bot, handler).await;
     }
 }
@@ -419,22 +421,33 @@ async fn handle_request(
 ) -> hyper::Result<hyper::Response<hyper::Body>> {
     use hyper::{Body, Response, StatusCode};
 
-    let now = std::time::Instant::now();
-
-    tracing::trace!("got HTTP request: {} {}", req.method(), req.uri().path());
+    tracing::trace!(method = ?req.method(), path = req.uri().path(), "got HTTP request");
 
     match (req.method(), req.uri().path()) {
+        (&hyper::Method::GET, path) if path == "/metrics" => {
+            tracing::trace!("encoding metrics");
+
+            use prometheus::Encoder;
+            let encoder = prometheus::TextEncoder::new();
+            let metric_families = prometheus::gather();
+            let mut buf = vec![];
+            encoder.encode(&metric_families, &mut buf).unwrap();
+
+            Ok(Response::new(Body::from(buf)))
+        }
         (&hyper::Method::POST, path) if path == secret => {
+            let _hist = REQUEST_DURATION.start_timer();
+
             tracing::trace!("handling update");
             let body = req.into_body();
             let bytes = hyper::body::to_bytes(body)
                 .await
-                .expect("Unable to read body bytes");
+                .expect("unable to read body bytes");
 
             let update: Update = match serde_json::from_slice(&bytes) {
                 Ok(update) => update,
                 Err(err) => {
-                    tracing::error!(?err, "error decoding incoming json");
+                    tracing::error!("error decoding incoming json: {:?}", err);
                     let mut resp = Response::default();
                     *resp.status_mut() = StatusCode::BAD_REQUEST;
                     return Ok(resp);
@@ -442,24 +455,18 @@ async fn handle_request(
             };
 
             count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            ACTIVE_HANDLERS.inc();
             let handler_clone = handler.clone();
             tokio::spawn(
                 async move {
                     tracing::debug!("got update: {:?}", update);
                     handler_clone.handle_update(update).await;
                     count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                    ACTIVE_HANDLERS.dec();
                     tracing::debug!("finished handling message");
                 }
                 .in_current_span(),
             );
-
-            let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "http")
-                .add_field("duration", now.elapsed().as_millis() as i64);
-
-            if let Err(e) = handler.influx.query(&point).await {
-                capture_anyhow(&anyhow::anyhow!("InfluxDB error: {:?}", e));
-                tracing::error!("unable to send http request info to InfluxDB: {:?}", e);
-            }
 
             Ok(Response::new(Body::from("✓")))
         }
@@ -502,7 +509,7 @@ async fn receive_webhook(host: String, secret: String, handler: Arc<MessageHandl
         use tokio::signal;
 
         let mut stream = signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("Unable to create terminate signal stream");
+            .expect("unable to create terminate signal stream");
 
         tokio::select! {
             _ = stream.recv() => shutdown_tx.send(true),
@@ -514,13 +521,13 @@ async fn receive_webhook(host: String, secret: String, handler: Arc<MessageHandl
     tokio::spawn(async move {
         use tokio::signal;
 
-        signal::ctrl_c().await.expect("Unable to await ctrl-c");
-        shutdown_tx.send(true).expect("Unable to send shutdown");
+        signal::ctrl_c().await.expect("unable to await ctrl-c");
+        shutdown_tx.send(true).expect("unable to send shutdown");
     });
 
     let graceful = server.with_graceful_shutdown(async {
         shutdown_rx.await.ok();
-        tracing::error!("Shutting down HTTP server");
+        tracing::error!("shutting down HTTP server");
     });
 
     if let Err(e) = graceful.await {
@@ -533,7 +540,7 @@ async fn receive_webhook(host: String, secret: String, handler: Arc<MessageHandl
             break;
         }
 
-        tracing::warn!("Waiting for {} requests to complete before shutdown", count);
+        tracing::warn!("waiting for {} requests to complete before shutdown", count);
         tokio::time::delay_for(std::time::Duration::from_millis(200)).await;
     }
 }
@@ -550,11 +557,11 @@ async fn poll_updates(bot: Arc<Telegram>, handler: Arc<MessageHandler>) {
         use tokio::signal;
 
         let mut stream = signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("Unable to create terminate signal stream");
+            .expect("unable to create terminate signal stream");
 
         tokio::select! {
-            _ = stream.recv() => shutdown_tx.send(true).await.expect("Unable to send shutdown"),
-            _ = signal::ctrl_c() => shutdown_tx.send(true).await.expect("Unable to send shutdown"),
+            _ = stream.recv() => shutdown_tx.send(true).await.expect("unable to send shutdown"),
+            _ = signal::ctrl_c() => shutdown_tx.send(true).await.expect("unable to send shutdown"),
         };
     });
 
@@ -562,11 +569,11 @@ async fn poll_updates(bot: Arc<Telegram>, handler: Arc<MessageHandler>) {
     tokio::spawn(async move {
         use tokio::signal;
 
-        signal::ctrl_c().await.expect("Unable to await ctrl-c");
+        signal::ctrl_c().await.expect("unable to await ctrl-c");
         shutdown_tx
             .send(true)
             .await
-            .expect("Unable to send shutdown");
+            .expect("unable to send shutdown");
     });
 
     let waiting = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -574,14 +581,14 @@ async fn poll_updates(bot: Arc<Telegram>, handler: Arc<MessageHandler>) {
     loop {
         let updates = tokio::select! {
             _ = shutdown_rx.recv() => {
-                tracing::error!("Got shutdown request");
+                tracing::error!("got shutdown request");
                 loop {
                     let count = waiting.load(std::sync::atomic::Ordering::SeqCst);
                     if count == 0 {
                         break;
                     }
 
-                    tracing::warn!("Finishing {} requests before shutdown", count);
+                    tracing::warn!("finishing {} requests before shutdown", count);
                     tokio::time::delay_for(std::time::Duration::from_millis(200)).await;
                 }
                 break;
@@ -607,9 +614,11 @@ async fn poll_updates(bot: Arc<Telegram>, handler: Arc<MessageHandler>) {
 
             tokio::spawn(async move {
                 waiting.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                ACTIVE_HANDLERS.inc();
                 handler.handle_update(update).await;
                 tracing::debug!("finished handling update");
                 waiting.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                ACTIVE_HANDLERS.dec();
             });
 
             update_req.offset = Some(id + 1);
@@ -629,7 +638,6 @@ pub struct MessageHandler {
     // API clients
     pub bot: Arc<Telegram>,
     pub fapi: Arc<fuzzysearch::FuzzySearch>,
-    pub influx: Arc<influxdb::Client>,
     pub finder: linkify::LinkFinder,
     pub s3: rusoto_s3::S3Client,
 
@@ -653,25 +661,25 @@ impl MessageHandler {
             "en-US"
         };
 
-        tracing::trace!("looking up language bundle for {}", requested);
+        tracing::trace!(lang = requested, "looking up language bundle");
 
         {
             let lock = self.best_lang.read().await;
             if lock.contains_key(requested) {
-                let bundle = lock.get(requested).expect("Should have contained");
+                let bundle = lock.get(requested).expect("should have contained");
                 return callback(bundle);
             }
         }
 
-        tracing::info!("got new language {}, building bundle", requested);
+        tracing::info!(lang = requested, "got new language, building bundle");
 
         let requested_locale = requested
             .parse::<LanguageIdentifier>()
-            .expect("Requested locale is invalid");
+            .expect("requested locale is invalid");
         let requested_locales: Vec<LanguageIdentifier> = vec![requested_locale];
         let default_locale = L10N_LANGS[0]
             .parse::<LanguageIdentifier>()
-            .expect("Unable to parse langid");
+            .expect("unable to parse langid");
         let available: Vec<LanguageIdentifier> = self.langs.keys().map(Clone::clone).collect();
         let resolved_locales = fluent_langneg::negotiate_languages(
             &requested_locales,
@@ -680,7 +688,7 @@ impl MessageHandler {
             fluent_langneg::NegotiationStrategy::Filtering,
         );
 
-        let current_locale = resolved_locales.get(0).expect("No locales were available");
+        let current_locale = resolved_locales.get(0).expect("no locales were available");
 
         let mut bundle = fluent::concurrent::FluentBundle::<fluent::FluentResource>::new(
             resolved_locales.clone(),
@@ -688,14 +696,14 @@ impl MessageHandler {
         let resources = self
             .langs
             .get(current_locale)
-            .expect("Missing known locale");
+            .expect("missing known locale");
 
         for resource in resources {
             let resource = fluent::FluentResource::try_new(resource.to_string())
-                .expect("Unable to parse FTL string");
+                .expect("unable to parse FTL string");
             bundle
                 .add_resource(resource)
-                .expect("Unable to add resource");
+                .expect("unable to add resource");
         }
 
         bundle.set_use_isolating(false);
@@ -706,7 +714,7 @@ impl MessageHandler {
         }
 
         let lock = self.best_lang.read().await;
-        let bundle = lock.get(requested).expect("Value just inserted is missing");
+        let bundle = lock.get(requested).expect("value just inserted is missing");
         callback(bundle)
     }
 
@@ -810,6 +818,13 @@ impl MessageHandler {
                 text: msg.unwrap(),
                 parse_mode: Some(ParseMode::Markdown),
                 reply_to_message_id: Some(message.message_id),
+                reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
+                    inline_keyboard: vec![vec![InlineKeyboardButton {
+                        text: "Delete".to_string(),
+                        callback_data: Some("delete".to_string()),
+                        ..Default::default()
+                    }]],
+                })),
                 ..Default::default()
             };
 
@@ -905,10 +920,17 @@ impl MessageHandler {
 
     #[tracing::instrument(skip(self, update))]
     async fn handle_update(&self, update: Update) {
-        let user = update
-            .message
-            .as_ref()
-            .and_then(|message| message.from.as_ref());
+        let _hist = HANDLING_DURATION.start_timer();
+
+        sentry::configure_scope(|mut scope| {
+            utils::add_sentry_tracing(&mut scope);
+        });
+
+        let user = utils::user_from_update(&update);
+
+        if let Some(user) = user {
+            tracing::trace!(user_id = user.id, "found user associated with update");
+        }
 
         let command = update
             .message
@@ -916,17 +938,21 @@ impl MessageHandler {
             .and_then(|message| message.get_command());
 
         for handler in &self.handlers {
-            tracing::trace!(name = handler.name(), "running handler");
+            tracing::trace!(handler = handler.name(), "running handler");
+            let hist = HANDLER_DURATION
+                .get_metric_with_label_values(&[handler.name()])
+                .unwrap()
+                .start_timer();
 
             match handler.handle(&self, &update, command.as_ref()).await {
                 Ok(status) if status == handlers::Status::Completed => {
                     tracing::debug!(handler = handler.name(), "handled update");
+                    hist.stop_and_record();
                     break;
                 }
                 Err(e) => {
-                    tracing::error!("Error handling update: {:#?}", e);
-
-                    tracing::error!("{:?}", e.backtrace());
+                    tracing::error!("error handling update: {:?}", e);
+                    hist.stop_and_record();
 
                     let mut tags = vec![("handler", handler.name().to_string())];
                     if let Some(user) = user {
@@ -945,7 +971,9 @@ impl MessageHandler {
 
                     break;
                 }
-                _ => (),
+                _ => {
+                    hist.stop_and_discard();
+                }
             }
         }
     }
@@ -964,22 +992,21 @@ impl MessageHandler {
                 Err(err) => err,
             };
 
+            TELEGRAM_ERROR.inc();
+
             if attempts > 2 {
                 return Err(err);
             }
 
-            let telegram_error = match err {
-                tgbotapi::Error::Telegram(ref err) => err,
-                _ => return Err(err),
-            };
-
-            let params = match &telegram_error.parameters {
-                Some(params) => params,
-                _ => return Err(err),
-            };
-
-            let retry_after = match params.retry_after {
-                Some(retry_after) => retry_after,
+            let retry_after = match err {
+                tgbotapi::Error::Telegram(tgbotapi::TelegramError {
+                    parameters:
+                        Some(tgbotapi::ResponseParameters {
+                            retry_after: Some(retry_after),
+                            ..
+                        }),
+                    ..
+                }) => retry_after,
                 _ => return Err(err),
             };
 
