@@ -29,14 +29,14 @@ Env Name                   | Description
 `TWITTER_CONSUMER_KEY`     | Twitter app consumer key
 `TWITTER_CONSUMER_KEY`     | Twitter app consumer secret
 `JAEGER_COLLECTOR`         | Jaeger collector endpoint
-`SENTRY_DSN`               | Sentry DSN to report errors
-`SENTRY_ORGANIZATION_SLUG` | Sentry organization slug
-`SENTRY_PROJECT_SLUG`      | Sentry project slug
+`SENTRY_DSN`               | Optional, Sentry DSN to report errors
+`SENTRY_ORGANIZATION_SLUG` | Optional, Sentry organization slug for user error messages
+`SENTRY_PROJECT_SLUG`      | Optional, Sentry project slug for user error messages
 `TELEGRAM_APITOKEN`        | API Token for Telegram, from Botfather
-`USE_WEBHOOKS`             | If should configure and use webhooks instead of polling
-`WEBHOOK_ENDPOINT`         | If using webhooks, endpoint to set with Telegram
+`USE_WEBHOOKS`             | Optional, if should configure and use webhooks instead of polling
+`WEBHOOK_ENDPOINT`         | Optional, if using webhooks, endpoint to set with Telegram
 `HTTP_HOST`                | Host to listen for updates on and provide Prometheus metrics
-`HTTP_SECRET`              | If using webhooks, secret endpoint to use for Telegram updates
+`HTTP_SECRET`              | Optional, if using webhooks, secret endpoint to use for Telegram updates
 `S3_ENDPOINT`              | Endpoint for S3 for cached images and video storage
 `S3_REGION`                | Region for S3
 `S3_TOKEN`                 | S3 access token
@@ -44,9 +44,8 @@ Env Name                   | Description
 `S3_BUCKET`                | S3 bucket
 `S3_URL`                   | URL to use for generating path to file in S3 bucket
 `FAUTIL_APITOKEN`          | API Token for [fuzzysearch.net](https://fuzzysearch.net)
-`SIZE_IMAGES`              | Optional, download and send image size to Telegram 
+`SIZE_IMAGES`              | Optional, download and send image size to Telegram (highly suggested, fixes a bug)
 `CACHE_IMAGES`             | Optional, download and cache images to use with Telegram
-`DATABASE`                 | Path to SQLite database to store configuration and persistent cache
 `DB_HOST`                  | Host for PostgreSQL database
 `DB_USER`                  | User for PostgreSQL database
 `DB_PASS`                  | Password for PostgreSQL database
