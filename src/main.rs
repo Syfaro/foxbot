@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tgbotapi::{requests::*, *};
 use tokio::sync::{Mutex, RwLock};
-use tracing_futures::Instrument;
 use unic_langid::LanguageIdentifier;
 
 mod handlers;
@@ -29,6 +28,8 @@ lazy_static::lazy_static! {
 
 type BoxedSite = Box<dyn Site + Send + Sync>;
 type BoxedHandler = Box<dyn handlers::Handler + Send + Sync>;
+
+static CONCURRENT_HANDLERS: usize = 2;
 
 /// Generates a random 24 character alphanumeric string.
 ///
@@ -159,6 +160,36 @@ fn configure_tracing(collector: String) {
     let registry = registry.with(telem_layer);
 
     registry.init();
+}
+
+fn setup_shutdown() -> tokio::sync::mpsc::Receiver<bool> {
+    let (mut shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel(1);
+
+    #[cfg(unix)]
+    tokio::spawn(async move {
+        use tokio::signal;
+
+        let mut stream = signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("unable to create terminate signal stream");
+
+        tokio::select! {
+            _ = stream.recv() => shutdown_tx.send(true).await.expect("unable to send shutdown"),
+            _ = signal::ctrl_c() => shutdown_tx.send(true).await.expect("unable to send shutdown"),
+        }
+    });
+
+    #[cfg(not(unix))]
+    tokio::spawn(async move {
+        use tokio::signal;
+
+        signal::ctrl_c().await.expect("unable to await ctrl-c");
+        shutdown_tx
+            .send(true)
+            .await
+            .expect("unable to send shutdown");
+    });
+
+    shutdown_rx
 }
 
 #[tokio::main]
@@ -318,6 +349,10 @@ async fn main() {
             .unwrap_or(false)
     );
 
+    // Allow buffering more updates than can be run at once
+    let (tx, rx) = tokio::sync::mpsc::channel(CONCURRENT_HANDLERS * 2);
+    let shutdown = setup_shutdown();
+
     let use_webhooks = matches!(config.use_webhooks, Some(use_webhooks) if use_webhooks);
 
     if use_webhooks {
@@ -328,10 +363,12 @@ async fn main() {
         if let Err(e) = bot.make_request(&set_webhook).await {
             panic!(e);
         }
+
         receive_webhook(
+            tx,
+            shutdown,
             config.http_host,
             config.http_secret.expect("Missing HTTP_SECRET"),
-            handler,
         )
         .await;
     } else {
@@ -339,13 +376,21 @@ async fn main() {
         if let Err(e) = bot.make_request(&delete_webhook).await {
             panic!(e);
         }
-        let handler_clone = handler.clone();
-        let host = config.http_host.clone();
-        tokio::spawn(async move {
-            receive_webhook(host, "invalid".to_string(), handler_clone).await;
-        });
-        poll_updates(bot, handler).await;
+
+        poll_updates(tx, shutdown, bot).await;
     }
+
+    use futures::StreamExt;
+    rx.for_each_concurrent(CONCURRENT_HANDLERS, |update| {
+        let handler = handler.clone();
+        async move {
+            let update = *update;
+
+            tracing::trace!(?update, "handling update");
+            handler.handle_update(update).await;
+        }
+    })
+    .await;
 }
 
 // MARK: Get Bot API updates
@@ -353,11 +398,10 @@ async fn main() {
 /// Handle an incoming HTTP POST request to /{token}.
 ///
 /// It spawns a handler for each request.
-#[tracing::instrument(skip(req, handler, secret))]
+#[tracing::instrument(skip(req, tx, secret))]
 async fn handle_request(
     req: hyper::Request<hyper::Body>,
-    count: Arc<std::sync::atomic::AtomicUsize>,
-    handler: Arc<MessageHandler>,
+    mut tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
     secret: &str,
 ) -> hyper::Result<hyper::Response<hyper::Body>> {
     use hyper::{Body, Response, StatusCode};
@@ -365,7 +409,8 @@ async fn handle_request(
     tracing::trace!(method = ?req.method(), path = req.uri().path(), "got HTTP request");
 
     match (req.method(), req.uri().path()) {
-        (&hyper::Method::GET, path) if path == "/metrics" => {
+        (&hyper::Method::GET, "/health") => Ok(Response::new(Body::from("OK"))),
+        (&hyper::Method::GET, "/metrics") => {
             tracing::trace!("encoding metrics");
 
             use prometheus::Encoder;
@@ -395,19 +440,7 @@ async fn handle_request(
                 }
             };
 
-            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            ACTIVE_HANDLERS.inc();
-            let handler_clone = handler.clone();
-            tokio::spawn(
-                async move {
-                    tracing::debug!("got update: {:?}", update);
-                    handler_clone.handle_update(update).await;
-                    count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-                    ACTIVE_HANDLERS.dec();
-                    tracing::debug!("finished handling message");
-                }
-                .in_current_span(),
-            );
+            tx.send(Box::new(update)).await.unwrap();
 
             Ok(Response::new(Body::from("✓")))
         }
@@ -420,151 +453,81 @@ async fn handle_request(
 }
 
 /// Start a web server to handle webhooks and pass updates to [handle_request].
-async fn receive_webhook(host: String, secret: String, handler: Arc<MessageHandler>) {
+async fn receive_webhook(
+    tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    mut shutdown: tokio::sync::mpsc::Receiver<bool>,
+    host: String,
+    secret: String,
+) {
     let addr = host.parse().expect("Invalid HTTP_HOST");
 
     let secret_path = format!("/{}", secret);
     let secret_path: &'static str = Box::leak(secret_path.into_boxed_str());
 
-    let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-
-    let count_clone = count.clone();
     let make_svc = hyper::service::make_service_fn(move |_conn| {
-        let handler = handler.clone();
-        let count = count_clone.clone();
+        let tx = tx.clone();
         async move {
             Ok::<_, hyper::Error>(hyper::service::service_fn(move |req| {
-                handle_request(req, count.clone(), handler.clone(), secret_path)
+                handle_request(req, tx.clone(), secret_path)
             }))
         }
     });
 
-    let server = hyper::Server::bind(&addr).serve(make_svc);
-
-    tracing::info!("listening on http://{}", addr);
-
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-
-    #[cfg(unix)]
     tokio::spawn(async move {
-        use tokio::signal;
+        tracing::info!("listening on http://{}", addr);
 
-        let mut stream = signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("unable to create terminate signal stream");
+        let graceful = hyper::Server::bind(&addr)
+            .serve(make_svc)
+            .with_graceful_shutdown(async {
+                shutdown.recv().await;
+                tracing::error!("shutting down http server");
+            });
 
-        tokio::select! {
-            _ = stream.recv() => shutdown_tx.send(true),
-            _ = signal::ctrl_c() => shutdown_tx.send(true),
+        if let Err(e) = graceful.await {
+            tracing::error!("server error: {:?}", e);
         }
     });
-
-    #[cfg(not(unix))]
-    tokio::spawn(async move {
-        use tokio::signal;
-
-        signal::ctrl_c().await.expect("unable to await ctrl-c");
-        shutdown_tx.send(true).expect("unable to send shutdown");
-    });
-
-    let graceful = server.with_graceful_shutdown(async {
-        shutdown_rx.await.ok();
-        tracing::error!("shutting down HTTP server");
-    });
-
-    if let Err(e) = graceful.await {
-        tracing::error!("server error: {:?}", e);
-    }
-
-    loop {
-        let count = count.load(std::sync::atomic::Ordering::SeqCst);
-        if count == 0 {
-            break;
-        }
-
-        tracing::warn!("waiting for {} requests to complete before shutdown", count);
-        tokio::time::delay_for(std::time::Duration::from_millis(200)).await;
-    }
 }
 
 /// Start polling updates using Bot API long polling.
-async fn poll_updates(bot: Arc<Telegram>, handler: Arc<MessageHandler>) {
+async fn poll_updates(
+    mut tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    mut shutdown: tokio::sync::mpsc::Receiver<bool>,
+    bot: Arc<Telegram>,
+) {
     let mut update_req = GetUpdates::default();
     update_req.timeout = Some(30);
 
-    let (mut shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel(1);
-
-    #[cfg(unix)]
     tokio::spawn(async move {
-        use tokio::signal;
-
-        let mut stream = signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("unable to create terminate signal stream");
-
-        tokio::select! {
-            _ = stream.recv() => shutdown_tx.send(true).await.expect("unable to send shutdown"),
-            _ = signal::ctrl_c() => shutdown_tx.send(true).await.expect("unable to send shutdown"),
-        };
-    });
-
-    #[cfg(not(unix))]
-    tokio::spawn(async move {
-        use tokio::signal;
-
-        signal::ctrl_c().await.expect("unable to await ctrl-c");
-        shutdown_tx
-            .send(true)
-            .await
-            .expect("unable to send shutdown");
-    });
-
-    let waiting = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-
-    loop {
-        let updates = tokio::select! {
-            _ = shutdown_rx.recv() => {
-                tracing::error!("got shutdown request");
-                loop {
-                    let count = waiting.load(std::sync::atomic::Ordering::SeqCst);
-                    if count == 0 {
-                        break;
-                    }
-
-                    tracing::warn!("finishing {} requests before shutdown", count);
-                    tokio::time::delay_for(std::time::Duration::from_millis(200)).await;
+        loop {
+            let updates = tokio::select! {
+                _ = shutdown.recv() => {
+                    tracing::error!("got shutdown request");
+                    break;
                 }
-                break;
+
+                updates = bot.make_request(&update_req) => updates,
+            };
+
+            let updates = match updates {
+                Ok(updates) => updates,
+                Err(e) => {
+                    sentry::capture_error(&e);
+                    tracing::error!("unable to get updates: {:?}", e);
+                    tokio::time::delay_for(std::time::Duration::from_secs(5)).await;
+                    continue;
+                }
+            };
+
+            for update in updates {
+                let id = update.update_id;
+
+                tx.send(Box::new(update)).await.unwrap();
+
+                update_req.offset = Some(id + 1);
             }
-            updates = bot.make_request(&update_req) => updates,
-        };
-
-        let updates = match updates {
-            Ok(updates) => updates,
-            Err(e) => {
-                sentry::capture_error(&e);
-                tracing::error!("unable to get updates: {:?}", e);
-                std::thread::sleep(std::time::Duration::from_secs(5));
-                continue;
-            }
-        };
-
-        for update in updates {
-            let id = update.update_id;
-
-            let handler = handler.clone();
-            let waiting = waiting.clone();
-
-            tokio::spawn(async move {
-                waiting.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                ACTIVE_HANDLERS.inc();
-                handler.handle_update(update).await;
-                tracing::debug!("finished handling update");
-                waiting.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-                ACTIVE_HANDLERS.dec();
-            });
-
-            update_req.offset = Some(id + 1);
         }
-    }
+    });
 }
 
 // MARK: Handling updates
