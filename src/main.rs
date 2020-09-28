@@ -10,7 +10,6 @@ use tracing_futures::Instrument;
 use unic_langid::LanguageIdentifier;
 
 mod handlers;
-mod migrations;
 pub mod models;
 mod sites;
 mod utils;
@@ -98,18 +97,10 @@ pub struct Config {
 
     redis_dsn: String,
 
-    // SQLite database
-    #[cfg(feature = "sqlite")]
-    database: String,
-
     // Postgres database
-    #[cfg(feature = "postgres")]
     db_host: String,
-    #[cfg(feature = "postgres")]
     db_user: String,
-    #[cfg(feature = "postgres")]
     db_pass: String,
-    #[cfg(feature = "postgres")]
     db_name: String,
 }
 
@@ -170,59 +161,6 @@ fn configure_tracing(collector: String) {
     registry.init();
 }
 
-#[cfg(feature = "sqlite")]
-async fn run_migrations(database: &str) {
-    let mut conn = rusqlite::Connection::open(database).expect("Unable to open database");
-
-    migrations::runner()
-        .run(&mut conn)
-        .expect("Unable to migrate database");
-}
-
-#[cfg(feature = "postgres")]
-async fn run_migrations(host: &str, user: &str, pass: &str, name: &str) {
-    let dsn = format!(
-        "host={} user={} password={} dbname={}",
-        host, user, pass, name
-    );
-
-    let (mut client, conn) = tokio_postgres::connect(&dsn, tokio_postgres::NoTls)
-        .await
-        .expect("Unable to connect to database");
-
-    tokio::spawn(async move {
-        if let Err(e) = conn.await {
-            tracing::error!("error in tokio-postgres migrations runner: {:?}", e);
-        }
-    });
-
-    migrations::runner()
-        .run_async(&mut client)
-        .await
-        .expect("Unable to migrate database");
-}
-
-#[cfg(feature = "sqlite")]
-async fn setup_db(config: &Config) -> String {
-    run_migrations(&config.database).await;
-    format!("file:{}", config.database)
-}
-
-#[cfg(feature = "postgres")]
-async fn setup_db(config: &Config) -> String {
-    run_migrations(
-        &config.db_host,
-        &config.db_user,
-        &config.db_pass,
-        &config.db_name,
-    )
-    .await;
-    format!(
-        "postgres://{}:{}@{}/{}",
-        config.db_user, config.db_pass, config.db_host, config.db_name
-    )
-}
-
 #[tokio::main]
 async fn main() {
     let config = match envy::from_env::<Config>() {
@@ -237,11 +175,14 @@ async fn main() {
 
     configure_tracing(jaeger_collector);
 
-    let url = setup_db(&config).await;
-
-    let pool = quaint::pooled::Quaint::builder(&url)
-        .expect("Unable to connect to database")
-        .build();
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(8)
+        .connect(&format!(
+            "postgres://{}:{}@{}/{}",
+            config.db_user, config.db_pass, config.db_host, config.db_name
+        ))
+        .await
+        .expect("unable to create database pool");
 
     let fapi = Arc::new(fuzzysearch::FuzzySearch::new(
         config.fautil_apitoken.clone(),
@@ -646,7 +587,7 @@ pub struct MessageHandler {
     pub config: Config,
 
     // Storage
-    pub conn: quaint::pooled::Quaint,
+    pub conn: sqlx::Pool<sqlx::Postgres>,
     pub redis: redis::aio::ConnectionManager,
 }
 

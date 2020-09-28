@@ -92,9 +92,8 @@ impl CommandHandler {
 
         let request_token = egg_mode::auth::request_token(&con_token, "oob").await?;
 
-        let conn = handler.conn.check_out().await?;
         Twitter::set_request(
-            &conn,
+            &handler.conn,
             user.id,
             TwitterRequest {
                 request_key: request_token.key.to_string(),
@@ -288,10 +287,8 @@ impl CommandHandler {
             ChatAction::Typing,
         );
 
-        let conn = handler.conn.check_out().await?;
-
         let is_admin: Option<bool> =
-            GroupConfig::get(&conn, message.chat.id, GroupConfigKey::IsAdmin).await?;
+            GroupConfig::get(&handler.conn, message.chat.id, GroupConfigKey::IsAdmin).await?;
         let is_admin = match is_admin {
             Some(admin) => admin,
             None => {
@@ -304,10 +301,9 @@ impl CommandHandler {
                 let is_admin = bot_member.status.is_admin();
 
                 GroupConfig::set(
-                    &conn,
+                    &handler.conn,
                     GroupConfigKey::IsAdmin,
                     message.chat.id,
-                    false,
                     is_admin,
                 )
                 .await?;
@@ -353,8 +349,12 @@ impl CommandHandler {
                 match err {
                     tgbotapi::Error::Telegram(_err) => {
                         tracing::warn!("got error trying to delete summoning message");
-                        GroupConfig::delete(&conn, GroupConfigKey::IsAdmin, message.chat.id)
-                            .await?;
+                        GroupConfig::delete(
+                            &handler.conn,
+                            GroupConfigKey::IsAdmin,
+                            message.chat.id,
+                        )
+                        .await?;
                     }
                     _ => return Err(err.into()),
                 }
@@ -401,11 +401,14 @@ impl CommandHandler {
             )
             .await;
 
-        let disable_preview =
-            GroupConfig::get::<bool>(&conn, message.chat.id, GroupConfigKey::GroupNoPreviews)
-                .await?
-                .is_some()
-                || result.distance.unwrap() > 5;
+        let disable_preview = GroupConfig::get::<bool>(
+            &handler.conn,
+            message.chat.id,
+            GroupConfigKey::GroupNoPreviews,
+        )
+        .await?
+        .is_some()
+            || result.distance.unwrap() > 5;
 
         let send_message = SendMessage {
             chat_id: message.chat.id.into(),
@@ -690,29 +693,25 @@ impl CommandHandler {
             return Ok(());
         }
 
-        let conn = handler.conn.check_out().await?;
+        let result = GroupConfig::get(&handler.conn, message.chat.id, GroupConfigKey::GroupAdd)
+            .await?
+            .unwrap_or(false);
 
-        let result: Option<bool> =
-            GroupConfig::get(&conn, message.chat.id, GroupConfigKey::GroupAdd).await?;
+        GroupConfig::set(
+            &handler.conn,
+            GroupConfigKey::GroupAdd,
+            message.chat.id,
+            !result,
+        )
+        .await?;
 
-        if result.is_some() {
-            GroupConfig::delete(&conn, GroupConfigKey::GroupAdd, message.chat.id).await?;
-            handler
-                .send_generic_reply(&message, "automatic-disable")
-                .await?;
+        let name = if !result {
+            "automatic-enable-success"
         } else {
-            GroupConfig::set(
-                &conn,
-                GroupConfigKey::GroupAdd,
-                message.chat.id,
-                false,
-                true,
-            )
-            .await?;
-            handler
-                .send_generic_reply(&message, "automatic-enable-success")
-                .await?;
-        }
+            "automatic-disable"
+        };
+
+        handler.send_generic_reply(&message, name).await?;
 
         Ok(())
     }
@@ -726,29 +725,29 @@ impl CommandHandler {
             return Ok(());
         }
 
-        let conn = handler.conn.check_out().await?;
+        let result = GroupConfig::get(
+            &handler.conn,
+            message.chat.id,
+            GroupConfigKey::GroupNoPreviews,
+        )
+        .await?
+        .unwrap_or(true);
 
-        let result: Option<bool> =
-            GroupConfig::get(&conn, message.chat.id, GroupConfigKey::GroupNoPreviews).await?;
+        GroupConfig::set(
+            &handler.conn,
+            GroupConfigKey::GroupNoPreviews,
+            message.chat.id,
+            !result,
+        )
+        .await?;
 
-        if result.is_some() {
-            GroupConfig::delete(&conn, GroupConfigKey::GroupNoPreviews, message.chat.id).await?;
-            handler
-                .send_generic_reply(&message, "automatic-preview-enable")
-                .await?;
+        let name = if !result {
+            "automatic-preview-enable"
         } else {
-            GroupConfig::set(
-                &conn,
-                GroupConfigKey::GroupNoPreviews,
-                message.chat.id,
-                false,
-                false,
-            )
-            .await?;
-            handler
-                .send_generic_reply(&message, "automatic-preview-disable")
-                .await?;
-        }
+            "automatic-preview-disable"
+        };
+
+        handler.send_generic_reply(&message, name).await?;
 
         Ok(())
     }

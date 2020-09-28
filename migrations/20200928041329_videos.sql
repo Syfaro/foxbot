@@ -1,0 +1,7 @@
+CREATE TABLE videos (
+    id SERIAL PRIMARY KEY,
+    processed BOOLEAN NOT NULL DEFAULT FALSE,
+    source TEXT NOT NULL,
+    url TEXT UNIQUE NOT NULL,
+    mp4_url TEXT UNIQUE
+);

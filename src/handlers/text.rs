@@ -33,13 +33,7 @@ impl super::Handler for TextHandler {
 
         tracing::trace!(?text, "checking if message was Twitter code");
 
-        let conn = handler
-            .conn
-            .check_out()
-            .await
-            .context("unable to check out database")?;
-
-        let row = match Twitter::get_request(&conn, from.id)
+        let row = match Twitter::get_request(&handler.conn, from.id)
             .await
             .context("unable to query twitter requests")?
         {
@@ -70,7 +64,7 @@ impl super::Handler for TextHandler {
         tracing::trace!("got access token");
 
         Twitter::set_account(
-            &conn,
+            &handler.conn,
             from.id,
             TwitterAccount {
                 consumer_key: access.key.to_string(),

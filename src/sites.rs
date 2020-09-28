@@ -353,14 +353,14 @@ pub struct Twitter {
     matcher: regex::Regex,
     consumer: egg_mode::KeyPair,
     token: egg_mode::Token,
-    conn: quaint::pooled::Quaint,
+    conn: sqlx::Pool<sqlx::Postgres>,
 }
 
 impl Twitter {
     pub async fn new(
         consumer_key: String,
         consumer_secret: String,
-        conn: quaint::pooled::Quaint,
+        conn: sqlx::Pool<sqlx::Postgres>,
     ) -> Self {
         use egg_mode::KeyPair;
 
@@ -413,12 +413,7 @@ impl Site for Twitter {
 
         tracing::trace!(user_id, "attempting to find saved credentials",);
 
-        let conn = self
-            .conn
-            .check_out()
-            .await
-            .context("unable to check out database")?;
-        let account = TwitterModel::get_account(&conn, user_id)
+        let account = TwitterModel::get_account(&self.conn, user_id)
             .await
             .context("unable to query twitter account")?;
 
