@@ -173,8 +173,8 @@ fn setup_shutdown() -> tokio::sync::mpsc::Receiver<bool> {
             .expect("unable to create terminate signal stream");
 
         tokio::select! {
-            _ = stream.recv() => shutdown_tx.send(true),
-            _ = signal::ctrl_c() => shutdown_tx.send(true),
+            _ = stream.recv() => shutdown_tx.send(true).expect("unable to send shutdown"),
+            _ = signal::ctrl_c() => shutdown_tx.send(true).expect("unable to send shutdown"),
         }
     });
 
