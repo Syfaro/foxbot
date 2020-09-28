@@ -32,7 +32,7 @@ impl InlineHandler {
             Some(id) => id,
             None => return Ok(()),
         };
-        let id: i64 = match id.parse() {
+        let id: i32 = match id.parse() {
             Ok(id) => id,
             Err(_err) => return Ok(()),
         };
@@ -55,8 +55,9 @@ impl InlineHandler {
         };
         let sent = handler.make_request(&send_message).await?;
 
-        let conn = handler.conn.check_out().await?;
-        let video = Video::lookup_id(&conn, id).await?.expect("missing video");
+        let video = Video::lookup_id(&handler.conn, id)
+            .await?
+            .expect("missing video");
 
         let _ = std::fs::create_dir("videos");
 
@@ -143,7 +144,7 @@ impl InlineHandler {
             handler.config.s3_url, handler.config.s3_bucket, key
         );
 
-        Video::set_processed_url(&conn, &video.url, &mp4_url).await?;
+        Video::set_processed_url(&handler.conn, &video.url, &mp4_url).await?;
 
         let video_return_button = handler
             .get_fluent_bundle(lang, |bundle| {
@@ -368,18 +369,12 @@ async fn build_image_result(
     let mut result = result.to_owned();
     result.thumb = Some(thumb_url);
 
-    let conn = handler
-        .conn
-        .check_out()
-        .await
-        .context("unable to check out database")?;
-
     // Check if we should cache images, top priority option. If not, check if
     // we should size them (this should probably always be true). And finally,
     // if no other options are set we should pass the result through untouched.
     let result = if handler.config.cache_images.unwrap_or(false) {
         cache_post(
-            &conn,
+            &handler.conn,
             &handler.s3,
             &handler.config.s3_bucket,
             &handler.config.s3_url,
@@ -428,14 +423,12 @@ async fn build_image_result(
 }
 
 async fn build_webm_result(
-    conn: &quaint::pooled::Quaint,
+    conn: &sqlx::Pool<sqlx::Postgres>,
     result: &crate::sites::PostInfo,
     thumb_url: String,
     keyboard: &InlineKeyboardMarkup,
     source_link: &str,
 ) -> anyhow::Result<Vec<(ResultType, InlineQueryResult)>> {
-    let conn = conn.check_out().await?;
-
     let video = match Video::lookup_url(&conn, &result.url).await? {
         None => {
             let id = Video::insert_url(&conn, &result.url, &source_link).await?;

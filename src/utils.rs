@@ -77,7 +77,7 @@ pub struct ImageInfo {
 /// * Saves in cache
 #[tracing::instrument(skip(conn, s3, s3_bucket, s3_url))]
 async fn upload_image(
-    conn: &quaint::pooled::PooledConnection,
+    conn: &sqlx::Pool<sqlx::Postgres>,
     s3: &rusoto_s3::S3Client,
     s3_bucket: &str,
     s3_url: &str,
@@ -168,7 +168,7 @@ pub async fn size_post(post: &crate::PostInfo) -> anyhow::Result<crate::PostInfo
 /// generate thumbnail, and upload to S3 bucket. Returns a new PostInfo with
 /// the updated URLs and dimensions.
 pub async fn cache_post(
-    conn: &quaint::pooled::PooledConnection,
+    conn: &sqlx::Pool<sqlx::Postgres>,
     s3: &rusoto_s3::S3Client,
     s3_bucket: &str,
     s3_url: &str,
@@ -412,15 +412,10 @@ impl Drop for ContinuousAction {
 #[tracing::instrument(skip(bot, conn, fapi))]
 pub async fn match_image(
     bot: &tgbotapi::Telegram,
-    conn: &quaint::pooled::Quaint,
+    conn: &sqlx::Pool<sqlx::Postgres>,
     fapi: &fuzzysearch::FuzzySearch,
     file: &tgbotapi::PhotoSize,
 ) -> anyhow::Result<Vec<fuzzysearch::File>> {
-    let conn = conn
-        .check_out()
-        .await
-        .context("unable to check out database")?;
-
     if let Some(hash) = FileCache::get(&conn, &file.file_unique_id)
         .await
         .context("unable to query file cache")?
@@ -479,7 +474,7 @@ async fn lookup_single_hash(
 }
 
 pub async fn sort_results(
-    conn: &quaint::pooled::Quaint,
+    conn: &sqlx::Pool<sqlx::Postgres>,
     user_id: i32,
     results: &mut Vec<fuzzysearch::File>,
 ) -> anyhow::Result<()> {
@@ -487,11 +482,6 @@ pub async fn sort_results(
     if results.len() <= 1 {
         return Ok(());
     }
-
-    let conn = conn
-        .check_out()
-        .await
-        .context("unable to check out database")?;
 
     let row: Option<Vec<String>> = UserConfig::get(&conn, UserConfigKey::SiteSortOrder, user_id)
         .await
@@ -524,11 +514,10 @@ pub async fn sort_results(
     Ok(())
 }
 
-pub async fn use_source_name(conn: &quaint::pooled::Quaint, user_id: i32) -> anyhow::Result<bool> {
-    let conn = conn
-        .check_out()
-        .await
-        .context("unable to check out database")?;
+pub async fn use_source_name(
+    conn: &sqlx::Pool<sqlx::Postgres>,
+    user_id: i32,
+) -> anyhow::Result<bool> {
     let row = UserConfig::get(&conn, UserConfigKey::SourceName, user_id)
         .await
         .context("unable to query user source name config")?
@@ -624,7 +613,7 @@ pub fn link_was_seen(
 pub async fn get_matches(
     bot: &tgbotapi::Telegram,
     fapi: &fuzzysearch::FuzzySearch,
-    conn: &quaint::pooled::Quaint,
+    conn: &sqlx::Pool<sqlx::Postgres>,
     sizes: &[tgbotapi::PhotoSize],
 ) -> anyhow::Result<Option<fuzzysearch::File>> {
     // Find the highest resolution size of the image and download.

@@ -29,12 +29,7 @@ impl super::Handler for GroupSourceHandler {
         let message = needs_field!(update, message);
         let photo_sizes = needs_field!(message, photo);
 
-        let conn = handler
-            .conn
-            .check_out()
-            .await
-            .context("unable to check out database")?;
-        match GroupConfig::get(&conn, message.chat.id, GroupConfigKey::GroupAdd)
+        match GroupConfig::get(&handler.conn, message.chat.id, GroupConfigKey::GroupAdd)
             .await
             .context("unable to query group add config")?
         {

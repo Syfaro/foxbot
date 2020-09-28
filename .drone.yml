@@ -18,8 +18,7 @@ steps:
   - tar zxvf sccache.tar.gz
   - export RUSTC_WRAPPER=$(pwd)/sccache-0.2.13-x86_64-unknown-linux-musl/sccache
   - pip3 install cfscrape
-  - cargo test --no-default-features --features sqlite
-  - cargo test --no-default-features --features postgres
+  - cargo test
   - $(pwd)/sccache-0.2.13-x86_64-unknown-linux-musl/sccache --show-stats
   environment:
     AWS_ACCESS_KEY_ID:
@@ -69,7 +68,7 @@ steps:
   - export RUSTC_WRAPPER=$(pwd)/sccache-0.2.13-x86_64-unknown-linux-musl/sccache
   - pip3 install cfscrape
   - export RELEASE=${DRONE_COMMIT_SHA}
-  - RUSTFLAGS=-g cargo build --release --no-default-features --features postgres
+  - RUSTFLAGS=-g cargo build --release
   - $(pwd)/sccache-0.2.13-x86_64-unknown-linux-musl/sccache --show-stats
   - cp ./target/release/foxbot ./foxbot
   environment:
