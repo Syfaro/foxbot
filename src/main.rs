@@ -384,10 +384,7 @@ async fn main() {
     rx.for_each_concurrent(CONCURRENT_HANDLERS, |update| {
         let handler = handler.clone();
         async move {
-            let update = *update;
-
-            tracing::trace!(?update, "handling update");
-            handler.handle_update(update).await;
+            handler.handle_update(*update).await;
         }
     })
     .await;
@@ -398,15 +395,12 @@ async fn main() {
 /// Handle an incoming HTTP POST request to /{token}.
 ///
 /// It spawns a handler for each request.
-#[tracing::instrument(skip(req, tx, secret))]
 async fn handle_request(
     req: hyper::Request<hyper::Body>,
     mut tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
     secret: &str,
 ) -> hyper::Result<hyper::Response<hyper::Body>> {
     use hyper::{Body, Response, StatusCode};
-
-    tracing::trace!(method = ?req.method(), path = req.uri().path(), "got HTTP request");
 
     match (req.method(), req.uri().path()) {
         (&hyper::Method::GET, "/health") => Ok(Response::new(Body::from("OK"))),
@@ -424,7 +418,6 @@ async fn handle_request(
         (&hyper::Method::POST, path) if path == secret => {
             let _hist = REQUEST_DURATION.start_timer();
 
-            tracing::trace!("handling update");
             let body = req.into_body();
             let bytes = hyper::body::to_bytes(body)
                 .await
@@ -828,6 +821,8 @@ impl MessageHandler {
     #[tracing::instrument(skip(self, update))]
     async fn handle_update(&self, update: Update) {
         let _hist = HANDLING_DURATION.start_timer();
+
+        tracing::trace!(?update, "handling update");
 
         sentry::configure_scope(|mut scope| {
             utils::add_sentry_tracing(&mut scope);
