@@ -348,19 +348,6 @@
       ]
     }
   },
-  "c57a59455527169eef7e5f835f2010c420b072bb41d4200a9d0149f407bcec3d": {
-    "query": "INSERT INTO file_id_cache (file_id, hash) VALUES ($1, $2)",
-    "describe": {
-      "columns": [],
-      "parameters": {
-        "Left": [
-          "Text",
-          "Int8"
-        ]
-      },
-      "nullable": []
-    }
-  },
   "dd986c2fcd7aefb700f383e25b41c896a60a8d6954d6af206c41658e6455ae45": {
     "query": "DELETE FROM twitter_auth WHERE user_id = $1",
     "describe": {
@@ -368,6 +355,19 @@
       "parameters": {
         "Left": [
           "Int4"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "dde2f98c7e317bd0a9a22f55310a4aac1a9b25ee136fbdb9e7e1fe1109f554ba": {
+    "query": "INSERT INTO file_id_cache (file_id, hash) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Text",
+          "Int8"
         ]
       },
       "nullable": []

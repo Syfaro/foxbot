@@ -189,6 +189,7 @@ impl GroupConfig {
         )
         .execute(conn)
         .await?;
+
         Ok(())
     }
 }
@@ -252,13 +253,17 @@ impl Twitter {
         user_id: i32,
         creds: TwitterAccount,
     ) -> anyhow::Result<()> {
+        let mut tx = conn.begin().await?;
+
         sqlx::query!("DELETE FROM twitter_account WHERE user_id = $1", user_id)
-            .execute(conn)
+            .execute(&mut tx)
             .await?;
         sqlx::query!("DELETE FROM twitter_auth WHERE user_id = $1", user_id)
-            .execute(conn)
+            .execute(&mut tx)
             .await?;
-        sqlx::query!("INSERT INTO twitter_account (user_id, consumer_key, consumer_secret) VALUES ($1, $2, $3)", user_id, creds.consumer_key, creds.consumer_secret).execute(conn).await?;
+        sqlx::query!("INSERT INTO twitter_account (user_id, consumer_key, consumer_secret) VALUES ($1, $2, $3)", user_id, creds.consumer_key, creds.consumer_secret).execute(&mut tx).await?;
+
+        tx.commit().await?;
 
         Ok(())
     }
@@ -268,8 +273,10 @@ impl Twitter {
         user_id: i32,
         creds: TwitterRequest,
     ) -> anyhow::Result<()> {
+        let mut tx = conn.begin().await?;
+
         sqlx::query!("DELETE FROM twitter_auth WHERE user_id = $1", &user_id)
-            .execute(conn)
+            .execute(&mut tx)
             .await?;
         sqlx::query!(
             "INSERT INTO twitter_auth (user_id, request_key, request_secret) VALUES ($1, $2, $3)",
@@ -277,8 +284,10 @@ impl Twitter {
             creds.request_key,
             creds.request_secret
         )
-        .execute(conn)
+        .execute(&mut tx)
         .await?;
+
+        tx.commit().await?;
 
         Ok(())
     }
@@ -292,15 +301,11 @@ impl FileCache {
         conn: &sqlx::Pool<sqlx::Postgres>,
         file_id: &str,
     ) -> anyhow::Result<Option<i64>> {
-        let row = sqlx::query!("SELECT hash FROM file_id_cache WHERE file_id = $1", file_id)
+        sqlx::query!("SELECT hash FROM file_id_cache WHERE file_id = $1", file_id)
             .fetch_optional(conn)
-            .await?;
-        let row = match row {
-            Some(row) => row,
-            None => return Ok(None),
-        };
-
-        Ok(Some(row.hash))
+            .await
+            .map(|row| row.map(|row| row.hash))
+            .context("unable to select hash from file_id_cache")
     }
 
     pub async fn set(
@@ -309,7 +314,7 @@ impl FileCache {
         hash: i64,
     ) -> anyhow::Result<()> {
         sqlx::query!(
-            "INSERT INTO file_id_cache (file_id, hash) VALUES ($1, $2)",
+            "INSERT INTO file_id_cache (file_id, hash) VALUES ($1, $2) ON CONFLICT DO NOTHING",
             file_id,
             hash
         )
