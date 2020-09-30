@@ -1,5 +1,7 @@
 -botName = @FoxBot
 -creatorName = @Syfaro
+-newsChannelName = @FoxBotNews
+-docsLink = https://syfaro.net/blog/foxbot/
 
 # General Onboarding
 welcome =
@@ -13,6 +15,8 @@ welcome =
     
     If I'm given edit permissions in your channel, I'll automatically edit posts to include a source link.
     
+    For more details, visit { -docsLink }. Also check out { -newsChannelName } for feature updates.
+    
     Contact my creator { -creatorName } if you have any issues or feature suggestions.
 
 welcome-group =
@@ -25,6 +29,8 @@ welcome-group =
     · /source - I'll attempt to find if the photo you're replying to has been posted on FurAffinity
     
     You can also enable automatically finding sources for images posted in here with the /groupsource command. However, I must be an administrator in the group for this to work and it can only be enabled by an administrator.
+    
+    For more details, visit { -docsLink }. Also check out { -newsChannelName } for feature updates.
 
 welcome-try-me = Try Me!
 
