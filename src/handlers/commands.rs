@@ -588,19 +588,12 @@ impl CommandHandler {
         for m in matches {
             if let Some(artist) = results.get_mut(&m.artists.clone().unwrap()) {
                 artist.push(fuzzysearch::File {
-                    id: m.id,
-                    site_id: m.site_id,
                     distance: hamming::distance_fast(
                         &m.hash.unwrap().to_be_bytes(),
                         &m.searched_hash.unwrap().to_be_bytes(),
                     )
                     .ok(),
-                    hash: m.hash,
-                    url: m.url,
-                    filename: m.filename,
-                    artists: m.artists.clone(),
-                    site_info: None,
-                    searched_hash: None,
+                    ..m
                 });
             }
         }
