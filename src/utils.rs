@@ -654,6 +654,49 @@ pub fn user_from_update(update: &tgbotapi::Update) -> Option<&tgbotapi::User> {
     }
 }
 
+pub async fn can_delete_in_chat(
+    bot: &tgbotapi::Telegram,
+    conn: &sqlx::Pool<sqlx::Postgres>,
+    chat_id: i64,
+    user_id: i32,
+    ignore_cache: bool,
+) -> anyhow::Result<bool> {
+    use crate::models::{GroupConfig, GroupConfigKey};
+
+    // If we're not ignoring cache, start by checking if we already have a value
+    // in the database.
+    if !ignore_cache {
+        let can_delete: Option<bool> =
+            GroupConfig::get(&conn, chat_id, GroupConfigKey::HasDeletePermission).await?;
+
+        // If we had a value we're done, return it.
+        if let Some(can_delete) = can_delete {
+            return Ok(can_delete);
+        }
+    }
+
+    // Load the user ID (likely the Bot's user ID), check if they have the
+    // permission to delete messages.
+    let chat_member = bot
+        .make_request(&tgbotapi::requests::GetChatMember {
+            chat_id: chat_id.into(),
+            user_id,
+        })
+        .await?;
+    let can_delete = chat_member.can_delete_messages.unwrap_or(false);
+
+    // Cache the new value.
+    GroupConfig::set(
+        &conn,
+        GroupConfigKey::HasDeletePermission,
+        chat_id,
+        can_delete,
+    )
+    .await?;
+
+    Ok(can_delete)
+}
+
 #[cfg(test)]
 mod tests {
     fn get_finder() -> linkify::LinkFinder {

@@ -6,8 +6,8 @@ use super::Status::*;
 use crate::models::{GroupConfig, GroupConfigKey, Twitter, TwitterRequest};
 use crate::needs_field;
 use crate::utils::{
-    build_alternate_response, continuous_action, find_best_photo, find_images, get_message,
-    match_image, parse_known_bots, sort_results,
+    build_alternate_response, can_delete_in_chat, continuous_action, find_best_photo, find_images,
+    get_message, match_image, parse_known_bots, sort_results,
 };
 
 // TODO: there's a lot of shared code between these commands.
@@ -287,36 +287,20 @@ impl CommandHandler {
             ChatAction::Typing,
         );
 
-        let is_admin: Option<bool> =
-            GroupConfig::get(&handler.conn, message.chat.id, GroupConfigKey::IsAdmin).await?;
-        let is_admin = match is_admin {
-            Some(admin) => admin,
-            None => {
-                let get_chat_member = GetChatMember {
-                    user_id: handler.bot_user.id,
-                    chat_id: message.chat_id(),
-                };
-                let bot_member = handler.make_request(&get_chat_member).await?;
-
-                let is_admin = bot_member.status.is_admin();
-
-                GroupConfig::set(
-                    &handler.conn,
-                    GroupConfigKey::IsAdmin,
-                    message.chat.id,
-                    is_admin,
-                )
-                .await?;
-
-                is_admin
-            }
-        };
+        let can_delete = can_delete_in_chat(
+            &handler.bot,
+            &handler.conn,
+            message.chat.id,
+            handler.bot_user.id,
+            false,
+        )
+        .await?;
 
         let summoning_id = message.message_id;
 
         let (mut reply_to_id, message) = if let Some(reply_to_message) = &message.reply_to_message {
             let reply = &**reply_to_message;
-            let reply_id = if is_admin {
+            let reply_id = if can_delete {
                 reply.message_id
             } else {
                 message.message_id
@@ -337,7 +321,7 @@ impl CommandHandler {
             }
         };
 
-        if is_admin {
+        if can_delete {
             let delete_message = DeleteMessage {
                 chat_id: message.chat_id(),
                 message_id: summoning_id,
@@ -349,10 +333,13 @@ impl CommandHandler {
                 match err {
                     tgbotapi::Error::Telegram(_err) => {
                         tracing::warn!("got error trying to delete summoning message");
-                        GroupConfig::delete(
+                        // Recheck if we have delete permissions, ignoring cache
+                        can_delete_in_chat(
+                            &handler.bot,
                             &handler.conn,
-                            GroupConfigKey::IsAdmin,
                             message.chat.id,
+                            handler.bot_user.id,
+                            true,
                         )
                         .await?;
                     }
@@ -666,6 +653,16 @@ impl CommandHandler {
             ..get_chat_member
         };
         let bot_member = handler.make_request(&get_chat_member).await?;
+
+        // Already fetching it, should save it for trying to delete summoning
+        // messages.
+        GroupConfig::set(
+            &handler.conn,
+            GroupConfigKey::HasDeletePermission,
+            message.chat.id,
+            bot_member.can_delete_messages.unwrap_or(false),
+        )
+        .await?;
 
         if !bot_member.status.is_admin() {
             handler
