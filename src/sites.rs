@@ -1071,16 +1071,6 @@ pub struct DeviantArt {
     matcher: regex::Regex,
 }
 
-impl DeviantArt {
-    pub fn new() -> Self {
-        Self {
-            client: reqwest::Client::new(),
-            matcher: regex::Regex::new(r#"(?:deviantart\.com/\w+/art/.+-|fav\.me/)(?P<id>\d+)"#)
-                .unwrap(),
-        }
-    }
-}
-
 #[derive(Deserialize)]
 struct DeviantArtOEmbed {
     #[serde(rename = "type")]
@@ -1089,6 +1079,28 @@ struct DeviantArtOEmbed {
     thumbnail_url: String,
     width: u32,
     height: u32,
+}
+
+impl DeviantArt {
+    pub fn new() -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            matcher: regex::Regex::new(r#"(?:(?:deviantart\.com/(?:.+/)?art/.+-|fav\.me/)(?P<id>\d+)|sta\.sh/(?P<code>\w+))"#)
+                .unwrap(),
+        }
+    }
+
+    fn get_id(&self, captures: &regex::Captures) -> Option<String> {
+        if let Some(id) = captures.name("id") {
+            return Some(id.as_str().to_string());
+        }
+
+        if let Some(code) = captures.name("code") {
+            return Some(code.as_str().to_string());
+        }
+
+        None
+    }
 }
 
 #[async_trait]
@@ -1104,7 +1116,7 @@ impl Site for DeviantArt {
     fn url_id(&self, url: &str) -> Option<String> {
         self.matcher
             .captures(url)
-            .and_then(|captures| captures["id"].to_owned().parse::<i32>().ok())
+            .and_then(|captures| self.get_id(&captures))
             .map(|id| format!("DeviantArt-{}", id))
     }
 
