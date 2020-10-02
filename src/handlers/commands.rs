@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use tgbotapi::{requests::*, *};
 
 use super::Status::*;
-use crate::models::{GroupConfig, GroupConfigKey, Twitter, TwitterRequest};
+use crate::models::{GroupConfig, GroupConfigKey, Twitter};
 use crate::needs_field;
 use crate::utils::{
     build_alternate_response, can_delete_in_chat, continuous_action, find_best_photo, find_images,
@@ -97,11 +97,8 @@ impl CommandHandler {
         Twitter::set_request(
             &handler.conn,
             user.id,
-            TwitterRequest {
-                user_id: None,
-                request_key: request_token.key.to_string(),
-                request_secret: request_token.secret.to_string(),
-            },
+            &request_token.key,
+            &request_token.secret,
         )
         .await?;
 
@@ -166,7 +163,7 @@ impl CommandHandler {
 
         Twitter::set_account(
             &handler.conn,
-            row.user_id.unwrap(),
+            row.user_id,
             crate::models::TwitterAccount {
                 consumer_key: access.key.to_string(),
                 consumer_secret: access.secret.to_string(),
@@ -184,7 +181,7 @@ impl CommandHandler {
             .await;
 
         let message = SendMessage {
-            chat_id: row.user_id.unwrap().into(),
+            chat_id: row.user_id.into(),
             text,
             reply_to_message_id: Some(message.message_id),
             ..Default::default()

@@ -203,7 +203,7 @@ pub struct TwitterAccount {
 
 #[derive(sqlx::FromRow)]
 pub struct TwitterRequest {
-    pub user_id: Option<i32>,
+    pub user_id: i32,
     pub request_key: String,
     pub request_secret: String,
 }
@@ -272,7 +272,8 @@ impl Twitter {
     pub async fn set_request(
         conn: &sqlx::Pool<sqlx::Postgres>,
         user_id: i32,
-        creds: TwitterRequest,
+        request_key: &str,
+        request_secret: &str,
     ) -> anyhow::Result<()> {
         let mut tx = conn.begin().await?;
 
@@ -282,8 +283,8 @@ impl Twitter {
         sqlx::query!(
             "INSERT INTO twitter_auth (user_id, request_key, request_secret) VALUES ($1, $2, $3)",
             user_id,
-            creds.request_key,
-            creds.request_secret
+            request_key,
+            request_secret
         )
         .execute(&mut tx)
         .await?;
