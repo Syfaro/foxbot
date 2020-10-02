@@ -445,6 +445,10 @@ async fn handle_request(
                 })
                 .unwrap_or_else(std::collections::HashMap::new);
 
+            if query.contains_key("denied") {
+                return Ok(Response::new(Body::from("Maybe, someday in the future :)")));
+            }
+
             let (token, verifier) = match (query.get("oauth_token"), query.get("oauth_verifier")) {
                 (Some(token), Some(verifier)) => (token, verifier),
                 _ => {
@@ -473,7 +477,7 @@ async fn handle_request(
             .await
             .unwrap();
 
-            Ok(Response::new(Body::from("Looking good!")))
+            Ok(Response::new(Body::from("Account added!")))
         }
         _ => {
             let mut not_found = Response::default();
