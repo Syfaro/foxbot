@@ -296,32 +296,6 @@
       ]
     }
   },
-  "abd71d38e50ecbf0c6d4009e6a7190d9a7a6b2394f61d8524fc73f5702f95256": {
-    "query": "SELECT request_key, request_secret FROM twitter_auth WHERE user_id = $1",
-    "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "request_key",
-          "type_info": "Text"
-        },
-        {
-          "ordinal": 1,
-          "name": "request_secret",
-          "type_info": "Text"
-        }
-      ],
-      "parameters": {
-        "Left": [
-          "Int4"
-        ]
-      },
-      "nullable": [
-        false,
-        false
-      ]
-    }
-  },
   "b026472c90c2ce35575846b3aa4b4d1f57e08443011ac2426776a5f17bb561e8": {
     "query": "SELECT consumer_key, consumer_secret FROM twitter_account WHERE user_id = $1",
     "describe": {
@@ -343,6 +317,38 @@
         ]
       },
       "nullable": [
+        false,
+        false
+      ]
+    }
+  },
+  "d3e2621b8dac678405b17592ae217521caf11fefb742d3383d33804300c5bfaf": {
+    "query": "SELECT user_id, request_key, request_secret FROM twitter_auth WHERE request_key = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "user_id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 1,
+          "name": "request_key",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 2,
+          "name": "request_secret",
+          "type_info": "Text"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        true,
         false,
         false
       ]
