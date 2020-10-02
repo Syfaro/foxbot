@@ -154,6 +154,11 @@ async fn upload_image(
 pub async fn size_post(post: &crate::PostInfo) -> anyhow::Result<crate::PostInfo> {
     use image::GenericImageView;
 
+    // If we already have image dimensions, assume they're valid and reuse.
+    if post.image_dimensions.is_some() {
+        return Ok(post.to_owned());
+    }
+
     let data = reqwest::get(&post.url).await?.bytes().await?;
     let im = image::load_from_memory(&data)?;
     let dimensions = im.dimensions();
