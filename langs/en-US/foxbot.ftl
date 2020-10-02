@@ -54,9 +54,10 @@ reverse-good-result = I found this (distance of { $distance }): { $link }
 reverse-bad-result = I found this but it may not be the same image, be warned (distance of { $distance }): { $link }
 
 # Twitter Onboarding
-twitter-oob = Please follow the link and enter the 6 digit code returned: { $link }
+twitter-callback = Please follow this link to add your Twitter account: { $link }
 twitter-welcome = Welcome aboard, { $userName }!
 twitter-private = Let's do this in a private chat.
+twitter-not-for-you = It doesn't look like anything to me
 
 # In-group mirroring
 mirror-no-links = Sorry, I could not find any links to mirror images from.

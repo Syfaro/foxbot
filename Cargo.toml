@@ -15,6 +15,7 @@ fluent = "0.12"
 fluent-langneg = "0.13"
 unic-langid = "0.9"
 hyper = "0.13"
+url = "2"
 hamming = "0.1"
 
 sha2 = "0.9"
