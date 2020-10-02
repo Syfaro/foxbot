@@ -239,6 +239,7 @@ async fn main() {
             config.inkbunny_password.clone(),
         )),
         Box::new(sites::Mastodon::new()),
+        Box::new(sites::DeviantArt::new()),
         Box::new(sites::Direct::new(fapi.clone())),
     ];
 

@@ -1065,3 +1065,83 @@ impl Site for Inkbunny {
         Ok(Some(results))
     }
 }
+
+pub struct DeviantArt {
+    client: reqwest::Client,
+    matcher: regex::Regex,
+}
+
+#[derive(Deserialize)]
+struct DeviantArtOEmbed {
+    #[serde(rename = "type")]
+    file_type: String,
+    url: String,
+    thumbnail_url: String,
+    width: u32,
+    height: u32,
+}
+
+impl DeviantArt {
+    pub fn new() -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            matcher: regex::Regex::new(r#"(?:(?:deviantart\.com/(?:.+/)?art/.+-|fav\.me/)(?P<id>\d+)|sta\.sh/(?P<code>\w+))"#)
+                .unwrap(),
+        }
+    }
+
+    fn get_id(&self, captures: &regex::Captures) -> Option<String> {
+        if let Some(id) = captures.name("id") {
+            return Some(id.as_str().to_string());
+        }
+
+        if let Some(code) = captures.name("code") {
+            return Some(code.as_str().to_string());
+        }
+
+        None
+    }
+}
+
+#[async_trait]
+impl Site for DeviantArt {
+    fn name(&self) -> &'static str {
+        "DeviantArt"
+    }
+
+    async fn url_supported(&mut self, url: &str) -> bool {
+        self.matcher.is_match(url)
+    }
+
+    fn url_id(&self, url: &str) -> Option<String> {
+        self.matcher
+            .captures(url)
+            .and_then(|captures| self.get_id(&captures))
+            .map(|id| format!("DeviantArt-{}", id))
+    }
+
+    async fn get_images(
+        &mut self,
+        _user_id: i32,
+        url: &str,
+    ) -> anyhow::Result<Option<Vec<PostInfo>>> {
+        let mut endpoint = url::Url::parse("https://backend.deviantart.com/oembed").unwrap();
+        endpoint.query_pairs_mut().append_pair("url", url);
+
+        let resp: DeviantArtOEmbed = self.client.get(endpoint).send().await?.json().await?;
+
+        if resp.file_type != "photo" {
+            return Ok(None);
+        }
+
+        Ok(Some(vec![PostInfo {
+            file_type: "png".to_string(),
+            url: resp.url,
+            thumb: Some(resp.thumbnail_url),
+            source_link: Some(url.to_owned()),
+            site_name: self.name(),
+            image_dimensions: Some((resp.width, resp.height)),
+            ..Default::default()
+        }]))
+    }
+}
