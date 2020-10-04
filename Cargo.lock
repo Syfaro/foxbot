@@ -814,6 +814,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "cfscrape",
+ "dotenv",
  "egg-mode",
  "envy",
  "fluent",

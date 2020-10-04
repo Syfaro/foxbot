@@ -193,8 +193,18 @@ fn setup_shutdown() -> tokio::sync::mpsc::Receiver<bool> {
     shutdown_rx
 }
 
+#[cfg(feature = "env")]
+fn load_env() {
+    dotenv::dotenv().unwrap();
+}
+
+#[cfg(not(feature = "env"))]
+fn load_env() {}
+
 #[tokio::main]
 async fn main() {
+    load_env();
+
     let config = match envy::from_env::<Config>() {
         Ok(config) => config,
         Err(err) => panic!("{:#?}", err),
