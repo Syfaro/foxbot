@@ -1,5 +1,3 @@
-#![feature(try_trait)]
-
 use sentry::integrations::anyhow::capture_anyhow;
 use sites::{PostInfo, Site};
 use std::collections::HashMap;

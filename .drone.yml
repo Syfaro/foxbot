@@ -13,7 +13,7 @@ concurrency:
 steps:
 - name: test
   pull: always
-  image: rustlang/rust:nightly-slim
+  image: rust:1.46-slim-buster
   commands:
   - apt-get update -y
   - apt-get install pkg-config libssl-dev ca-certificates python3 python3-pip nodejs wget -y
@@ -65,7 +65,7 @@ steps:
       from_secret: sentry_project
 
 - name: build
-  image: rustlang/rust:nightly-slim
+  image: rust:1.46-slim-buster
   commands:
   - apt-get update -y
   - apt-get install pkg-config libssl-dev ca-certificates python3 python3-pip nodejs wget -y
@@ -151,6 +151,6 @@ trigger:
 
 ---
 kind: signature
-hmac: 313c20a161d800d2227f0b3d5a80209633c17e12a07b5ab9c23efd3a97db1116
+hmac: dc4b08811575d517a050ac6c9909682ccee8bb8a0b05ad5f3be507d61ad65931
 
 ...

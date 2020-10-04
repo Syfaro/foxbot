@@ -1,4 +1,4 @@
-FROM rustlang/rust:nightly-slim AS builder
+FROM rust:1.46-slim-buster AS builder
 WORKDIR /src
 COPY ./foxbot ./foxbot
 RUN strip ./foxbot
@@ -10,6 +10,7 @@ WORKDIR /app
 COPY ./sqlx /bin/sqlx
 COPY ./langs ./langs
 COPY ./templates ./templates
+COPY ./migrations ./migrations
 COPY --from=builder /src/foxbot /bin/foxbot
 RUN apt-get update -y && apt-get install libssl-dev ca-certificates python3 python3-pip nodejs ffmpeg -y && pip3 install cfscrape && apt-get clean && rm -rf ~/.cache/pip/*
 CMD ["sh", "-c", "/bin/sqlx database create && /bin/sqlx migrate run && /bin/foxbot"]
