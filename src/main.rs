@@ -19,8 +19,8 @@ mod video;
 lazy_static::lazy_static! {
     static ref REQUEST_DURATION: prometheus::Histogram = prometheus::register_histogram!("foxbot_request_duration_seconds", "Time to start processing request").unwrap();
     static ref HANDLING_DURATION: prometheus::Histogram = prometheus::register_histogram!("foxbot_handling_duration_seconds", "Request processing time duration").unwrap();
-    static ref ACTIVE_HANDLERS: prometheus::Gauge = prometheus::register_gauge!("foxbot_handlers_total", "Number of active handlers").unwrap();
     static ref HANDLER_DURATION: prometheus::HistogramVec = prometheus::register_histogram_vec!("foxbot_handler_duration_seconds", "Time for a handler to complete", &["handler"]).unwrap();
+    static ref TELEGRAM_REQUEST: prometheus::Counter = prometheus::register_counter!("foxbot_telegram_request_total", "Number of requests made to Telegram").unwrap();
     static ref TELEGRAM_ERROR: prometheus::Counter = prometheus::register_counter!("foxbot_telegram_error_total", "Number of errors returned by Telegram").unwrap();
 }
 
@@ -240,6 +240,7 @@ async fn main() {
             config.inkbunny_password.clone(),
         )),
         Box::new(sites::Mastodon::new()),
+        Box::new(sites::DeviantArt::new()),
         Box::new(sites::Direct::new(fapi.clone())),
     ];
 
@@ -930,14 +931,15 @@ impl MessageHandler {
         let mut attempts = 0;
 
         loop {
+            TELEGRAM_REQUEST.inc();
+
             let err = match self.bot.make_request(request).await {
                 Ok(resp) => return Ok(resp),
                 Err(err) => err,
             };
 
-            TELEGRAM_ERROR.inc();
-
             if attempts > 2 {
+                TELEGRAM_ERROR.inc();
                 return Err(err);
             }
 
@@ -950,7 +952,10 @@ impl MessageHandler {
                         }),
                     ..
                 }) => retry_after,
-                _ => return Err(err),
+                _ => {
+                    TELEGRAM_ERROR.inc();
+                    return Err(err);
+                }
             };
 
             tracing::warn!(retry_after, "rate limited");
