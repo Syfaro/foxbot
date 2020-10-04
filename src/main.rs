@@ -397,6 +397,7 @@ async fn handle_request(
     req: hyper::Request<hyper::Body>,
     mut tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
     secret: &str,
+    templates: Arc<handlebars::Handlebars<'_>>,
 ) -> hyper::Result<hyper::Response<hyper::Body>> {
     use hyper::{Body, Response, StatusCode};
 
@@ -446,14 +447,18 @@ async fn handle_request(
                 })
                 .unwrap_or_else(std::collections::HashMap::new);
 
+            let data: Option<()> = None;
+
             if query.contains_key("denied") {
-                return Ok(Response::new(Body::from("Maybe, someday in the future :)")));
+                let denied = templates.render("twitter/denied", &data).unwrap();
+                return Ok(Response::new(Body::from(denied)));
             }
 
             let (token, verifier) = match (query.get("oauth_token"), query.get("oauth_verifier")) {
                 (Some(token), Some(verifier)) => (token, verifier),
                 _ => {
-                    let mut resp = Response::default();
+                    let bad_request = templates.render("400", &data).unwrap();
+                    let mut resp = Response::new(Body::from(bad_request));
                     *resp.status_mut() = StatusCode::BAD_REQUEST;
                     return Ok(resp);
                 }
@@ -478,10 +483,16 @@ async fn handle_request(
             .await
             .unwrap();
 
-            Ok(Response::new(Body::from("Account added!")))
+            let loggedin = templates.render("twitter/loggedin", &data).unwrap();
+            Ok(Response::new(Body::from(loggedin)))
+        }
+        (&hyper::Method::GET, "/") => {
+            let index = templates.render("home", &None::<()>).unwrap();
+            Ok(Response::new(Body::from(index)))
         }
         _ => {
-            let mut not_found = Response::default();
+            let not_found = templates.render("404", &None::<()>).unwrap();
+            let mut not_found = Response::new(Body::from(not_found));
             *not_found.status_mut() = StatusCode::NOT_FOUND;
             Ok(not_found)
         }
@@ -499,11 +510,19 @@ async fn receive_webhook(
     let secret_path = format!("/{}", config.http_secret.unwrap());
     let secret_path: &'static str = Box::leak(secret_path.into_boxed_str());
 
+    let mut hbs = handlebars::Handlebars::new();
+    hbs.set_strict_mode(true);
+    hbs.register_templates_directory(".hbs", "templates/")
+        .expect("templates contained bad data");
+
+    let templates = Arc::new(hbs);
+
     let make_svc = hyper::service::make_service_fn(move |_conn| {
         let tx = tx.clone();
+        let templates = templates.clone();
         async move {
             Ok::<_, hyper::Error>(hyper::service::service_fn(move |req| {
-                handle_request(req, tx.clone(), secret_path)
+                handle_request(req, tx.clone(), secret_path, templates.clone())
             }))
         }
     });
