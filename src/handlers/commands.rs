@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use tgbotapi::{requests::*, *};
 
 use super::Status::*;
-use crate::models::{GroupConfig, GroupConfigKey, Twitter, TwitterRequest};
+use crate::models::{GroupConfig, GroupConfigKey, Twitter};
 use crate::needs_field;
 use crate::utils::{
     build_alternate_response, can_delete_in_chat, continuous_action, find_best_photo, find_images,
@@ -54,6 +54,7 @@ impl super::Handler for CommandHandler {
         match command.name.as_ref() {
             "/help" | "/start" => handler.handle_welcome(message, &command.name).await,
             "/twitter" => self.authenticate_twitter(&handler, message).await,
+            "/twitterverify" => self.verify_twitter(&handler, message).await,
             "/mirror" => self.handle_mirror(&handler, message).await,
             "/source" => self.handle_source(&handler, message).await,
             "/alts" => self.handle_alts(&handler, message).await,
@@ -90,15 +91,14 @@ impl CommandHandler {
             handler.config.twitter_consumer_secret.clone(),
         );
 
-        let request_token = egg_mode::auth::request_token(&con_token, "oob").await?;
+        let request_token =
+            egg_mode::auth::request_token(&con_token, &handler.config.twitter_callback).await?;
 
         Twitter::set_request(
             &handler.conn,
             user.id,
-            TwitterRequest {
-                request_key: request_token.key.to_string(),
-                request_secret: request_token.secret.to_string(),
-            },
+            &request_token.key,
+            &request_token.secret,
         )
         .await?;
 
@@ -109,19 +109,85 @@ impl CommandHandler {
 
         let text = handler
             .get_fluent_bundle(user.language_code.as_deref(), |bundle| {
-                get_message(&bundle, "twitter-oob", Some(args)).unwrap()
+                get_message(&bundle, "twitter-callback", Some(args)).unwrap()
             })
             .await;
 
         let send_message = SendMessage {
             chat_id: message.chat_id(),
             text,
-            reply_markup: Some(ReplyMarkup::ForceReply(ForceReply::selective())),
             reply_to_message_id: Some(message.message_id),
             ..Default::default()
         };
 
         handler.make_request(&send_message).await?;
+
+        Ok(())
+    }
+
+    async fn verify_twitter(
+        &self,
+        handler: &crate::MessageHandler,
+        message: &Message,
+    ) -> anyhow::Result<()> {
+        if message.message_id != 0 {
+            handler
+                .send_generic_reply(&message, "twitter-not-for-you")
+                .await?;
+            return Ok(());
+        }
+
+        let text = message.text.clone().unwrap();
+        let mut args = text.split(' ').skip(1);
+        let token = args.next().unwrap();
+        let verifier = args.next().unwrap();
+
+        let row = match Twitter::get_request(&handler.conn, &token).await? {
+            Some(row) => row,
+            _ => return Ok(()),
+        };
+
+        let request_token = egg_mode::KeyPair::new(row.request_key, row.request_secret);
+
+        let con_token = egg_mode::KeyPair::new(
+            handler.config.twitter_consumer_key.clone(),
+            handler.config.twitter_consumer_secret.clone(),
+        );
+
+        let token = egg_mode::auth::access_token(con_token, &request_token, verifier).await?;
+
+        let access = match token.0 {
+            egg_mode::Token::Access { access, .. } => access,
+            _ => unimplemented!(),
+        };
+
+        Twitter::set_account(
+            &handler.conn,
+            row.user_id,
+            crate::models::TwitterAccount {
+                consumer_key: access.key.to_string(),
+                consumer_secret: access.secret.to_string(),
+            },
+        )
+        .await?;
+
+        let mut args = fluent::FluentArgs::new();
+        args.insert("userName", fluent::FluentValue::from(token.2));
+
+        let text = handler
+            .get_fluent_bundle(None, |bundle| {
+                get_message(&bundle, "twitter-welcome", Some(args)).unwrap()
+            })
+            .await;
+
+        let message = SendMessage {
+            chat_id: row.user_id.into(),
+            text,
+            reply_to_message_id: Some(message.message_id),
+            ..Default::default()
+        };
+
+        handler.make_request(&message).await?;
 
         Ok(())
     }

@@ -69,6 +69,7 @@ pub struct Config {
     // Twitter config
     pub twitter_consumer_key: String,
     pub twitter_consumer_secret: String,
+    pub twitter_callback: String,
 
     // Logging
     jaeger_collector: Option<String>,
@@ -284,7 +285,6 @@ async fn main() {
         Box::new(handlers::PhotoHandler),
         Box::new(handlers::CommandHandler),
         Box::new(handlers::GroupSourceHandler),
-        Box::new(handlers::TextHandler),
         Box::new(handlers::ErrorReplyHandler::new()),
         Box::new(handlers::SettingsHandler),
         Box::new(handlers::ErrorCleanup),
@@ -330,7 +330,7 @@ async fn main() {
         redis,
     });
 
-    let _guard = if let Some(dsn) = config.sentry_dsn {
+    let _guard = if let Some(dsn) = &config.sentry_dsn {
         Some(sentry::init(sentry::ClientOptions {
             dsn: Some(dsn.parse().unwrap()),
             debug: true,
@@ -357,21 +357,18 @@ async fn main() {
     let use_webhooks = matches!(config.use_webhooks, Some(use_webhooks) if use_webhooks);
 
     if use_webhooks {
-        let webhook_endpoint = config.webhook_endpoint.expect("Missing WEBHOOK_ENDPOINT");
+        let webhook_endpoint = config
+            .webhook_endpoint
+            .as_ref()
+            .expect("Missing WEBHOOK_ENDPOINT");
         let set_webhook = SetWebhook {
-            url: webhook_endpoint,
+            url: webhook_endpoint.to_owned(),
         };
         if let Err(e) = bot.make_request(&set_webhook).await {
             panic!(e);
         }
 
-        receive_webhook(
-            tx,
-            shutdown,
-            config.http_host,
-            config.http_secret.expect("Missing HTTP_SECRET"),
-        )
-        .await;
+        receive_webhook(tx, shutdown, config).await;
     } else {
         let delete_webhook = DeleteWebhook;
         if let Err(e) = bot.make_request(&delete_webhook).await {
@@ -400,6 +397,7 @@ async fn handle_request(
     req: hyper::Request<hyper::Body>,
     mut tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
     secret: &str,
+    templates: Arc<handlebars::Handlebars<'_>>,
 ) -> hyper::Result<hyper::Response<hyper::Body>> {
     use hyper::{Body, Response, StatusCode};
 
@@ -438,8 +436,63 @@ async fn handle_request(
 
             Ok(Response::new(Body::from("✓")))
         }
+        (&hyper::Method::GET, "/twitter/callback") => {
+            let query: std::collections::HashMap<String, String> = req
+                .uri()
+                .query()
+                .map(|v| {
+                    url::form_urlencoded::parse(v.as_bytes())
+                        .into_owned()
+                        .collect()
+                })
+                .unwrap_or_else(std::collections::HashMap::new);
+
+            let data: Option<()> = None;
+
+            if query.contains_key("denied") {
+                let denied = templates.render("twitter/denied", &data).unwrap();
+                return Ok(Response::new(Body::from(denied)));
+            }
+
+            let (token, verifier) = match (query.get("oauth_token"), query.get("oauth_verifier")) {
+                (Some(token), Some(verifier)) => (token, verifier),
+                _ => {
+                    let bad_request = templates.render("400", &data).unwrap();
+                    let mut resp = Response::new(Body::from(bad_request));
+                    *resp.status_mut() = StatusCode::BAD_REQUEST;
+                    return Ok(resp);
+                }
+            };
+
+            // This is extremely stupid but it works without having to pull
+            // a handler into HTTP requests
+            tx.send(Box::new(tgbotapi::Update {
+                message: Some(tgbotapi::Message {
+                    text: Some(format!("/twitterverify {} {}", token, verifier)),
+                    entities: Some(vec![tgbotapi::MessageEntity {
+                        entity_type: tgbotapi::MessageEntityType::BotCommand,
+                        offset: 0,
+                        length: 14,
+                        url: None,
+                        user: None,
+                    }]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+
+            let loggedin = templates.render("twitter/loggedin", &data).unwrap();
+            Ok(Response::new(Body::from(loggedin)))
+        }
+        (&hyper::Method::GET, "/") => {
+            let index = templates.render("home", &None::<()>).unwrap();
+            Ok(Response::new(Body::from(index)))
+        }
         _ => {
-            let mut not_found = Response::default();
+            let not_found = templates.render("404", &None::<()>).unwrap();
+            let mut not_found = Response::new(Body::from(not_found));
             *not_found.status_mut() = StatusCode::NOT_FOUND;
             Ok(not_found)
         }
@@ -450,19 +503,26 @@ async fn handle_request(
 async fn receive_webhook(
     tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
     mut shutdown: tokio::sync::mpsc::Receiver<bool>,
-    host: String,
-    secret: String,
+    config: Config,
 ) {
-    let addr = host.parse().expect("Invalid HTTP_HOST");
+    let addr = config.http_host.parse().expect("Invalid HTTP_HOST");
 
-    let secret_path = format!("/{}", secret);
+    let secret_path = format!("/{}", config.http_secret.unwrap());
     let secret_path: &'static str = Box::leak(secret_path.into_boxed_str());
+
+    let mut hbs = handlebars::Handlebars::new();
+    hbs.set_strict_mode(true);
+    hbs.register_templates_directory(".hbs", "templates/")
+        .expect("templates contained bad data");
+
+    let templates = Arc::new(hbs);
 
     let make_svc = hyper::service::make_service_fn(move |_conn| {
         let tx = tx.clone();
+        let templates = templates.clone();
         async move {
             Ok::<_, hyper::Error>(hyper::service::service_fn(move |req| {
-                handle_request(req, tx.clone(), secret_path)
+                handle_request(req, tx.clone(), secret_path, templates.clone())
             }))
         }
     });

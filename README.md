@@ -28,6 +28,7 @@ Env Name                   | Description
 `INKBUNNY_PASSWORD`        | Password for [Inkbunny](https://inkbunny.net)
 `TWITTER_CONSUMER_KEY`     | Twitter app consumer key
 `TWITTER_CONSUMER_KEY`     | Twitter app consumer secret
+`TWITTER_CALLBACK`         | Twitter callback URL for authentication
 `JAEGER_COLLECTOR`         | Jaeger collector endpoint
 `SENTRY_DSN`               | Optional, Sentry DSN to report errors
 `SENTRY_ORGANIZATION_SLUG` | Optional, Sentry organization slug for user error messages
