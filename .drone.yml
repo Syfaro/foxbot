@@ -7,6 +7,9 @@ platform:
   os: linux
   arch: amd64
 
+concurrency:
+  limit: 1
+
 steps:
 - name: test
   pull: always
@@ -43,6 +46,9 @@ name: deploy
 platform:
   os: linux
   arch: amd64
+
+concurrency:
+  limit: 1
 
 steps:
 - name: sentry-release
@@ -140,5 +146,9 @@ trigger:
   - promote
   target:
   - production
+
+---
+kind: signature
+hmac: 81f99328246366ee0acc3611395d39fdc3939165fc1ad11de0c7ca43369586cd
 
 ...
