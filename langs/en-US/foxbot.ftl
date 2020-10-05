@@ -58,6 +58,10 @@ twitter-callback = Please follow this link to add your Twitter account: { $link 
 twitter-welcome = Welcome aboard, { $userName }!
 twitter-private = Let's do this in a private chat.
 twitter-not-for-you = It doesn't look like anything to me
+twitter-existing-account = It looks like you already have the account { $account } added. Are you sure you want to change this?
+twitter-change-anyway = Change Account 
+twitter-remove-account = Remove Account
+twitter-removed-account = Okay, got it. Your Twitter account has been removed.
 
 # In-group mirroring
 mirror-no-links = Sorry, I could not find any links to mirror images from.

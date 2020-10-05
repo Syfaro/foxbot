@@ -10,6 +10,7 @@ mod group_source;
 mod inline_handler;
 mod photo;
 pub mod settings;
+mod twitter;
 
 pub use channel_photo::ChannelPhotoHandler;
 pub use chosen_inline_handler::ChosenInlineHandler;
@@ -21,6 +22,7 @@ pub use group_source::GroupSourceHandler;
 pub use inline_handler::InlineHandler;
 pub use photo::PhotoHandler;
 pub use settings::SettingsHandler;
+pub use twitter::TwitterHandler;
 
 #[derive(PartialEq)]
 pub enum Status {

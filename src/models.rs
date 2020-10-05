@@ -293,6 +293,16 @@ impl Twitter {
 
         Ok(())
     }
+
+    pub async fn remove_account(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        user_id: i32,
+    ) -> anyhow::Result<()> {
+        sqlx::query!("DELETE FROM twitter_account WHERE user_id = $1", user_id)
+            .execute(conn)
+            .await?;
+        Ok(())
+    }
 }
 
 pub struct FileCache;
