@@ -615,18 +615,6 @@ pub fn link_was_seen(
     )
 }
 
-pub async fn get_matches(
-    bot: &tgbotapi::Telegram,
-    fapi: &fuzzysearch::FuzzySearch,
-    conn: &sqlx::Pool<sqlx::Postgres>,
-    sizes: &[tgbotapi::PhotoSize],
-) -> anyhow::Result<Option<fuzzysearch::File>> {
-    // Find the highest resolution size of the image and download.
-    let best_photo = find_best_photo(&sizes).unwrap();
-    let matches = match_image(&bot, &conn, &fapi, &best_photo).await?;
-    Ok(matches.into_iter().next())
-}
-
 pub fn user_from_update(update: &tgbotapi::Update) -> Option<&tgbotapi::User> {
     use tgbotapi::*;
 
