@@ -295,6 +295,7 @@ async fn main() {
         Box::new(handlers::GroupSourceHandler),
         Box::new(handlers::ErrorReplyHandler::new()),
         Box::new(handlers::SettingsHandler),
+        Box::new(handlers::TwitterHandler),
         Box::new(handlers::ErrorCleanup),
     ];
 
