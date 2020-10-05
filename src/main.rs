@@ -956,11 +956,11 @@ impl MessageHandler {
     {
         use std::time::Duration;
 
+        TELEGRAM_REQUEST.inc();
+
         let mut attempts = 0;
 
         loop {
-            TELEGRAM_REQUEST.inc();
-
             let err = match self.bot.make_request(request).await {
                 Ok(resp) => return Ok(resp),
                 Err(err) => err,
