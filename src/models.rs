@@ -3,6 +3,10 @@
 
 use anyhow::Context;
 
+lazy_static::lazy_static! {
+    static ref CACHE_REQUESTS: prometheus::CounterVec = prometheus::register_counter_vec!("foxbot_cache_requests_total", "Number of file cache hits and misses", &["result"]).unwrap();
+}
+
 /// Each available site, for configuration usage.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Sites {
@@ -313,11 +317,24 @@ impl FileCache {
         conn: &sqlx::Pool<sqlx::Postgres>,
         file_id: &str,
     ) -> anyhow::Result<Option<i64>> {
-        sqlx::query!("SELECT hash FROM file_id_cache WHERE file_id = $1", file_id)
+        let result = sqlx::query!("SELECT hash FROM file_id_cache WHERE file_id = $1", file_id)
             .fetch_optional(conn)
             .await
-            .map(|row| row.map(|row| row.hash))
-            .context("unable to select hash from file_id_cache")
+            .map(|row| {
+                let status = match row {
+                    Some(_) => "hit",
+                    None => "miss",
+                };
+                CACHE_REQUESTS
+                    .get_metric_with_label_values(&[status])
+                    .unwrap()
+                    .inc();
+
+                row.map(|row| row.hash)
+            })
+            .context("unable to select hash from file_id_cache");
+
+        result
     }
 
     pub async fn set(
