@@ -583,10 +583,37 @@ fn extract_entity_links<'a>(
     links
 }
 
+/// Try to calculate a UTF16 position in a UTF8 string.
+///
+/// This is required because Telegram provides entities in UTF16 code units.
+///
+/// # Panics
+///
+/// This will panic if the position is not available in the data.
+fn utf16_pos_in_utf8(data: &str, pos: usize) -> usize {
+    let mut utf8_pos: usize = 0;
+    let mut utf16_pos: usize = 0;
+
+    for c in data.chars() {
+        if utf16_pos == pos {
+            return utf8_pos;
+        }
+
+        utf8_pos += c.len_utf8();
+        utf16_pos += c.len_utf16();
+    }
+
+    if utf16_pos == pos {
+        return utf8_pos;
+    }
+
+    panic!("invalid utf-16 position");
+}
+
 /// Extract text from a message entity.
 fn get_entity_text<'a>(text: &'a str, entity: &tgbotapi::MessageEntity) -> &'a str {
-    let start = entity.offset as usize;
-    let end = start + entity.length as usize;
+    let start = utf16_pos_in_utf8(&text, entity.offset as usize);
+    let end = utf16_pos_in_utf8(&text, (entity.offset + entity.length) as usize);
 
     &text[start..end]
 }
@@ -697,6 +724,56 @@ mod tests {
         finder.kinds(&[linkify::LinkKind::Url]);
 
         finder
+    }
+
+    #[test]
+    fn test_get_entity_text() {
+        use super::get_entity_text;
+
+        let url = get_entity_text(
+            "hello world http://test.com",
+            &tgbotapi::MessageEntity {
+                entity_type: tgbotapi::MessageEntityType::URL,
+                offset: 12,
+                length: 15,
+                url: None,
+                user: None,
+            },
+        );
+        assert_eq!(
+            url, "http://test.com",
+            "should be able to get url in middle of text"
+        );
+
+        let url = get_entity_text(
+            "http://test.com",
+            &tgbotapi::MessageEntity {
+                entity_type: tgbotapi::MessageEntityType::URL,
+                offset: 0,
+                length: 15,
+                url: None,
+                user: None,
+            },
+        );
+        assert_eq!(
+            url, "http://test.com",
+            "should be able to get url at start of text"
+        );
+
+        let url = get_entity_text(
+            "△ http://example.com/ △",
+            &tgbotapi::MessageEntity {
+                entity_type: tgbotapi::MessageEntityType::URL,
+                offset: 2,
+                length: 19,
+                url: None,
+                user: None,
+            },
+        );
+        assert_eq!(
+            url, "http://example.com/",
+            "should be able to get url with wide characters"
+        );
     }
 
     #[test]
