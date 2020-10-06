@@ -45,7 +45,7 @@ impl super::Handler for PhotoHandler {
         )
         .await?;
 
-        let first = match matches.get(0) {
+        let first = match matches.first() {
             Some(item) => item,
             _ => {
                 no_results(&handler, &message).await?;

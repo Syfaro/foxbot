@@ -22,16 +22,23 @@ steps:
   - export RUSTC_WRAPPER=$(pwd)/sccache-0.2.13-x86_64-unknown-linux-musl/sccache
   - pip3 install cfscrape
   - cargo test
+  - cargo test -- --ignored
   - $(pwd)/sccache-0.2.13-x86_64-unknown-linux-musl/sccache --show-stats
   environment:
     AWS_ACCESS_KEY_ID:
       from_secret: sccache_s3_access_key
     AWS_SECRET_ACCESS_KEY:
       from_secret: sccache_s3_secret_key
+    REDIS_DSN: redis://redis:6379/
     SCCACHE_BUCKET: cache
     SCCACHE_ENDPOINT:
       from_secret: sccache_s3_endpoint
     SCCACHE_S3_USE_SSL: true
+    SQLX_OFFLINE: true
+
+services:
+- name: redis
+  image: redis
 
 trigger:
   event:
@@ -151,6 +158,6 @@ trigger:
 
 ---
 kind: signature
-hmac: dc4b08811575d517a050ac6c9909682ccee8bb8a0b05ad5f3be507d61ad65931
+hmac: 5e9642b7686e4b2e2f4f8632333b07f70d09c53def92af1251e1b44b7de4b5ed
 
 ...

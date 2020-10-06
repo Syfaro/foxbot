@@ -994,3 +994,19 @@ impl MessageHandler {
         }
     }
 }
+
+#[cfg(test)]
+pub mod test_helpers {
+    pub async fn get_redis() -> redis::aio::ConnectionManager {
+        use redis::IntoConnectionInfo;
+        redis::aio::ConnectionManager::new(
+            std::env::var("REDIS_DSN")
+                .expect("missing REDIS_DSN")
+                .clone()
+                .into_connection_info()
+                .expect("Unable to parse Redis DSN"),
+        )
+        .await
+        .expect("Unable to open Redis connection")
+    }
+}

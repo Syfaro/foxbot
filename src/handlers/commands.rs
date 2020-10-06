@@ -98,6 +98,8 @@ impl CommandHandler {
         };
 
         if links.is_empty() {
+            drop(action);
+
             handler
                 .send_generic_reply(&message, "mirror-no-links")
                 .await?;
@@ -223,7 +225,7 @@ impl CommandHandler {
         handler: &crate::MessageHandler,
         message: &Message,
     ) -> anyhow::Result<()> {
-        let _action = continuous_action(
+        let action = continuous_action(
             handler.bot.clone(),
             12,
             message.chat_id(),
@@ -258,6 +260,8 @@ impl CommandHandler {
         let photo = match &message.photo {
             Some(photo) if !photo.is_empty() => photo,
             _ => {
+                drop(action);
+
                 handler
                     .send_generic_reply(&message, "source-no-photo")
                     .await?;
@@ -305,6 +309,8 @@ impl CommandHandler {
         let result = match matches.first() {
             Some(result) => result,
             None => {
+                drop(action);
+
                 handler
                     .send_generic_reply(&message, "reverse-no-results")
                     .await?;
@@ -341,6 +347,8 @@ impl CommandHandler {
         .is_some()
             || result.distance.unwrap() > 5;
 
+        drop(action);
+
         let send_message = SendMessage {
             chat_id: message.chat.id.into(),
             text,
@@ -361,7 +369,7 @@ impl CommandHandler {
         handler: &crate::MessageHandler,
         message: &Message,
     ) -> anyhow::Result<()> {
-        let _action = continuous_action(
+        let action = continuous_action(
             handler.bot.clone(),
             12,
             message.chat_id(),
@@ -398,11 +406,15 @@ impl CommandHandler {
                 }
 
                 if links.is_empty() {
+                    drop(action);
+
                     handler
                         .send_generic_reply(&message, "source-no-photo")
                         .await?;
                     return Ok(());
                 } else if links.len() > 1 {
+                    drop(action);
+
                     handler
                         .send_generic_reply(&message, "alternate-multiple-photo")
                         .await?;
@@ -431,6 +443,8 @@ impl CommandHandler {
                         .unwrap()
                         .to_vec(),
                     None => {
+                        drop(action);
+
                         handler
                             .send_generic_reply(&message, "source-no-photo")
                             .await?;
@@ -447,6 +461,8 @@ impl CommandHandler {
         };
 
         if matches.is_empty() {
+            drop(action);
+
             handler
                 .send_generic_reply(&message, "reverse-no-results")
                 .await?;
@@ -488,7 +504,7 @@ impl CommandHandler {
             )
             .await;
 
-        drop(_action);
+        drop(action);
 
         if used_hashes.is_empty() {
             handler
