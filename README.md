@@ -36,7 +36,7 @@ Env Name                   | Description
 `TELEGRAM_APITOKEN`        | API Token for Telegram, from Botfather
 `USE_WEBHOOKS`             | Optional, if should configure and use webhooks instead of polling
 `WEBHOOK_ENDPOINT`         | Optional, if using webhooks, endpoint to set with Telegram
-`HTTP_HOST`                | Optional, host to listen for updates on and provide Prometheus metrics
+`HTTP_HOST`                | Optional, host to listen for webhooks
 `HTTP_SECRET`              | Optional, if using webhooks, secret endpoint to use for Telegram updates
 `S3_ENDPOINT`              | Endpoint for S3 for cached images and video storage
 `S3_REGION`                | Region for S3
@@ -47,6 +47,7 @@ Env Name                   | Description
 `FAUTIL_APITOKEN`          | API Token for [fuzzysearch.net](https://fuzzysearch.net)
 `SIZE_IMAGES`              | Optional, download and send image size to Telegram (highly suggested, fixes a bug)
 `CACHE_IMAGES`             | Optional, download and cache images to use with Telegram
+`METRICS_HOST`             | Host to expose Prometheus metrics, health check
 `DB_HOST`                  | Host for PostgreSQL database
 `DB_USER`                  | User for PostgreSQL database
 `DB_PASS`                  | Password for PostgreSQL database

@@ -79,7 +79,7 @@ pub struct Config {
     telegram_apitoken: String,
     pub use_webhooks: Option<bool>,
     pub webhook_endpoint: Option<String>,
-    pub http_host: String,
+    pub http_host: Option<String>,
     http_secret: Option<String>,
 
     // Video handling
@@ -96,6 +96,8 @@ pub struct Config {
     pub cache_images: Option<bool>,
 
     redis_dsn: String,
+
+    metrics_host: String,
 
     // Postgres database
     db_host: String,
@@ -359,6 +361,8 @@ async fn main() {
             .unwrap_or(false)
     );
 
+    serve_metrics(config.clone()).await;
+
     // Allow buffering more updates than can be run at once
     let (tx, rx) = tokio::sync::mpsc::channel(CONCURRENT_HANDLERS * 2);
     let shutdown = setup_shutdown();
@@ -411,18 +415,6 @@ async fn handle_request(
     use hyper::{Body, Response, StatusCode};
 
     match (req.method(), req.uri().path()) {
-        (&hyper::Method::GET, "/health") => Ok(Response::new(Body::from("OK"))),
-        (&hyper::Method::GET, "/metrics") => {
-            tracing::trace!("encoding metrics");
-
-            use prometheus::Encoder;
-            let encoder = prometheus::TextEncoder::new();
-            let metric_families = prometheus::gather();
-            let mut buf = vec![];
-            encoder.encode(&metric_families, &mut buf).unwrap();
-
-            Ok(Response::new(Body::from(buf)))
-        }
         (&hyper::Method::POST, path) if path == secret => {
             let _hist = REQUEST_DURATION.start_timer();
 
@@ -514,7 +506,11 @@ async fn receive_webhook(
     mut shutdown: tokio::sync::mpsc::Receiver<bool>,
     config: Config,
 ) {
-    let addr = config.http_host.parse().expect("Invalid HTTP_HOST");
+    let addr = config
+        .http_host
+        .unwrap()
+        .parse()
+        .expect("Invalid HTTP_HOST");
 
     let secret_path = format!("/{}", config.http_secret.unwrap());
     let secret_path: &'static str = Box::leak(secret_path.into_boxed_str());
@@ -549,6 +545,46 @@ async fn receive_webhook(
         if let Err(e) = graceful.await {
             tracing::error!("server error: {:?}", e);
         }
+    });
+}
+
+async fn metrics(
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, std::convert::Infallible> {
+    use hyper::{Body, Response, StatusCode};
+
+    match req.uri().path() {
+        "/health" => Ok(Response::new(Body::from("OK"))),
+        "/metrics" => {
+            tracing::trace!("encoding metrics");
+
+            use prometheus::Encoder;
+            let encoder = prometheus::TextEncoder::new();
+            let metric_families = prometheus::gather();
+            let mut buf = vec![];
+            encoder.encode(&metric_families, &mut buf).unwrap();
+
+            Ok(Response::new(Body::from(buf)))
+        }
+        _ => {
+            let mut not_found = Response::new(Body::default());
+            *not_found.status_mut() = StatusCode::NOT_FOUND;
+            Ok(not_found)
+        }
+    }
+}
+
+async fn serve_metrics(config: Config) {
+    let addr = config.metrics_host.parse().expect("Invalid METRICS_HOST");
+
+    let make_svc = hyper::service::make_service_fn(|_conn| async {
+        Ok::<_, std::convert::Infallible>(hyper::service::service_fn(metrics))
+    });
+
+    tokio::spawn(async move {
+        tracing::info!("metrics listening on http://{}", addr);
+
+        hyper::Server::bind(&addr).serve(make_svc).await.unwrap();
     });
 }
 

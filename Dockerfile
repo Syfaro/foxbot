@@ -4,8 +4,8 @@ COPY ./foxbot ./foxbot
 RUN strip ./foxbot
 
 FROM debian:buster-slim
-ENV HTTP_HOST=127.0.0.1:8080
-EXPOSE 8080
+ENV HTTP_HOST=127.0.0.1:8080 METRICS_HOST=127.0.0.1:8081
+EXPOSE 8080 8081
 WORKDIR /app
 COPY ./sqlx /bin/sqlx
 COPY ./langs ./langs
