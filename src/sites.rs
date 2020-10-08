@@ -1071,14 +1071,53 @@ pub struct DeviantArt {
     matcher: regex::Regex,
 }
 
+/// DeviantArt oEmbed responses can contain either integers or strings, so
+/// we provide a wrapper type for serde to deserialize from.
+#[derive(Clone, Copy, Debug)]
+struct AlwaysNum(u32);
+
+// This code is heavily based on the example from here:
+// https://users.rust-lang.org/t/deserialize-a-number-that-may-be-inside-a-string-serde-json/27318/4
+impl<'de> serde::Deserialize<'de> for AlwaysNum {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct NumVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for NumVisitor {
+            type Value = AlwaysNum;
+
+            fn expecting(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                fmt.write_str("integer or string")
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, val: u64) -> Result<Self::Value, E> {
+                use std::convert::TryFrom;
+
+                match u32::try_from(val) {
+                    Ok(val) => Ok(AlwaysNum(val)),
+                    Err(_) => Err(E::custom("invalid integer")),
+                }
+            }
+
+            fn visit_str<E: serde::de::Error>(self, val: &str) -> Result<Self::Value, E> {
+                match val.parse::<u32>() {
+                    Ok(val) => self.visit_u32(val),
+                    Err(_) => Err(E::custom("failed to parse integer")),
+                }
+            }
+        }
+
+        deserializer.deserialize_any(NumVisitor)
+    }
+}
+
 #[derive(Deserialize)]
 struct DeviantArtOEmbed {
     #[serde(rename = "type")]
     file_type: String,
     url: String,
     thumbnail_url: String,
-    width: u32,
-    height: u32,
+    width: AlwaysNum,
+    height: AlwaysNum,
 }
 
 impl DeviantArt {
@@ -1140,7 +1179,7 @@ impl Site for DeviantArt {
             thumb: Some(resp.thumbnail_url),
             source_link: Some(url.to_owned()),
             site_name: self.name(),
-            image_dimensions: Some((resp.width, resp.height)),
+            image_dimensions: Some((resp.width.0, resp.height.0)),
             ..Default::default()
         }]))
     }
