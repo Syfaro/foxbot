@@ -658,11 +658,7 @@ impl MessageHandler {
     where
         C: FnOnce(&fluent::concurrent::FluentBundle<fluent::FluentResource>) -> R,
     {
-        let requested = if let Some(requested) = requested {
-            requested
-        } else {
-            "en-US"
-        };
+        let requested = requested.unwrap_or(L10N_LANGS[0]);
 
         tracing::trace!(lang = requested, "looking up language bundle");
 
@@ -676,9 +672,14 @@ impl MessageHandler {
 
         tracing::info!(lang = requested, "got new language, building bundle");
 
-        let requested_locale = requested
-            .parse::<LanguageIdentifier>()
-            .expect("requested locale is invalid");
+        let requested_locale = match requested.parse::<LanguageIdentifier>() {
+            Ok(locale) => locale,
+            Err(err) => {
+                tracing::error!("unknown locale: {:?}", err);
+                L10N_LANGS[0].parse::<LanguageIdentifier>().unwrap()
+            }
+        };
+
         let requested_locales: Vec<LanguageIdentifier> = vec![requested_locale];
         let default_locale = L10N_LANGS[0]
             .parse::<LanguageIdentifier>()

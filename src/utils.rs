@@ -534,7 +534,7 @@ pub async fn use_source_name(
 /// Extract all possible links from a Message. It looks at the text,
 /// caption, and all buttons within an inline keyboard. Uses URL parsing from
 /// Telegram.
-pub fn extract_links<'m>(message: &'m tgbotapi::Message) -> Vec<&'m str> {
+pub fn extract_links(message: &tgbotapi::Message) -> Vec<&str> {
     let mut links: Vec<&str> = vec![];
 
     // See if it was posted with a bot that included an inline keyboard.
