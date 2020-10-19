@@ -352,6 +352,7 @@ async fn process_result(
 
             Ok(Some(results))
         }
+        "mp4" => Ok(Some(build_mp4_result(&result, thumb_url, &keyboard))),
         "gif" => Ok(Some(build_gif_result(&result, thumb_url, &keyboard))),
         other => {
             tracing::warn!(file_type = other, "got unusable type");
@@ -446,7 +447,7 @@ async fn build_webm_result(
         Some(video) => video,
     };
 
-    let (full_url, thumb_url) = (video.mp4_url.unwrap(), thumb_url);
+    let full_url = video.mp4_url.unwrap();
 
     let mut video = InlineQueryResult::video(
         generate_id(),
@@ -479,12 +480,40 @@ async fn build_webm_result(
     Ok(results)
 }
 
+fn build_mp4_result(
+    result: &crate::sites::PostInfo,
+    thumb_url: String,
+    keyboard: &InlineKeyboardMarkup,
+) -> Vec<(ResultType, InlineQueryResult)> {
+    let full_url = result.url.clone();
+
+    let mut video = InlineQueryResult::video(
+        generate_id(),
+        full_url,
+        "video/mp4".to_string(),
+        thumb_url,
+        result
+            .extra_caption
+            .clone()
+            .unwrap_or_else(|| result.site_name.to_owned()),
+    );
+    video.reply_markup = Some(keyboard.clone());
+
+    if let Some(message) = &result.extra_caption {
+        if let InlineQueryType::Video(ref mut result) = video.content {
+            result.caption = Some(message.to_owned());
+        }
+    }
+
+    vec![(ResultType::Ready, video)]
+}
+
 fn build_gif_result(
     result: &crate::sites::PostInfo,
     thumb_url: String,
     keyboard: &InlineKeyboardMarkup,
 ) -> Vec<(ResultType, InlineQueryResult)> {
-    let (full_url, thumb_url) = (result.url.clone(), thumb_url);
+    let full_url = result.url.clone();
 
     let mut gif = InlineQueryResult::gif(generate_id(), full_url.to_owned(), thumb_url.to_owned());
     gif.reply_markup = Some(keyboard.clone());
