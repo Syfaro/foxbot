@@ -1,4 +1,4 @@
-FROM rust:1.47-slim-buster AS builder
+FROM rust:1.48-slim-buster AS builder
 WORKDIR /src
 COPY ./foxbot ./foxbot
 RUN strip ./foxbot
