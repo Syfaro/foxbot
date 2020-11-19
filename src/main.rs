@@ -594,8 +594,10 @@ async fn poll_updates(
     mut shutdown: tokio::sync::mpsc::Receiver<bool>,
     bot: Arc<Telegram>,
 ) {
-    let mut update_req = GetUpdates::default();
-    update_req.timeout = Some(30);
+    let mut update_req = GetUpdates {
+        timeout: Some(30),
+        ..Default::default()
+    };
 
     tokio::spawn(async move {
         loop {

@@ -271,7 +271,7 @@ impl super::Handler for InlineHandler {
         // parameters to go and process that video.
         if let Some(video) = has_video {
             answer_inline.switch_pm_text = Some("Process video".to_string());
-            answer_inline.switch_pm_parameter = Some(video.id.to_owned());
+            answer_inline.switch_pm_parameter = Some(video.id);
 
             // Do not cache! We quickly want to change this result after
             // processing is completed.
