@@ -79,7 +79,7 @@ steps:
   - wget -O sccache.tar.gz https://github.com/mozilla/sccache/releases/download/0.2.13/sccache-0.2.13-x86_64-unknown-linux-musl.tar.gz
   - tar zxvf sccache.tar.gz
   - export RUSTC_WRAPPER=$(pwd)/sccache-0.2.13-x86_64-unknown-linux-musl/sccache
-  - cargo install --version=0.1.0-beta.1 sqlx-cli --no-default-features --features postgres
+  - cargo install --version=0.2.0 sqlx-cli --no-default-features --features postgres
   - cp $(which sqlx) ./sqlx
   - pip3 install cfscrape
   - export RELEASE=${DRONE_COMMIT_SHA}
@@ -158,6 +158,6 @@ trigger:
 
 ---
 kind: signature
-hmac: 56d525c926b973b25cf94455688041787c433548f2f9376aac06b35aa7ace1cd
+hmac: cafd419453c1065240d3eda8d41708b0d881545a216714d87fdfb61f1e2cdb4c
 
 ...
