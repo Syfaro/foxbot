@@ -101,7 +101,7 @@ async fn upload_image(
     let im = image::load_from_memory(&data)?;
 
     let (im, buf) = match info.get(&data) {
-        Some(inf) if !thumb && inf.mime == "image/jpeg" => (im, data),
+        Some(inf) if !thumb && inf.mime_type() == "image/jpeg" => (im, data),
         _ => {
             use bytes::buf::BufMutExt;
             let im = if thumb { im.thumbnail(400, 400) } else { im };
