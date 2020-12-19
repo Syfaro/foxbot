@@ -226,6 +226,11 @@ async fn main() {
         .await
         .expect("unable to create database pool");
 
+    sqlx::migrate!()
+        .run(&pool)
+        .await
+        .expect("unable to run database migrations");
+
     let fapi = Arc::new(fuzzysearch::FuzzySearch::new(
         config.fautil_apitoken.clone(),
     ));
