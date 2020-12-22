@@ -17,13 +17,13 @@ steps:
   commands:
   - apt-get update -y
   - apt-get install pkg-config libssl-dev ca-certificates python3 python3-pip nodejs wget -y
-  - wget -O sccache.tar.gz https://github.com/mozilla/sccache/releases/download/0.2.13/sccache-0.2.13-x86_64-unknown-linux-musl.tar.gz
+  - wget -O sccache.tar.gz https://github.com/mozilla/sccache/releases/download/0.2.14/sccache-0.2.14-x86_64-unknown-linux-musl.tar.gz
   - tar zxvf sccache.tar.gz
-  - export RUSTC_WRAPPER=$(pwd)/sccache-0.2.13-x86_64-unknown-linux-musl/sccache
+  - export RUSTC_WRAPPER=$(pwd)/sccache-0.2.14-x86_64-unknown-linux-musl/sccache
   - pip3 install cfscrape
   - cargo test
   - cargo test -- --ignored
-  - $(pwd)/sccache-0.2.13-x86_64-unknown-linux-musl/sccache --show-stats
+  - $(pwd)/sccache-0.2.14-x86_64-unknown-linux-musl/sccache --show-stats
   environment:
     AWS_ACCESS_KEY_ID:
       from_secret: sccache_s3_access_key
@@ -76,13 +76,13 @@ steps:
   commands:
   - apt-get update -y
   - apt-get install pkg-config libssl-dev ca-certificates python3 python3-pip nodejs wget -y
-  - wget -O sccache.tar.gz https://github.com/mozilla/sccache/releases/download/0.2.13/sccache-0.2.13-x86_64-unknown-linux-musl.tar.gz
+  - wget -O sccache.tar.gz https://github.com/mozilla/sccache/releases/download/0.2.14/sccache-0.2.14-x86_64-unknown-linux-musl.tar.gz
   - tar zxvf sccache.tar.gz
-  - export RUSTC_WRAPPER=$(pwd)/sccache-0.2.13-x86_64-unknown-linux-musl/sccache
+  - export RUSTC_WRAPPER=$(pwd)/sccache-0.2.14-x86_64-unknown-linux-musl/sccache
   - pip3 install cfscrape
   - export RELEASE=${DRONE_COMMIT_SHA}
   - RUSTFLAGS=-g cargo build --release
-  - $(pwd)/sccache-0.2.13-x86_64-unknown-linux-musl/sccache --show-stats
+  - $(pwd)/sccache-0.2.14-x86_64-unknown-linux-musl/sccache --show-stats
   - cp ./target/release/foxbot ./foxbot
   environment:
     AWS_ACCESS_KEY_ID:
@@ -156,6 +156,6 @@ trigger:
 
 ---
 kind: signature
-hmac: 01cc8f37eb1340e26c42d268e019d08aadcb8a77c38af9dc6f10af16a7145bfa
+hmac: 538b74b91456b16b71be52d9b0c63e402160d308db4421afb1115230791c85bc
 
 ...
