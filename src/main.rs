@@ -1,3 +1,4 @@
+use futures::StreamExt;
 use sentry::integrations::anyhow::capture_anyhow;
 use sites::{PostInfo, Site};
 use std::collections::HashMap;
@@ -28,6 +29,7 @@ type BoxedSite = Box<dyn Site + Send + Sync>;
 type BoxedHandler = Box<dyn handlers::Handler + Send + Sync>;
 
 static CONCURRENT_HANDLERS: usize = 2;
+static INLINE_HANDLERS: usize = 10;
 
 /// Generates a random 24 character alphanumeric string.
 ///
@@ -369,10 +371,19 @@ async fn main() {
     serve_metrics(config.clone()).await;
 
     // Allow buffering more updates than can be run at once
-    let (tx, rx) = tokio::sync::mpsc::channel(CONCURRENT_HANDLERS * 2);
+    let (update_tx, update_rx) = tokio::sync::mpsc::channel(CONCURRENT_HANDLERS * 2);
+    let (inline_tx, inline_rx) = tokio::sync::mpsc::channel(INLINE_HANDLERS * 2);
+
     let shutdown = setup_shutdown();
 
     let use_webhooks = matches!(config.use_webhooks, Some(use_webhooks) if use_webhooks);
+
+    // There are two ways to receive updates, long-polling and webhooks. Polling
+    // is easier for development as it does not require opening ports to the
+    // Internet. Webhooks are more performant. We can support either option by
+    // enabling one or the other method of receiving updates and pushing all
+    // updates into a mpsc channel. Then, we can have generic code to use the
+    // updates received by any method.
 
     if use_webhooks {
         let webhook_endpoint = config
@@ -386,24 +397,56 @@ async fn main() {
             panic!(e);
         }
 
-        receive_webhook(tx, shutdown, config).await;
+        receive_webhook(update_tx, inline_tx, shutdown, config).await;
     } else {
         let delete_webhook = DeleteWebhook;
         if let Err(e) = bot.make_request(&delete_webhook).await {
             panic!(e);
         }
 
-        poll_updates(tx, shutdown, bot).await;
+        poll_updates(update_tx, inline_tx, shutdown, bot).await;
     }
 
-    use futures::StreamExt;
-    rx.for_each_concurrent(CONCURRENT_HANDLERS, |update| {
-        let handler = handler.clone();
-        async move {
-            handler.handle_update(*update).await;
-        }
-    })
-    .await;
+    // We have broken updates into two categories, inline queries and everything
+    // else. Inline queries must be quickly answered otherwise users will assume
+    // something has gone wrong or Telegram will expire the query and prevent us
+    // from answering it. We can address this problem by running two separate
+    // worker queues. All inline queries are run together with a much higher
+    // concurrency limit. All other updates are run on a queue with lower
+    // concurrency limits as they are not as time-sensitive.
+
+    // Spawn a new worker for inline queries, limited by `INLINE_HANDLERS`.
+    let h = handler.clone();
+    tokio::spawn(async move {
+        inline_rx
+            .for_each_concurrent(INLINE_HANDLERS, |inline_query| {
+                let handler = h.clone();
+
+                async move {
+                    tokio::spawn(async move {
+                        handler.handle_update(*inline_query).await;
+                    })
+                    .await
+                    .unwrap();
+                }
+            })
+            .await;
+    });
+
+    // Process all other updates, limited by `CONCURRENT_HANDLERS`.
+    update_rx
+        .for_each_concurrent(CONCURRENT_HANDLERS, |update| {
+            let handler = handler.clone();
+
+            async move {
+                tokio::spawn(async move {
+                    handler.handle_update(*update).await;
+                })
+                .await
+                .unwrap();
+            }
+        })
+        .await;
 }
 
 // MARK: Get Bot API updates
@@ -413,7 +456,8 @@ async fn main() {
 /// It spawns a handler for each request.
 async fn handle_request(
     req: hyper::Request<hyper::Body>,
-    mut tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    mut update_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    mut inline_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
     secret: &str,
     templates: Arc<handlebars::Handlebars<'_>>,
 ) -> hyper::Result<hyper::Response<hyper::Body>> {
@@ -438,7 +482,12 @@ async fn handle_request(
                 }
             };
 
-            tx.send(Box::new(update)).await.unwrap();
+            let update = Box::new(update);
+            if update.inline_query.is_some() {
+                inline_tx.send(update).await.unwrap();
+            } else {
+                update_tx.send(update).await.unwrap();
+            }
 
             Ok(Response::new(Body::from("✓")))
         }
@@ -472,22 +521,23 @@ async fn handle_request(
 
             // This is extremely stupid but it works without having to pull
             // a handler into HTTP requests
-            tx.send(Box::new(tgbotapi::Update {
-                message: Some(tgbotapi::Message {
-                    text: Some(format!("/twitterverify {} {}", token, verifier)),
-                    entities: Some(vec![tgbotapi::MessageEntity {
-                        entity_type: tgbotapi::MessageEntityType::BotCommand,
-                        offset: 0,
-                        length: 14,
-                        url: None,
-                        user: None,
-                    }]),
+            update_tx
+                .send(Box::new(tgbotapi::Update {
+                    message: Some(tgbotapi::Message {
+                        text: Some(format!("/twitterverify {} {}", token, verifier)),
+                        entities: Some(vec![tgbotapi::MessageEntity {
+                            entity_type: tgbotapi::MessageEntityType::BotCommand,
+                            offset: 0,
+                            length: 14,
+                            url: None,
+                            user: None,
+                        }]),
+                        ..Default::default()
+                    }),
                     ..Default::default()
-                }),
-                ..Default::default()
-            }))
-            .await
-            .unwrap();
+                }))
+                .await
+                .unwrap();
 
             let loggedin = templates.render("twitter/loggedin", &data).unwrap();
             Ok(Response::new(Body::from(loggedin)))
@@ -507,7 +557,8 @@ async fn handle_request(
 
 /// Start a web server to handle webhooks and pass updates to [handle_request].
 async fn receive_webhook(
-    tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    update_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    inline_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
     mut shutdown: tokio::sync::mpsc::Receiver<bool>,
     config: Config,
 ) {
@@ -528,11 +579,18 @@ async fn receive_webhook(
     let templates = Arc::new(hbs);
 
     let make_svc = hyper::service::make_service_fn(move |_conn| {
-        let tx = tx.clone();
+        let update_tx = update_tx.clone();
+        let inline_tx = inline_tx.clone();
         let templates = templates.clone();
         async move {
             Ok::<_, hyper::Error>(hyper::service::service_fn(move |req| {
-                handle_request(req, tx.clone(), secret_path, templates.clone())
+                handle_request(
+                    req,
+                    update_tx.clone(),
+                    inline_tx.clone(),
+                    secret_path,
+                    templates.clone(),
+                )
             }))
         }
     });
@@ -595,7 +653,8 @@ async fn serve_metrics(config: Config) {
 
 /// Start polling updates using Bot API long polling.
 async fn poll_updates(
-    mut tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    mut update_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    mut inline_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
     mut shutdown: tokio::sync::mpsc::Receiver<bool>,
     bot: Arc<Telegram>,
 ) {
@@ -628,7 +687,12 @@ async fn poll_updates(
             for update in updates {
                 let id = update.update_id;
 
-                tx.send(Box::new(update)).await.unwrap();
+                let update = Box::new(update);
+                if update.inline_query.is_some() {
+                    inline_tx.send(update).await.unwrap();
+                } else {
+                    update_tx.send(update).await.unwrap();
+                }
 
                 update_req.offset = Some(id + 1);
             }
