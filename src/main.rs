@@ -1,3 +1,4 @@
+use futures::StreamExt;
 use sentry::integrations::anyhow::capture_anyhow;
 use sites::{PostInfo, Site};
 use std::collections::HashMap;
@@ -28,6 +29,7 @@ type BoxedSite = Box<dyn Site + Send + Sync>;
 type BoxedHandler = Box<dyn handlers::Handler + Send + Sync>;
 
 static CONCURRENT_HANDLERS: usize = 2;
+static INLINE_HANDLERS: usize = 10;
 
 /// Generates a random 24 character alphanumeric string.
 ///
@@ -370,11 +372,18 @@ async fn main() {
 
     // Allow buffering more updates than can be run at once
     let (update_tx, update_rx) = tokio::sync::mpsc::channel(CONCURRENT_HANDLERS * 2);
-    let (inline_tx, mut inline_rx) = tokio::sync::mpsc::channel(20);
+    let (inline_tx, inline_rx) = tokio::sync::mpsc::channel(INLINE_HANDLERS * 2);
 
     let shutdown = setup_shutdown();
 
     let use_webhooks = matches!(config.use_webhooks, Some(use_webhooks) if use_webhooks);
+
+    // There are two ways to receive updates, long-polling and webhooks. Polling
+    // is easier for development as it does not require opening ports to the
+    // Internet. Webhooks are more performant. We can support either option by
+    // enabling one or the other method of receiving updates and pushing all
+    // updates into a mpsc channel. Then, we can have generic code to use the
+    // updates received by any method.
 
     if use_webhooks {
         let webhook_endpoint = config
@@ -398,23 +407,43 @@ async fn main() {
         poll_updates(update_tx, inline_tx, shutdown, bot).await;
     }
 
+    // We have broken updates into two categories, inline queries and everything
+    // else. Inline queries must be quickly answered otherwise users will assume
+    // something has gone wrong or Telegram will expire the query and prevent us
+    // from answering it. We can address this problem by running two separate
+    // worker queues. All inline queries are run together with a much higher
+    // concurrency limit. All other updates are run on a queue with lower
+    // concurrency limits as they are not as time-sensitive.
+
+    // Spawn a new worker for inline queries, limited by `INLINE_HANDLERS`.
     let h = handler.clone();
     tokio::spawn(async move {
-        while let Some(inline) = inline_rx.next().await {
-            let handler = h.clone();
+        inline_rx
+            .for_each_concurrent(INLINE_HANDLERS, |inline_query| {
+                let handler = h.clone();
 
-            tokio::spawn(async move {
-                handler.handle_update(*inline).await;
-            });
-        }
+                async move {
+                    tokio::spawn(async move {
+                        handler.handle_update(*inline_query).await;
+                    })
+                    .await
+                    .unwrap();
+                }
+            })
+            .await;
     });
 
-    use futures::StreamExt;
+    // Process all other updates, limited by `CONCURRENT_HANDLERS`.
     update_rx
         .for_each_concurrent(CONCURRENT_HANDLERS, |update| {
             let handler = handler.clone();
+
             async move {
-                handler.handle_update(*update).await;
+                tokio::spawn(async move {
+                    handler.handle_update(*update).await;
+                })
+                .await
+                .unwrap();
             }
         })
         .await;
