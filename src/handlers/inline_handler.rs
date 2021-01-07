@@ -215,6 +215,8 @@ impl super::Handler for InlineHandler {
             .context("unable to find images")?;
         }
 
+        let is_personal = results.iter().any(|result| result.personal);
+
         let mut responses: Vec<(ResultType, InlineQueryResult)> = vec![];
 
         for result in results {
@@ -256,7 +258,7 @@ impl super::Handler for InlineHandler {
         let mut answer_inline = AnswerInlineQuery {
             inline_query_id: inline.id.to_owned(),
             results: cleaned_responses,
-            is_personal: Some(true), // Everything is personal because of config
+            is_personal: Some(is_personal),
             ..Default::default()
         };
 
@@ -295,12 +297,9 @@ async fn process_result(
     result: &PostInfo,
     from: &User,
 ) -> anyhow::Result<Option<Vec<(ResultType, InlineQueryResult)>>> {
-    let (direct, source) = handler
+    let direct = handler
         .get_fluent_bundle(from.language_code.as_deref(), |bundle| {
-            (
-                get_message(&bundle, "inline-direct", None).unwrap(),
-                get_message(&bundle, "inline-source", None).unwrap(),
-            )
+            get_message(&bundle, "inline-direct", None).unwrap()
         })
         .await;
 
@@ -312,15 +311,7 @@ async fn process_result(
     }];
 
     if let Some(source_link) = &result.source_link {
-        let use_name = use_source_name(&handler.conn, from.id)
-            .await
-            .unwrap_or(false);
-
-        let text = if use_name {
-            result.site_name.to_string()
-        } else {
-            source
-        };
+        let text = result.site_name.to_string();
 
         row.push(InlineKeyboardButton {
             text,
