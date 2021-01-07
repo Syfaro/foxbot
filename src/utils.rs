@@ -85,6 +85,8 @@ async fn upload_image(
     thumb: bool,
     data: &bytes::Bytes,
 ) -> anyhow::Result<ImageInfo> {
+    use bytes::buf::BufMutExt;
+
     if let Some(cached_post) = CachedPost::get(&conn, &url, thumb)
         .await
         .context("unable to get cached post")?
@@ -95,20 +97,28 @@ async fn upload_image(
         });
     }
 
-    let info = infer::Infer::new();
-
     let im = image::load_from_memory(&data)?;
 
-    // TODO: handle resizing large JPEGs
-    let (im, buf) = match info.get(&data) {
-        Some(inf) if !thumb && inf.mime_type() == "image/jpeg" => (im, data.clone()),
-        _ => {
-            use bytes::buf::BufMutExt;
-            let im = if thumb { im.thumbnail(400, 400) } else { im };
-            let mut buf = bytes::BytesMut::with_capacity(2 * 1024 * 1024).writer();
-            im.write_to(&mut buf, image::ImageOutputFormat::Jpeg(90))?;
-            (im, buf.into_inner().freeze())
-        }
+    // We need to determine what processing to do, if any, on the image before
+    // caching it. We can start by checking if this is a thumbnail. If so, we
+    // should thumbnail it to a 400x400 image. Then, check if the image is
+    // larger than 5MB. If it is, we should resize it down to 2000x2000.
+    // Otherwise, perform no processing on the image and cache the original.
+    //
+    // This used to always convert images to JPEGs, but it does not appear that
+    // any Telegram client actually requires this.
+    let (im, buf) = if thumb {
+        let im = im.thumbnail(400, 400);
+        let mut buf = bytes::BytesMut::with_capacity(2_000_000).writer();
+        im.write_to(&mut buf, image::ImageOutputFormat::Jpeg(90))?;
+        (im, buf.into_inner().freeze())
+    } else if data.len() > 5_000_000 {
+        let im = im.resize(2000, 2000, image::imageops::FilterType::Lanczos3);
+        let mut buf = bytes::BytesMut::with_capacity(2_000_000).writer();
+        im.write_to(&mut buf, image::ImageOutputFormat::Jpeg(90))?;
+        (im, buf.into_inner().freeze())
+    } else {
+        (im, data.clone())
     };
 
     use image::GenericImageView;
