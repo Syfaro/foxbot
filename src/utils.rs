@@ -562,18 +562,6 @@ pub async fn sort_results(
     Ok(())
 }
 
-pub async fn use_source_name(
-    conn: &sqlx::Pool<sqlx::Postgres>,
-    user_id: i32,
-) -> anyhow::Result<bool> {
-    let row = UserConfig::get(&conn, UserConfigKey::SourceName, user_id)
-        .await
-        .context("unable to query user source name config")?
-        .unwrap_or(false);
-
-    Ok(row)
-}
-
 /// Extract all possible links from a Message. It looks at the text,
 /// caption, and all buttons within an inline keyboard. Uses URL parsing from
 /// Telegram.
