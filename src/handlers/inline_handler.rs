@@ -379,10 +379,10 @@ async fn build_image_result(
     // enabled, this is all we have to do. Otherwise, we need to download the
     // image to make sure that it is below Telegram's 5MB image limit. This also
     // allows us to calculate an image height and width to resolve a bug in
-    // Telegram Desktop[^1]. This currently has a worst case of downloading an
-    // image twice if it is above the maximum size.
+    // Telegram Desktop[^1].
     //
     // [^1]: https://github.com/telegramdesktop/tdesktop/issues/4580
+    let data = download_image(&result.url).await?;
     let result = if handler.config.cache_all_images.unwrap_or(false) {
         cache_post(
             &handler.conn,
@@ -390,10 +390,11 @@ async fn build_image_result(
             &handler.config.s3_bucket,
             &handler.config.s3_url,
             &result,
+            &data,
         )
         .await?
     } else {
-        let result = size_post(&result).await?;
+        let result = size_post(&result, &data).await?;
 
         if result.image_size.unwrap_or_default() > MAX_IMAGE_SIZE {
             cache_post(
@@ -402,6 +403,7 @@ async fn build_image_result(
                 &handler.config.s3_bucket,
                 &handler.config.s3_url,
                 &result,
+                &data,
             )
             .await?
         } else {

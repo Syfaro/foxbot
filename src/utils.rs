@@ -75,7 +75,7 @@ pub struct ImageInfo {
 /// * Converts image to JPEG if not already and resizes if thumbnail
 /// * Uploads to S3 bucket
 /// * Saves in cache
-#[tracing::instrument(err, skip(conn, s3, s3_bucket, s3_url))]
+#[tracing::instrument(err, skip(conn, s3, s3_bucket, s3_url, data))]
 async fn upload_image(
     conn: &sqlx::Pool<sqlx::Postgres>,
     s3: &rusoto_s3::S3Client,
@@ -83,6 +83,7 @@ async fn upload_image(
     s3_url: &str,
     url: &str,
     thumb: bool,
+    data: &bytes::Bytes,
 ) -> anyhow::Result<ImageInfo> {
     if let Some(cached_post) = CachedPost::get(&conn, &url, thumb)
         .await
@@ -94,15 +95,13 @@ async fn upload_image(
         });
     }
 
-    let data = reqwest::get(url).await?.bytes().await?;
-
     let info = infer::Infer::new();
 
     let im = image::load_from_memory(&data)?;
 
     // TODO: handle resizing large JPEGs
     let (im, buf) = match info.get(&data) {
-        Some(inf) if !thumb && inf.mime_type() == "image/jpeg" => (im, data),
+        Some(inf) if !thumb && inf.mime_type() == "image/jpeg" => (im, data.clone()),
         _ => {
             use bytes::buf::BufMutExt;
             let im = if thumb { im.thumbnail(400, 400) } else { im };
@@ -150,10 +149,40 @@ async fn upload_image(
     })
 }
 
+/// Download image from URL and return bytes.
+///
+/// Will fail if the download is larger than 50MB.
+#[tracing::instrument]
+pub async fn download_image(url: &str) -> anyhow::Result<bytes::Bytes> {
+    use bytes::BufMut;
+
+    let mut resp = reqwest::get(url).await?;
+    let content_length = resp.content_length().unwrap_or(2_000_000);
+    if resp.content_length().unwrap_or_default() > 50_000_000 {
+        return Err(anyhow::anyhow!("content length is too large"));
+    }
+
+    let mut data = bytes::BytesMut::with_capacity(content_length as usize);
+    let mut size = 0;
+
+    while let Some(chunk) = resp.chunk().await? {
+        size += chunk.len();
+        if size > 50_000_000 {
+            return Err(anyhow::anyhow!("body was too long"));
+        }
+        data.put(chunk);
+    }
+
+    Ok(data.freeze())
+}
+
 /// Download URL from post and calculate image dimensions, returning a new
 /// PostInfo.
-#[tracing::instrument(err)]
-pub async fn size_post(post: &crate::PostInfo) -> anyhow::Result<crate::PostInfo> {
+#[tracing::instrument(skip(data))]
+pub async fn size_post(
+    post: &crate::PostInfo,
+    data: &bytes::Bytes,
+) -> anyhow::Result<crate::PostInfo> {
     use image::GenericImageView;
 
     // If we already have image dimensions, assume they're valid and reuse.
@@ -161,7 +190,6 @@ pub async fn size_post(post: &crate::PostInfo) -> anyhow::Result<crate::PostInfo
         return Ok(post.to_owned());
     }
 
-    let data = reqwest::get(&post.url).await?.bytes().await?;
     let im = image::load_from_memory(&data)?;
     let dimensions = im.dimensions();
 
@@ -175,19 +203,20 @@ pub async fn size_post(post: &crate::PostInfo) -> anyhow::Result<crate::PostInfo
 /// Download URL from post, calculate image dimensions, convert to JPEG and
 /// generate thumbnail, and upload to S3 bucket. Returns a new PostInfo with
 /// the updated URLs and dimensions.
-#[tracing::instrument(err, skip(conn, s3, s3_bucket, s3_url))]
+#[tracing::instrument(err, skip(conn, s3, s3_bucket, s3_url, data))]
 pub async fn cache_post(
     conn: &sqlx::Pool<sqlx::Postgres>,
     s3: &rusoto_s3::S3Client,
     s3_bucket: &str,
     s3_url: &str,
     post: &crate::PostInfo,
+    data: &bytes::Bytes,
 ) -> anyhow::Result<crate::PostInfo> {
-    let image = upload_image(&conn, &s3, &s3_bucket, &s3_url, &post.url, false).await?;
+    let image = upload_image(&conn, &s3, &s3_bucket, &s3_url, &post.url, false, &data).await?;
 
     let thumb = if let Some(thumb) = &post.thumb {
         Some(
-            upload_image(&conn, &s3, &s3_bucket, &s3_url, &thumb, true)
+            upload_image(&conn, &s3, &s3_bucket, &s3_url, &thumb, true, &data)
                 .await?
                 .url,
         )
