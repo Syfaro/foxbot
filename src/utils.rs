@@ -15,7 +15,7 @@ pub struct SiteCallback<'a> {
     pub results: Vec<crate::PostInfo>,
 }
 
-#[tracing::instrument(skip(user, sites, callback))]
+#[tracing::instrument(err, skip(user, sites, callback))]
 pub async fn find_images<'a, C>(
     user: &tgbotapi::User,
     links: Vec<&'a str>,
@@ -75,7 +75,7 @@ pub struct ImageInfo {
 /// * Converts image to JPEG if not already and resizes if thumbnail
 /// * Uploads to S3 bucket
 /// * Saves in cache
-#[tracing::instrument(skip(conn, s3, s3_bucket, s3_url))]
+#[tracing::instrument(err, skip(conn, s3, s3_bucket, s3_url))]
 async fn upload_image(
     conn: &sqlx::Pool<sqlx::Postgres>,
     s3: &rusoto_s3::S3Client,
@@ -100,6 +100,7 @@ async fn upload_image(
 
     let im = image::load_from_memory(&data)?;
 
+    // TODO: handle resizing large JPEGs
     let (im, buf) = match info.get(&data) {
         Some(inf) if !thumb && inf.mime_type() == "image/jpeg" => (im, data),
         _ => {
@@ -151,6 +152,7 @@ async fn upload_image(
 
 /// Download URL from post and calculate image dimensions, returning a new
 /// PostInfo.
+#[tracing::instrument(err)]
 pub async fn size_post(post: &crate::PostInfo) -> anyhow::Result<crate::PostInfo> {
     use image::GenericImageView;
 
@@ -165,6 +167,7 @@ pub async fn size_post(post: &crate::PostInfo) -> anyhow::Result<crate::PostInfo
 
     Ok(crate::PostInfo {
         image_dimensions: Some(dimensions),
+        image_size: Some(data.len()),
         ..post.to_owned()
     })
 }
@@ -172,6 +175,7 @@ pub async fn size_post(post: &crate::PostInfo) -> anyhow::Result<crate::PostInfo
 /// Download URL from post, calculate image dimensions, convert to JPEG and
 /// generate thumbnail, and upload to S3 bucket. Returns a new PostInfo with
 /// the updated URLs and dimensions.
+#[tracing::instrument(err, skip(conn, s3, s3_bucket, s3_url))]
 pub async fn cache_post(
     conn: &sqlx::Pool<sqlx::Postgres>,
     s3: &rusoto_s3::S3Client,
@@ -414,7 +418,7 @@ impl Drop for ContinuousAction {
     }
 }
 
-#[tracing::instrument(skip(bot, conn, fapi))]
+#[tracing::instrument(err, skip(bot, conn, fapi))]
 pub async fn match_image(
     bot: &tgbotapi::Telegram,
     conn: &sqlx::Pool<sqlx::Postgres>,
