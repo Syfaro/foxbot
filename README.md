@@ -45,8 +45,7 @@ Env Name                   | Description
 `S3_BUCKET`                | S3 bucket
 `S3_URL`                   | URL to use for generating path to file in S3 bucket
 `FAUTIL_APITOKEN`          | API Token for [fuzzysearch.net](https://fuzzysearch.net)
-`SIZE_IMAGES`              | Optional, download and send image size to Telegram (highly suggested, fixes a bug)
-`CACHE_IMAGES`             | Optional, download and cache images to use with Telegram
+`CACHE_ALL_IMAGES`         | Optional, download and cache all inline images
 `METRICS_HOST`             | Host to expose Prometheus metrics, health check
 `DB_HOST`                  | Host for PostgreSQL database
 `DB_USER`                  | User for PostgreSQL database

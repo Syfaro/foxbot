@@ -94,8 +94,7 @@ pub struct Config {
 
     pub fautil_apitoken: String,
 
-    pub size_images: Option<bool>,
-    pub cache_images: Option<bool>,
+    pub cache_all_images: Option<bool>,
 
     redis_dsn: String,
 
