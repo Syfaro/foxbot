@@ -8,6 +8,9 @@ use anyhow::Context;
 use async_trait::async_trait;
 use tgbotapi::{requests::*, *};
 
+/// Telegram allows inline results up to 5MB.
+static MAX_IMAGE_SIZE: usize = 5_000_000;
+
 pub struct InlineHandler;
 
 #[derive(PartialEq)]
@@ -361,22 +364,42 @@ async fn build_image_result(
     let mut result = result.to_owned();
     result.thumb = Some(thumb_url);
 
-    // Check if we should cache images, top priority option. If not, check if
-    // we should size them (this should probably always be true). And finally,
-    // if no other options are set we should pass the result through untouched.
-    let result = if handler.config.cache_images.unwrap_or(false) {
+    // There is a bit of processing required to figure out how to handle an
+    // image before sending it off to Telegram. First, we check if the config
+    // specifies we should cache (re-upload) all images to the S3 bucket. If
+    // enabled, this is all we have to do. Otherwise, we need to download the
+    // image to make sure that it is below Telegram's 5MB image limit. This also
+    // allows us to calculate an image height and width to resolve a bug in
+    // Telegram Desktop[^1].
+    //
+    // [^1]: https://github.com/telegramdesktop/tdesktop/issues/4580
+    let data = download_image(&result.url).await?;
+    let result = if handler.config.cache_all_images.unwrap_or(false) {
         cache_post(
             &handler.conn,
             &handler.s3,
             &handler.config.s3_bucket,
             &handler.config.s3_url,
             &result,
+            &data,
         )
         .await?
-    } else if handler.config.size_images.unwrap_or(false) {
-        size_post(&result).await?
     } else {
-        result
+        let result = size_post(&result, &data).await?;
+
+        if result.image_size.unwrap_or_default() > MAX_IMAGE_SIZE {
+            cache_post(
+                &handler.conn,
+                &handler.s3,
+                &handler.config.s3_bucket,
+                &handler.config.s3_url,
+                &result,
+                &data,
+            )
+            .await?
+        } else {
+            result
+        }
     };
 
     let mut photo = InlineQueryResult::photo(

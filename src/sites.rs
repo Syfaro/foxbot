@@ -34,6 +34,8 @@ pub struct PostInfo {
     pub site_name: &'static str,
     /// Width and height of image, if available
     pub image_dimensions: Option<(u32, u32)>,
+    /// Size of image in bytes, if available
+    pub image_size: Option<usize>,
 }
 
 fn get_file_ext(name: &str) -> Option<&str> {
@@ -452,7 +454,7 @@ impl Site for Twitter {
                         title: Some(user.screen_name.clone()),
                         extra_caption: Some(text.clone()),
                         site_name: self.name(),
-                        image_dimensions: None,
+                        ..Default::default()
                     },
                     None => PostInfo {
                         file_type: get_file_ext(&item.media_url_https).unwrap().to_owned(),
