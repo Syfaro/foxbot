@@ -63,17 +63,7 @@ impl super::Handler for PhotoHandler {
             "discovered match distance"
         );
 
-        let name = if first.distance.unwrap() < 5 {
-            "reverse-good-result"
-        } else {
-            "reverse-bad-result"
-        };
-
         let mut args = fluent::FluentArgs::new();
-        args.insert(
-            "distance",
-            fluent::FluentValue::from(first.distance.unwrap()),
-        );
 
         if similar.is_empty() {
             args.insert("link", fluent::FluentValue::from(first.url()));
@@ -88,7 +78,7 @@ impl super::Handler for PhotoHandler {
         let text = handler
             .get_fluent_bundle(
                 message.from.as_ref().unwrap().language_code.as_deref(),
-                |bundle| get_message(&bundle, name, Some(args)).unwrap(),
+                |bundle| get_message(&bundle, "reverse-result", Some(args)).unwrap(),
             )
             .await;
 

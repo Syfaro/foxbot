@@ -306,7 +306,7 @@ impl CommandHandler {
         )
         .await?;
 
-        let result = match matches.first() {
+        let first = match matches.first() {
             Some(result) => result,
             None => {
                 drop(action);
@@ -318,23 +318,32 @@ impl CommandHandler {
             }
         };
 
-        let name = if result.distance.unwrap() < 5 {
-            "reverse-good-result"
-        } else {
-            "reverse-bad-result"
-        };
+        let similar: Vec<&fuzzysearch::File> = matches
+            .iter()
+            .skip(1)
+            .take_while(|m| m.distance.unwrap() == first.distance.unwrap())
+            .collect();
+        tracing::debug!(
+            distance = first.distance.unwrap(),
+            "discovered match distance"
+        );
 
         let mut args = fluent::FluentArgs::new();
-        args.insert(
-            "distance",
-            fluent::FluentValue::from(result.distance.unwrap()),
-        );
-        args.insert("link", fluent::FluentValue::from(result.url()));
+
+        if similar.is_empty() {
+            args.insert("link", fluent::FluentValue::from(first.url()));
+        } else {
+            let mut links = vec![format!("· {}", first.url())];
+            links.extend(similar.iter().map(|s| format!("· {}", s.url())));
+            let mut s = "\n".to_string();
+            s.push_str(&links.join("\n"));
+            args.insert("link", fluent::FluentValue::from(s));
+        }
 
         let text = handler
             .get_fluent_bundle(
                 message.from.as_ref().unwrap().language_code.as_deref(),
-                |bundle| get_message(&bundle, name, Some(args)).unwrap(),
+                |bundle| get_message(&bundle, "reverse-result", Some(args)).unwrap(),
             )
             .await;
 
@@ -344,8 +353,7 @@ impl CommandHandler {
             GroupConfigKey::GroupNoPreviews,
         )
         .await?
-        .is_some()
-            || result.distance.unwrap() > 5;
+        .is_some();
 
         drop(action);
 
@@ -454,7 +462,7 @@ impl CommandHandler {
 
                 handler
                     .fapi
-                    .image_search(&bytes, fuzzysearch::MatchType::Close)
+                    .image_search(&bytes, fuzzysearch::MatchType::Close, Some(10))
                     .await?
                     .matches
             }
@@ -523,7 +531,7 @@ impl CommandHandler {
 
         let sent = handler.make_request(&send_message).await?;
 
-        let matches = handler.fapi.lookup_hashes(used_hashes).await?;
+        let matches = handler.fapi.lookup_hashes(&used_hashes, Some(10)).await?;
 
         if matches.is_empty() {
             handler

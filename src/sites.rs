@@ -106,7 +106,10 @@ impl Direct {
             Err(_) => return None,
         };
 
-        let results = self.fautil.image_search(&body, MatchType::Exact).await;
+        let results = self
+            .fautil
+            .image_search(&body, MatchType::Exact, Some(1))
+            .await;
 
         match results {
             Ok(results) => results.matches.into_iter().next(),
