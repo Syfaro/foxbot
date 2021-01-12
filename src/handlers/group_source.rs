@@ -110,7 +110,6 @@ impl super::Handler for GroupSourceHandler {
                     for result in wanted_matches {
                         let mut args = fluent::FluentArgs::new();
                         args.insert("link", result.url().into());
-                        args.insert("distance", result.distance.unwrap().into());
 
                         buf.push_str(
                             &get_message(bundle, "automatic-multiple-result", Some(args)).unwrap(),

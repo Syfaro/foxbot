@@ -351,7 +351,7 @@ pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (S
             tracing::trace!(site = sub.site_name(), id = sub.id, "looking at submission");
             let mut args = fluent::FluentArgs::new();
             args.insert("link", sub.url().into());
-            args.insert("distance", sub.distance.unwrap().into());
+            args.insert("distance", sub.distance.unwrap_or(10).into());
             s.push_str(&get_message(&bundle, "alternate-distance", Some(args)).unwrap());
             s.push('\n');
             used_hashes.push(sub.hash.unwrap());
@@ -502,7 +502,7 @@ async fn lookup_single_hash(
     hash: i64,
 ) -> anyhow::Result<Vec<fuzzysearch::File>> {
     let mut matches = fapi
-        .lookup_hashes(vec![hash])
+        .lookup_hashes(&vec![hash], Some(3))
         .await
         .context("unable to lookup hash")?;
 
