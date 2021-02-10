@@ -502,7 +502,7 @@ async fn lookup_single_hash(
     hash: i64,
 ) -> anyhow::Result<Vec<fuzzysearch::File>> {
     let mut matches = fapi
-        .lookup_hashes(&vec![hash], Some(3))
+        .lookup_hashes(&[hash], Some(3))
         .await
         .context("unable to lookup hash")?;
 

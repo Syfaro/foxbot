@@ -77,6 +77,7 @@ impl super::Handler for ChannelPhotoHandler {
 /// Filter updates to ignore any non-channel type messages and flag completed
 /// for forwarded messages (can't edit) or messages with reply markup
 /// (likely from a bot and unable to be edited).
+#[allow(clippy::unnecessary_wraps)]
 fn initial_filter(message: &tgbotapi::Message) -> anyhow::Result<Option<Status>> {
     // We only want messages from channels. I think this is always true
     // because this came from a channel_post.
