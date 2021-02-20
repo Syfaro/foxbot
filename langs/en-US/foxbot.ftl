@@ -50,7 +50,9 @@ video-return-button = Return and send
 
 # Reverse Search
 reverse-no-results = I was unable to find anything, sorry.
-reverse-result = I found this: { $link }
+reverse-result = I found this: { $link } ({ $rating })
+reverse-multiple-results = I found multiple sources:
+reverse-multiple-item = · { $link } ({ $rating })
 
 # Twitter Onboarding
 twitter-callback = Please follow this link to add your Twitter account: { $link }
@@ -78,13 +80,13 @@ source-no-photo = Sorry, I can't seem to find the photo here.
 # In-group alternates
 alternate-title = Here are some possible alternate versions:
 alternate-posted-by = Posted by { $name }
-alternate-distance = · { $link } (distance of { $distance })
+alternate-distance = · { $link } ({ $rating }, distance of { $distance })
 alternate-multiple-photo = I can only find alternates for a single photo, sorry.
 
 # Automatic group sourcing
-automatic-single = It looks like this image may have come from here: { $link }
+automatic-single = It looks like this image may have come from here: { $link } ({ $rating })
 automatic-multiple = I found a few places this image may have come from:
-automatic-multiple-result = · { $link }
+automatic-multiple-result = · { $link } ({ $rating })
 automatic-enable-not-admin = Sorry, you must be a group admin to enable this.
 automatic-enable-bot-not-admin = Sorry, you must give me admin permissions due to a Telegram limitation.
 automatic-enable-success = Automatic group sourcing is now enabled!
@@ -117,3 +119,7 @@ settings-move-unable = Unable to move { $name } to that position
 settings-move-updated = Updated position for { $name }
 settings-site-preference = Site Preference
 settings-source-name = Source Name
+
+rating-general = SFW
+rating-adult = NSFW
+rating-unknown = Unknown

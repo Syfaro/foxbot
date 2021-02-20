@@ -7,7 +7,7 @@ use crate::models::{GroupConfig, GroupConfigKey};
 use crate::needs_field;
 use crate::utils::{
     build_alternate_response, can_delete_in_chat, continuous_action, find_best_photo, find_images,
-    get_message, match_image, parse_known_bots, sort_results,
+    get_message, match_image, parse_known_bots, sort_results, source_reply,
 };
 
 // TODO: there's a lot of shared code between these commands.
@@ -306,44 +306,10 @@ impl CommandHandler {
         )
         .await?;
 
-        let first = match matches.first() {
-            Some(result) => result,
-            None => {
-                drop(action);
-
-                handler
-                    .send_generic_reply(&message, "reverse-no-results")
-                    .await?;
-                return Ok(());
-            }
-        };
-
-        let similar: Vec<&fuzzysearch::File> = matches
-            .iter()
-            .skip(1)
-            .take_while(|m| m.distance.unwrap() == first.distance.unwrap())
-            .collect();
-        tracing::debug!(
-            distance = first.distance.unwrap(),
-            "discovered match distance"
-        );
-
-        let mut args = fluent::FluentArgs::new();
-
-        if similar.is_empty() {
-            args.insert("link", fluent::FluentValue::from(first.url()));
-        } else {
-            let mut links = vec![format!("· {}", first.url())];
-            links.extend(similar.iter().map(|s| format!("· {}", s.url())));
-            let mut s = "\n".to_string();
-            s.push_str(&links.join("\n"));
-            args.insert("link", fluent::FluentValue::from(s));
-        }
-
         let text = handler
             .get_fluent_bundle(
                 message.from.as_ref().unwrap().language_code.as_deref(),
-                |bundle| get_message(&bundle, "reverse-result", Some(args)).unwrap(),
+                |bundle| source_reply(&matches, &bundle),
             )
             .await;
 

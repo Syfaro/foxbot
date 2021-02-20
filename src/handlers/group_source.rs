@@ -2,8 +2,8 @@ use super::Status::*;
 use crate::models::{GroupConfig, GroupConfigKey};
 use crate::needs_field;
 use crate::utils::{
-    continuous_action, extract_links, find_best_photo, get_message, link_was_seen, match_image,
-    sort_results,
+    continuous_action, extract_links, find_best_photo, get_message, get_rating_bundle_name,
+    link_was_seen, match_image, sort_results,
 };
 use anyhow::Context;
 use async_trait::async_trait;
@@ -98,7 +98,11 @@ impl super::Handler for GroupSourceHandler {
             .get_fluent_bundle(lang, |bundle| {
                 if wanted_matches.len() == 1 {
                     let mut args = fluent::FluentArgs::new();
-                    args.insert("link", wanted_matches.first().unwrap().url().into());
+                    let m = wanted_matches.first().unwrap();
+                    args.insert("link", m.url().into());
+                    let rating =
+                        get_message(&bundle, get_rating_bundle_name(&m.rating), None).unwrap();
+                    args.insert("rating", rating.into());
 
                     get_message(bundle, "automatic-single", Some(args)).unwrap()
                 } else {
@@ -110,6 +114,10 @@ impl super::Handler for GroupSourceHandler {
                     for result in wanted_matches {
                         let mut args = fluent::FluentArgs::new();
                         args.insert("link", result.url().into());
+                        let rating =
+                            get_message(&bundle, get_rating_bundle_name(&result.rating), None)
+                                .unwrap();
+                        args.insert("rating", rating.into());
 
                         buf.push_str(
                             &get_message(bundle, "automatic-multiple-result", Some(args)).unwrap(),
