@@ -352,6 +352,8 @@ pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (S
             let mut args = fluent::FluentArgs::new();
             args.insert("link", sub.url().into());
             args.insert("distance", sub.distance.unwrap_or(10).into());
+            let rating = get_message(&bundle, get_rating_bundle_name(&sub.rating), None).unwrap();
+            args.insert("rating", rating.into());
             s.push_str(&get_message(&bundle, "alternate-distance", Some(args)).unwrap());
             s.push('\n');
             used_hashes.push(sub.hash.unwrap());
@@ -746,6 +748,61 @@ pub async fn can_delete_in_chat(
     .await?;
 
     Ok(can_delete)
+}
+
+pub fn get_rating_bundle_name(rating: &Option<fuzzysearch::Rating>) -> &'static str {
+    match rating {
+        Some(fuzzysearch::Rating::General) => "rating-general",
+        Some(fuzzysearch::Rating::Mature) | Some(fuzzysearch::Rating::Adult) => "rating-adult",
+        None => "rating-unknown",
+    }
+}
+
+pub fn source_reply(matches: &[fuzzysearch::File], bundle: Bundle<'_>) -> String {
+    let first = match matches.first() {
+        Some(result) => result,
+        None => return get_message(&bundle, "reverse-no-results", None).unwrap(),
+    };
+
+    let similar: Vec<&fuzzysearch::File> = matches
+        .iter()
+        .skip(1)
+        .take_while(|m| m.distance.unwrap() == first.distance.unwrap())
+        .collect();
+    tracing::debug!(
+        distance = first.distance.unwrap(),
+        "discovered match distance"
+    );
+
+    if similar.is_empty() {
+        let mut args = fluent::FluentArgs::new();
+        args.insert("link", first.url().into());
+
+        let rating = get_rating_bundle_name(&first.rating);
+        let rating = get_message(&bundle, rating, None).unwrap();
+        args.insert("rating", rating.into());
+
+        get_message(&bundle, "reverse-result", Some(args)).unwrap()
+    } else {
+        let mut items = Vec::with_capacity(2 + similar.len());
+
+        let text = get_message(&bundle, "reverse-multiple-results", None).unwrap();
+        items.push(text);
+
+        for file in vec![first].into_iter().chain(similar) {
+            let mut args = fluent::FluentArgs::new();
+            args.insert("link", file.url().into());
+
+            let rating = get_rating_bundle_name(&file.rating);
+            let rating = get_message(&bundle, rating, None).unwrap();
+            args.insert("rating", rating.into());
+
+            let result = get_message(&bundle, "reverse-multiple-item", Some(args)).unwrap();
+            items.push(result);
+        }
+
+        items.join("\n")
+    }
 }
 
 #[cfg(test)]

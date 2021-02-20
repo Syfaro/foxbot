@@ -46,9 +46,9 @@ tokio-util = { version = "0.3", features = ["codec"] }
 futures = "0.3"
 futures-util = "0.3"
 
-tgbotapi = { git = "https://github.com/Syfaro/tgbotapi-rs" }
+tgbotapi = { git = "https://github.com/Syfaro/tgbotapi-rs", rev = "aae41470f10f5105983b2ff3ad5cd179d8707820" }
 cfscrape = { git = "https://github.com/Syfaro/cfscrape-rs" }
-fuzzysearch = { git = "https://github.com/Syfaro/fuzzysearch-rs", features = ["trace", "local_hash"] }
+fuzzysearch = { git = "https://github.com/Syfaro/fuzzysearch-rs", branch = "tokio-0.2", features = ["trace", "local_hash"] }
 
 tracing = "0.1"
 tracing-subscriber = "0.2"
