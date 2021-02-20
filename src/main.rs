@@ -393,14 +393,14 @@ async fn main() {
             url: webhook_endpoint.to_owned(),
         };
         if let Err(e) = bot.make_request(&set_webhook).await {
-            std::panic::panic_any(e);
+            panic!("unable to set webhook: {:?}", e);
         }
 
         receive_webhook(update_tx, inline_tx, shutdown, config).await;
     } else {
         let delete_webhook = DeleteWebhook;
         if let Err(e) = bot.make_request(&delete_webhook).await {
-            std::panic::panic_any(e);
+            panic!("unable to delete webhook: {:?}", e);
         }
 
         poll_updates(update_tx, inline_tx, shutdown, bot).await;
