@@ -118,10 +118,15 @@ fn configure_tracing(collector: String) {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::prelude::*;
 
-    let env = if cfg!(debug_assertions) {
-        "debug"
+    let env = std::env::var("ENVIRONMENT");
+    let env = if let Ok(env) = env.as_ref() {
+        env.as_str()
     } else {
-        "release"
+        if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        }
     };
 
     let fmt_layer = tracing_subscriber::fmt::layer();
