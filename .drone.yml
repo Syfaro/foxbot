@@ -108,6 +108,24 @@ steps:
     username:
       from_secret: docker_username
 
+- name: deploy-staging
+  pull: always
+  image: sinlead/drone-kubectl
+  settings:
+    kubernetes_cert:
+      from_secret: k8s-cert
+    kubernetes_server:
+      from_secret: k8s-server
+    kubernetes_token:
+      from_secret: k8s-token
+  commands:
+    - kubectl -n foxbot-staging set image deployment/foxbot foxbot=registry.huefox.com/foxbot:${DRONE_COMMIT_SHA}
+  when:
+    branch:
+    - master
+    event:
+    - push
+
 - name: sentry-finalize
   image: getsentry/sentry-cli
   commands:
@@ -121,6 +139,11 @@ steps:
       from_secret: sentry_org
     SENTRY_PROJECT:
       from_secret: sentry_project
+  when:
+    event:
+    - promote
+    target:
+    - production
 
 - name: deploy
   pull: always
@@ -135,6 +158,11 @@ steps:
     - bash /deploy/foxbot.sh
     username:
       from_secret: deploy_username
+  when:
+    event:
+    - promote
+    target:
+    - production
 
 - name: sentry-deploy
   image: getsentry/sentry-cli
@@ -147,15 +175,14 @@ steps:
       from_secret: sentry_org
     SENTRY_PROJECT:
       from_secret: sentry_project
-
-trigger:
-  event:
-  - promote
-  target:
-  - production
+  when:
+    event:
+    - promote
+    target:
+    - production
 
 ---
 kind: signature
-hmac: 541143238e459e4dd6ee7c21187febc10f6c980013b79299f47248878a2ebe02
+hmac: ec52ba71749c416761c5809f1ea5bbf072531835e00d06f8736678762ab5abff
 
 ...
