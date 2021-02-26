@@ -28,7 +28,7 @@ impl super::Handler for ChannelPhotoHandler {
         potential_return!(initial_filter(&message));
 
         let file = find_best_photo(&sizes).unwrap();
-        let mut matches = match_image(&handler.bot, &handler.conn, &handler.fapi, &file)
+        let mut matches = match_image(&handler.bot, &handler.conn, &handler.fapi, &file, Some(3))
             .await
             .context("unable to get matches")?;
 

@@ -51,8 +51,14 @@ impl super::Handler for GroupSourceHandler {
         };
 
         let best_photo = find_best_photo(&photo_sizes).unwrap();
-        let mut matches =
-            match_image(&handler.bot, &handler.conn, &handler.fapi, &best_photo).await?;
+        let mut matches = match_image(
+            &handler.bot,
+            &handler.conn,
+            &handler.fapi,
+            &best_photo,
+            Some(3),
+        )
+        .await?;
         sort_results(
             &handler.conn,
             message.from.as_ref().unwrap().id,

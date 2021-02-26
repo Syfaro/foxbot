@@ -465,12 +465,13 @@ pub async fn match_image(
     conn: &sqlx::Pool<sqlx::Postgres>,
     fapi: &fuzzysearch::FuzzySearch,
     file: &tgbotapi::PhotoSize,
+    distance: Option<i64>,
 ) -> anyhow::Result<Vec<fuzzysearch::File>> {
     if let Some(hash) = FileCache::get(&conn, &file.file_unique_id)
         .await
         .context("unable to query file cache")?
     {
-        return lookup_single_hash(&fapi, hash).await;
+        return lookup_single_hash(&fapi, hash, distance).await;
     }
 
     let get_file = tgbotapi::requests::GetFile {
@@ -496,15 +497,16 @@ pub async fn match_image(
         .await
         .context("unable to set file cache")?;
 
-    lookup_single_hash(&fapi, hash).await
+    lookup_single_hash(&fapi, hash, distance).await
 }
 
 async fn lookup_single_hash(
     fapi: &fuzzysearch::FuzzySearch,
     hash: i64,
+    distance: Option<i64>,
 ) -> anyhow::Result<Vec<fuzzysearch::File>> {
     let mut matches = fapi
-        .lookup_hashes(&[hash], Some(3))
+        .lookup_hashes(&[hash], distance)
         .await
         .context("unable to lookup hash")?;
 

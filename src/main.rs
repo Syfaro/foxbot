@@ -121,12 +121,10 @@ fn configure_tracing(collector: String) {
     let env = std::env::var("ENVIRONMENT");
     let env = if let Ok(env) = env.as_ref() {
         env.as_str()
+    } else if cfg!(debug_assertions) {
+        "debug"
     } else {
-        if cfg!(debug_assertions) {
-            "debug"
-        } else {
-            "release"
-        }
+        "release"
     };
 
     let fmt_layer = tracing_subscriber::fmt::layer();

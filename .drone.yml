@@ -111,6 +111,8 @@ steps:
 - name: deploy-staging
   pull: always
   image: sinlead/drone-kubectl
+  commands:
+  - kubectl -n foxbot-staging set image deployment/foxbot foxbot=registry.huefox.com/foxbot:${DRONE_COMMIT_SHA}
   settings:
     kubernetes_cert:
       from_secret: k8s-cert
@@ -118,8 +120,6 @@ steps:
       from_secret: k8s-server
     kubernetes_token:
       from_secret: k8s-token
-  commands:
-    - kubectl -n foxbot-staging set image deployment/foxbot foxbot=registry.huefox.com/foxbot:${DRONE_COMMIT_SHA}
   when:
     branch:
     - master
@@ -183,6 +183,6 @@ steps:
 
 ---
 kind: signature
-hmac: ec52ba71749c416761c5809f1ea5bbf072531835e00d06f8736678762ab5abff
+hmac: 468edc70597294600034db40ccdf0027ea11de8e089b6481aef0725d4618698d
 
 ...

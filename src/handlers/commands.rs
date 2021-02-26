@@ -297,8 +297,14 @@ impl CommandHandler {
         }
 
         let best_photo = find_best_photo(&photo).unwrap();
-        let mut matches =
-            match_image(&handler.bot, &handler.conn, &handler.fapi, &best_photo).await?;
+        let mut matches = match_image(
+            &handler.bot,
+            &handler.conn,
+            &handler.fapi,
+            &best_photo,
+            Some(3),
+        )
+        .await?;
         sort_results(
             &handler.conn,
             message.from.as_ref().unwrap().id,
@@ -361,7 +367,14 @@ impl CommandHandler {
         let matches = match &message.photo {
             Some(photo) => {
                 let best_photo = find_best_photo(&photo).unwrap();
-                match_image(&handler.bot, &handler.conn, &handler.fapi, &best_photo).await?
+                match_image(
+                    &handler.bot,
+                    &handler.conn,
+                    &handler.fapi,
+                    &best_photo,
+                    Some(10),
+                )
+                .await?
             }
             None => {
                 let mut links = vec![];
