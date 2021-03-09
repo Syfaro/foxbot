@@ -181,8 +181,13 @@ steps:
     target:
     - production
 
+trigger:
+  event:
+    exclude:
+    - pull_request
+
 ---
 kind: signature
-hmac: 468edc70597294600034db40ccdf0027ea11de8e089b6481aef0725d4618698d
+hmac: 56948fc1ef40a52b846746ab0ed09367dd545c49b1e5b6984fd948341f6d99f3
 
 ...

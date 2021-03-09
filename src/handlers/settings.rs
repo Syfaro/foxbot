@@ -388,7 +388,7 @@ async fn send_settings_message(
 
 async fn sort_order_keyboard(
     conn: &sqlx::Pool<sqlx::Postgres>,
-    user_id: i32,
+    user_id: i64,
 ) -> anyhow::Result<InlineKeyboardMarkup> {
     let row: Option<Vec<String>> = UserConfig::get(&conn, UserConfigKey::SiteSortOrder, user_id)
         .await

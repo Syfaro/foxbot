@@ -6,7 +6,7 @@
       "columns": [],
       "parameters": {
         "Left": [
-          "Int4",
+          "Int8",
           "Text",
           "Text"
         ]
@@ -39,7 +39,7 @@
       ],
       "parameters": {
         "Left": [
-          "Int4",
+          "Int8",
           "Text"
         ]
       },
@@ -54,7 +54,7 @@
       "columns": [],
       "parameters": {
         "Left": [
-          "Int4",
+          "Int8",
           "Text",
           "Text"
         ]
@@ -140,7 +140,7 @@
       "columns": [],
       "parameters": {
         "Left": [
-          "Int4"
+          "Int8"
         ]
       },
       "nullable": []
@@ -185,7 +185,7 @@
       "columns": [],
       "parameters": {
         "Left": [
-          "Int4",
+          "Int8",
           "Text",
           "Jsonb"
         ]
@@ -313,7 +313,7 @@
       ],
       "parameters": {
         "Left": [
-          "Int4"
+          "Int8"
         ]
       },
       "nullable": [
@@ -329,7 +329,7 @@
         {
           "ordinal": 0,
           "name": "user_id",
-          "type_info": "Int4"
+          "type_info": "Int8"
         },
         {
           "ordinal": 1,
@@ -360,7 +360,7 @@
       "columns": [],
       "parameters": {
         "Left": [
-          "Int4"
+          "Int8"
         ]
       },
       "nullable": []

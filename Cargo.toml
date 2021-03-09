@@ -8,8 +8,8 @@ edition = "2018"
 env = ["dotenv"]
 
 [dependencies]
-reqwest = { version = "0.10", features = ["json", "stream"] }
-linkify = "0.4"
+reqwest = { version = "0.11", features = ["json", "stream"] }
+linkify = "0.5"
 rand = "0.7"
 regex = "1"
 scraper = "0.12"
@@ -17,7 +17,7 @@ async-trait = "0.1"
 fluent = "0.12"
 fluent-langneg = "0.13"
 unic-langid = "0.9"
-hyper = "0.13"
+hyper = { version = "0.14", features = ["server"] }
 url = "2"
 hamming = "0.1"
 handlebars = { version = "3", features = ["dir_source"] }
@@ -25,30 +25,29 @@ dotenv = { version = "0.15", optional = true }
 
 sha2 = "0.9"
 image = "0.23"
-infer = "0.3"
-bytes = "0.5"
+bytes = "1"
 hex = "0.4"
 
-sentry = { version = "0.21", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "reqwest", "debug-logs"] }
+sentry = { version = "0.22", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "reqwest", "debug-logs"] }
 uuid = "0.8"
 anyhow = "1"
 thiserror = "1"
 lazy_static = "1"
-prometheus = { version = "0.11", features = ["process"] }
+prometheus = { version = "0.12", features = ["process"] }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 envy = "0.4"
 
-egg-mode = "0.15"
-tokio = { version = "0.2", features = ["macros", "time", "stream", "sync", "signal"] }
-tokio-util = { version = "0.3", features = ["codec"] }
+egg-mode = { git = "https://github.com/egg-mode-rs/egg-mode" }
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+tokio-util = { version = "0.6", features = ["codec"] }
 futures = "0.3"
-futures-util = "0.3"
 
-tgbotapi = { git = "https://github.com/Syfaro/tgbotapi-rs", rev = "aae41470f10f5105983b2ff3ad5cd179d8707820" }
+tgbotapi = { git = "https://github.com/Syfaro/tgbotapi-rs" }
 cfscrape = { git = "https://github.com/Syfaro/cfscrape-rs" }
-fuzzysearch = { git = "https://github.com/Syfaro/fuzzysearch-rs", branch = "tokio-0.2", features = ["trace", "local_hash"] }
+fuzzysearch = { git = "https://github.com/Syfaro/fuzzysearch-rs", features = ["trace", "local_hash"] }
 
 tracing = "0.1"
 tracing-subscriber = "0.2"
@@ -57,12 +56,12 @@ opentelemetry = "0.6"
 opentelemetry-jaeger = "0.5"
 tracing-opentelemetry = "0.5"
 
-redis = { version = "0.17", features = ["connection-manager"] }
-sqlx = { version = "0.4", default-features = false, features = ["runtime-tokio-rustls", "macros", "postgres", "offline", "json", "migrate"] }
+redis = { version = "0.20", features = ["connection-manager", "tokio-comp"] }
+sqlx = { version = "0.5", default-features = false, features = ["runtime-tokio-rustls", "macros", "postgres", "offline", "json", "migrate"] }
 
-rusoto_core = "0.45"
-rusoto_credential = "0.45"
-rusoto_s3 = "0.45"
+rusoto_core = "0.46"
+rusoto_credential = "0.46"
+rusoto_s3 = "0.46"
 
 [profile.release]
 lto = true

@@ -52,7 +52,7 @@ pub trait Site {
     async fn url_supported(&mut self, url: &str) -> bool;
     async fn get_images(
         &mut self,
-        user_id: i32,
+        user_id: i64,
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>>;
 }
@@ -165,7 +165,7 @@ impl Site for Direct {
 
     async fn get_images(
         &mut self,
-        _user_id: i32,
+        _user_id: i64,
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let u = url.to_string();
@@ -324,7 +324,7 @@ impl Site for E621 {
 
     async fn get_images(
         &mut self,
-        _user_id: i32,
+        _user_id: i64,
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let endpoint = if self.show.is_match(url) {
@@ -410,7 +410,7 @@ impl Site for Twitter {
 
     async fn get_images(
         &mut self,
-        user_id: i32,
+        user_id: i64,
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let captures = self.matcher.captures(url).unwrap();
@@ -644,7 +644,7 @@ impl Site for FurAffinity {
 
     async fn get_images(
         &mut self,
-        _user_id: i32,
+        _user_id: i64,
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let image = if url.contains("facdn.net/art/") {
@@ -740,7 +740,7 @@ impl Site for Mastodon {
 
     async fn get_images(
         &mut self,
-        _user_id: i32,
+        _user_id: i64,
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let captures = self.matcher.captures(url).unwrap();
@@ -818,7 +818,7 @@ impl Site for Weasyl {
 
     async fn get_images(
         &mut self,
-        _user_id: i32,
+        _user_id: i64,
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let captures = self.matcher.captures(url).unwrap();
@@ -1044,7 +1044,7 @@ impl Site for Inkbunny {
 
     async fn get_images(
         &mut self,
-        _user_id: i32,
+        _user_id: i64,
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let captures = self.matcher.captures(url).unwrap();
@@ -1166,7 +1166,7 @@ impl Site for DeviantArt {
 
     async fn get_images(
         &mut self,
-        _user_id: i32,
+        _user_id: i64,
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let mut endpoint = url::Url::parse("https://backend.deviantart.com/oembed").unwrap();
