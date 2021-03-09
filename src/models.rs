@@ -79,7 +79,7 @@ impl UserConfig {
     pub async fn get<T: serde::de::DeserializeOwned>(
         conn: &sqlx::Pool<sqlx::Postgres>,
         key: UserConfigKey,
-        user_id: i32,
+        user_id: i64,
     ) -> anyhow::Result<Option<T>> {
         sqlx::query!(
             "SELECT value FROM user_config WHERE user_id = $1 AND name = $2",
@@ -96,7 +96,7 @@ impl UserConfig {
     pub async fn set<T: serde::Serialize>(
         conn: &sqlx::Pool<sqlx::Postgres>,
         key: &str,
-        user_id: i32,
+        user_id: i64,
         data: T,
     ) -> anyhow::Result<()> {
         let value = serde_json::to_value(&data)?;
@@ -207,7 +207,7 @@ pub struct TwitterAccount {
 
 #[derive(sqlx::FromRow)]
 pub struct TwitterRequest {
-    pub user_id: i32,
+    pub user_id: i64,
     pub request_key: String,
     pub request_secret: String,
 }
@@ -218,7 +218,7 @@ impl Twitter {
     /// Look up a user's Twitter credentials.
     pub async fn get_account(
         conn: &sqlx::Pool<sqlx::Postgres>,
-        user_id: i32,
+        user_id: i64,
     ) -> anyhow::Result<Option<TwitterAccount>> {
         let account = sqlx::query_as!(
             TwitterAccount,
@@ -255,7 +255,7 @@ impl Twitter {
     /// * Deletes the pending request
     pub async fn set_account(
         conn: &sqlx::Pool<sqlx::Postgres>,
-        user_id: i32,
+        user_id: i64,
         creds: TwitterAccount,
     ) -> anyhow::Result<()> {
         let mut tx = conn.begin().await?;
@@ -275,7 +275,7 @@ impl Twitter {
 
     pub async fn set_request(
         conn: &sqlx::Pool<sqlx::Postgres>,
-        user_id: i32,
+        user_id: i64,
         request_key: &str,
         request_secret: &str,
     ) -> anyhow::Result<()> {
@@ -300,7 +300,7 @@ impl Twitter {
 
     pub async fn remove_account(
         conn: &sqlx::Pool<sqlx::Postgres>,
-        user_id: i32,
+        user_id: i64,
     ) -> anyhow::Result<()> {
         sqlx::query!("DELETE FROM twitter_account WHERE user_id = $1", user_id)
             .execute(conn)

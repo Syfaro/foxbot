@@ -28,7 +28,7 @@ impl InlineHandler {
         use futures::TryStreamExt;
         use rusoto_s3::S3;
         use tokio::io::AsyncWriteExt;
-        use tokio::stream::StreamExt;
+        use tokio_stream::StreamExt;
 
         let text = message.text.as_ref().unwrap();
         let id = match text.split('-').nth(1) {

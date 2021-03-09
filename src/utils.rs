@@ -85,7 +85,7 @@ async fn upload_image(
     thumb: bool,
     data: &bytes::Bytes,
 ) -> anyhow::Result<ImageInfo> {
-    use bytes::buf::BufMutExt;
+    use bytes::BufMut;
 
     if let Some(cached_post) = CachedPost::get(&conn, &url, thumb)
         .await
@@ -407,9 +407,9 @@ pub fn continuous_action(
     user: Option<tgbotapi::User>,
     action: tgbotapi::requests::ChatAction,
 ) -> ContinuousAction {
-    use futures::future::FutureExt;
-    use futures_util::stream::StreamExt;
+    use futures::StreamExt;
     use std::time::Duration;
+    use tokio_stream::wrappers::IntervalStream;
 
     let (tx, rx) = tokio::sync::oneshot::channel();
 
@@ -420,7 +420,7 @@ pub fn continuous_action(
             let mut count: usize = 0;
 
             let timer = Box::pin(
-                tokio::time::interval(Duration::from_secs(5))
+                IntervalStream::new(tokio::time::interval(Duration::from_secs(5)))
                     .take_while(|_| {
                         tracing::trace!(count, "evaluating chat action");
                         count += 1;
@@ -434,8 +434,7 @@ pub fn continuous_action(
                             });
                         }
                     }),
-            )
-            .fuse();
+            );
 
             let was_ended = matches!(
                 futures::future::select(timer, rx).await,
@@ -527,7 +526,7 @@ async fn lookup_single_hash(
 
 pub async fn sort_results(
     conn: &sqlx::Pool<sqlx::Postgres>,
-    user_id: i32,
+    user_id: i64,
     results: &mut Vec<fuzzysearch::File>,
 ) -> anyhow::Result<()> {
     // If we have 1 or fewer items, we don't need to do any sorting.
@@ -713,7 +712,7 @@ pub async fn can_delete_in_chat(
     bot: &tgbotapi::Telegram,
     conn: &sqlx::Pool<sqlx::Postgres>,
     chat_id: i64,
-    user_id: i32,
+    user_id: i64,
     ignore_cache: bool,
 ) -> anyhow::Result<bool> {
     use crate::models::{GroupConfig, GroupConfigKey};

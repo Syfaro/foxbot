@@ -1,4 +1,3 @@
-use futures::StreamExt;
 use sentry::integrations::anyhow::capture_anyhow;
 use sites::{PostInfo, Site};
 use std::collections::HashMap;
@@ -168,7 +167,7 @@ fn configure_tracing(collector: String) {
 }
 
 fn setup_shutdown() -> tokio::sync::mpsc::Receiver<bool> {
-    let (mut shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel(1);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel(1);
 
     #[cfg(unix)]
     tokio::spawn(async move {
@@ -322,16 +321,10 @@ async fn main() {
     );
     let s3 = rusoto_s3::S3Client::new_with(client, provider, region);
 
-    use redis::IntoConnectionInfo;
-    let redis = redis::aio::ConnectionManager::new(
-        config
-            .redis_dsn
-            .clone()
-            .into_connection_info()
-            .expect("Unable to parse Redis DSN"),
-    )
-    .await
-    .expect("Unable to open Redis connection");
+    let redis_client = redis::Client::open(config.redis_dsn.clone()).unwrap();
+    let redis = redis::aio::ConnectionManager::new(redis_client)
+        .await
+        .expect("Unable to open Redis connection");
 
     let handler = Arc::new(MessageHandler {
         bot_user,
@@ -417,10 +410,13 @@ async fn main() {
     // concurrency limit. All other updates are run on a queue with lower
     // concurrency limits as they are not as time-sensitive.
 
+    use futures::StreamExt;
+    use tokio_stream::wrappers::ReceiverStream;
+
     // Spawn a new worker for inline queries, limited by `INLINE_HANDLERS`.
     let h = handler.clone();
     tokio::spawn(async move {
-        inline_rx
+        ReceiverStream::new(inline_rx)
             .for_each_concurrent(INLINE_HANDLERS, |inline_query| {
                 let handler = h.clone();
 
@@ -436,7 +432,7 @@ async fn main() {
     });
 
     // Process all other updates, limited by `CONCURRENT_HANDLERS`.
-    update_rx
+    ReceiverStream::new(update_rx)
         .for_each_concurrent(CONCURRENT_HANDLERS, |update| {
             let handler = handler.clone();
 
@@ -458,8 +454,8 @@ async fn main() {
 /// It spawns a handler for each request.
 async fn handle_request(
     req: hyper::Request<hyper::Body>,
-    mut update_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
-    mut inline_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    update_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    inline_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
     secret: &str,
     templates: Arc<handlebars::Handlebars<'_>>,
 ) -> hyper::Result<hyper::Response<hyper::Body>> {
@@ -655,8 +651,8 @@ async fn serve_metrics(config: Config) {
 
 /// Start polling updates using Bot API long polling.
 async fn poll_updates(
-    mut update_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
-    mut inline_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    update_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    inline_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
     mut shutdown: tokio::sync::mpsc::Receiver<bool>,
     bot: Arc<Telegram>,
 ) {
@@ -681,7 +677,7 @@ async fn poll_updates(
                 Err(e) => {
                     sentry::capture_error(&e);
                     tracing::error!("unable to get updates: {:?}", e);
-                    tokio::time::delay_for(std::time::Duration::from_secs(5)).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     continue;
                 }
             };
@@ -1098,7 +1094,7 @@ impl MessageHandler {
 
             tracing::warn!(retry_after, "rate limited");
 
-            tokio::time::delay_for(Duration::from_secs(retry_after as u64)).await;
+            tokio::time::sleep(Duration::from_secs(retry_after as u64)).await;
 
             attempts += 1;
         }
@@ -1108,15 +1104,10 @@ impl MessageHandler {
 #[cfg(test)]
 pub mod test_helpers {
     pub async fn get_redis() -> redis::aio::ConnectionManager {
-        use redis::IntoConnectionInfo;
-        redis::aio::ConnectionManager::new(
-            std::env::var("REDIS_DSN")
-                .expect("missing REDIS_DSN")
-                .clone()
-                .into_connection_info()
-                .expect("Unable to parse Redis DSN"),
-        )
-        .await
-        .expect("Unable to open Redis connection")
+        let redis_client =
+            redis::Client::open(std::env::var("REDIS_DSN").expect("Missing REDIS_DSN")).unwrap();
+        redis::aio::ConnectionManager::new(redis_client)
+            .await
+            .expect("Unable to open Redis connection")
     }
 }
