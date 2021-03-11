@@ -10,7 +10,7 @@ mod group_source;
 mod inline_handler;
 mod photo;
 pub mod settings;
-mod text;
+mod twitter;
 
 pub use channel_photo::ChannelPhotoHandler;
 pub use chosen_inline_handler::ChosenInlineHandler;
@@ -22,9 +22,9 @@ pub use group_source::GroupSourceHandler;
 pub use inline_handler::InlineHandler;
 pub use photo::PhotoHandler;
 pub use settings::SettingsHandler;
-pub use text::TextHandler;
+pub use twitter::TwitterHandler;
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum Status {
     Ignored,
     Completed,
@@ -53,6 +53,17 @@ macro_rules! needs_field {
         match $message.$field {
             Some(ref field) => field,
             _ => return Ok(crate::handlers::Status::Ignored),
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! potential_return {
+    ($v:expr) => {
+        match $v {
+            Err(e) => return Err(e),
+            Ok(Some(ret)) => return Ok(ret),
+            _ => (),
         }
     };
 }

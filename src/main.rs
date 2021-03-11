@@ -1,25 +1,34 @@
-#![feature(try_trait)]
-
 use sentry::integrations::anyhow::capture_anyhow;
 use sites::{PostInfo, Site};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tgbotapi::{requests::*, *};
 use tokio::sync::{Mutex, RwLock};
-use tracing_futures::Instrument;
 use unic_langid::LanguageIdentifier;
 
 mod coconut;
 mod handlers;
-mod migrations;
 pub mod models;
 mod sites;
 mod utils;
+
+// MARK: Monitoring configuration
+
+lazy_static::lazy_static! {
+    static ref REQUEST_DURATION: prometheus::Histogram = prometheus::register_histogram!("foxbot_request_duration_seconds", "Time to start processing request").unwrap();
+    static ref HANDLING_DURATION: prometheus::Histogram = prometheus::register_histogram!("foxbot_handling_duration_seconds", "Request processing time duration").unwrap();
+    static ref HANDLER_DURATION: prometheus::HistogramVec = prometheus::register_histogram_vec!("foxbot_handler_duration_seconds", "Time for a handler to complete", &["handler"]).unwrap();
+    static ref TELEGRAM_REQUEST: prometheus::Counter = prometheus::register_counter!("foxbot_telegram_request_total", "Number of requests made to Telegram").unwrap();
+    static ref TELEGRAM_ERROR: prometheus::Counter = prometheus::register_counter!("foxbot_telegram_error_total", "Number of errors returned by Telegram").unwrap();
+}
 
 // MARK: Statics and types
 
 type BoxedSite = Box<dyn Site + Send + Sync>;
 type BoxedHandler = Box<dyn handlers::Handler + Send + Sync>;
+
+static CONCURRENT_HANDLERS: usize = 2;
+static INLINE_HANDLERS: usize = 10;
 
 /// Generates a random 24 character alphanumeric string.
 ///
@@ -59,12 +68,7 @@ pub struct Config {
     // Twitter config
     pub twitter_consumer_key: String,
     pub twitter_consumer_secret: String,
-
-    // InfluxDB config
-    influx_host: String,
-    influx_db: String,
-    influx_user: String,
-    influx_pass: String,
+    pub twitter_callback: String,
 
     // Logging
     jaeger_collector: Option<String>,
@@ -79,7 +83,7 @@ pub struct Config {
     pub http_host: Option<String>,
     http_secret: Option<String>,
 
-    // Video handling
+    // File storage
     pub s3_endpoint: String,
     pub s3_region: String,
     pub s3_token: String,
@@ -89,25 +93,27 @@ pub struct Config {
 
     pub fautil_apitoken: String,
 
+    // Video storage
+    pub b2_account_id: String,
+    pub b2_app_key: String,
+    pub b2_bucket_id: String,
+
     pub coconut_apitoken: String,
     pub coconut_webhook: String,
 
     pub size_images: Option<bool>,
     pub cache_images: Option<bool>,
+    pub cache_all_images: Option<bool>,
 
-    // SQLite database
-    #[cfg(feature = "sqlite")]
-    pub database: String,
+    redis_dsn: String,
+
+    metrics_host: String,
 
     // Postgres database
-    #[cfg(feature = "postgres")]
-    pub db_host: String,
-    #[cfg(feature = "postgres")]
-    pub db_user: String,
-    #[cfg(feature = "postgres")]
-    pub db_pass: String,
-    #[cfg(feature = "postgres")]
-    pub db_name: String,
+    db_host: String,
+    db_user: String,
+    db_pass: String,
+    db_name: String,
 }
 
 // MARK: Initialization
@@ -121,7 +127,10 @@ fn configure_tracing(collector: String) {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::prelude::*;
 
-    let env = if cfg!(debug_assertions) {
+    let env = std::env::var("ENVIRONMENT");
+    let env = if let Ok(env) = env.as_ref() {
+        env.as_str()
+    } else if cfg!(debug_assertions) {
         "debug"
     } else {
         "release"
@@ -167,61 +176,48 @@ fn configure_tracing(collector: String) {
     registry.init();
 }
 
-#[cfg(feature = "sqlite")]
-async fn run_migrations(database: &str) {
-    let mut conn = rusqlite::Connection::open(database).expect("Unable to open database");
+fn setup_shutdown() -> tokio::sync::mpsc::Receiver<bool> {
+    let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel(1);
 
-    migrations::runner()
-        .run(&mut conn)
-        .expect("Unable to migrate database");
-}
-
-#[cfg(feature = "postgres")]
-async fn run_migrations(host: &str, user: &str, pass: &str, name: &str) {
-    let dsn = format!(
-        "host={} user={} password={} dbname={}",
-        host, user, pass, name
-    );
-
-    let (mut client, conn) = tokio_postgres::connect(&dsn, tokio_postgres::NoTls)
-        .await
-        .expect("Unable to connect to database");
-
+    #[cfg(unix)]
     tokio::spawn(async move {
-        if let Err(e) = conn.await {
-            tracing::error!("error in tokio-postgres migrations runner: {:?}", e);
+        use tokio::signal;
+
+        let mut stream = signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("unable to create terminate signal stream");
+
+        tokio::select! {
+            _ = stream.recv() => shutdown_tx.send(true).await.expect("unable to send shutdown"),
+            _ = signal::ctrl_c() => shutdown_tx.send(true).await.expect("unable to send shutdown"),
         }
     });
 
-    migrations::runner()
-        .run_async(&mut client)
-        .await
-        .expect("Unable to migrate database");
+    #[cfg(not(unix))]
+    tokio::spawn(async move {
+        use tokio::signal;
+
+        signal::ctrl_c().await.expect("unable to await ctrl-c");
+        shutdown_tx
+            .send(true)
+            .await
+            .expect("unable to send shutdown");
+    });
+
+    shutdown_rx
 }
 
-#[cfg(feature = "sqlite")]
-async fn setup_db(config: &Config) -> String {
-    run_migrations(&config.database).await;
-    format!("file:{}", config.database)
+#[cfg(feature = "env")]
+fn load_env() {
+    dotenv::dotenv().unwrap();
 }
 
-#[cfg(feature = "postgres")]
-async fn setup_db(config: &Config) -> String {
-    run_migrations(
-        &config.db_host,
-        &config.db_user,
-        &config.db_pass,
-        &config.db_name,
-    )
-    .await;
-    format!(
-        "postgres://{}:{}@{}/{}",
-        config.db_user, config.db_pass, config.db_host, config.db_name
-    )
-}
+#[cfg(not(feature = "env"))]
+fn load_env() {}
 
 #[tokio::main]
 async fn main() {
+    load_env();
+
     let config = match envy::from_env::<Config>() {
         Ok(config) => config,
         Err(err) => panic!("{:#?}", err),
@@ -234,11 +230,19 @@ async fn main() {
 
     configure_tracing(jaeger_collector);
 
-    let url = setup_db(&config).await;
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(8)
+        .connect(&format!(
+            "postgres://{}:{}@{}/{}",
+            config.db_user, config.db_pass, config.db_host, config.db_name
+        ))
+        .await
+        .expect("unable to create database pool");
 
-    let pool = quaint::pooled::Quaint::builder(&url)
-        .expect("Unable to connect to database")
-        .build();
+    sqlx::migrate!()
+        .run(&pool)
+        .await
+        .expect("unable to run database migrations");
 
     let fapi = Arc::new(fuzzysearch::FuzzySearch::new(
         config.fautil_apitoken.clone(),
@@ -264,13 +268,11 @@ async fn main() {
             config.inkbunny_password.clone(),
         )),
         Box::new(sites::Mastodon::new()),
+        Box::new(sites::DeviantArt::new()),
         Box::new(sites::Direct::new(fapi.clone())),
     ];
 
     let bot = Arc::new(Telegram::new(config.telegram_apitoken.clone()));
-
-    let influx = influxdb::Client::new(config.influx_host.clone(), config.influx_db.clone())
-        .with_auth(config.influx_user.clone(), config.influx_pass.clone());
 
     let mut finder = linkify::LinkFinder::new();
     finder.kinds(&[linkify::LinkKind::Url]);
@@ -311,9 +313,9 @@ async fn main() {
         Box::new(handlers::PhotoHandler),
         Box::new(handlers::CommandHandler),
         Box::new(handlers::GroupSourceHandler),
-        Box::new(handlers::TextHandler),
         Box::new(handlers::ErrorReplyHandler::new()),
         Box::new(handlers::SettingsHandler),
+        Box::new(handlers::TwitterHandler),
         Box::new(handlers::ErrorCleanup),
     ];
 
@@ -332,11 +334,15 @@ async fn main() {
     let coconut = coconut::Coconut::new(
         config.coconut_apitoken.clone(),
         config.coconut_webhook.clone(),
-        config.s3_endpoint.clone(),
-        config.s3_token.clone(),
-        config.s3_secret.clone(),
-        config.s3_bucket.clone(),
+        config.b2_account_id.clone(),
+        config.b2_app_key.clone(),
+        config.b2_bucket_id.clone(),
     );
+
+    let redis_client = redis::Client::open(config.redis_dsn.clone()).unwrap();
+    let redis = redis::aio::ConnectionManager::new(redis_client)
+        .await
+        .expect("Unable to open Redis connection");
 
     let handler = Arc::new(MessageHandler {
         bot_user,
@@ -347,16 +353,16 @@ async fn main() {
 
         bot: bot.clone(),
         fapi,
-        influx: Arc::new(influx),
         finder,
         s3,
         coconut,
 
         sites: Mutex::new(sites),
         conn: pool,
+        redis,
     });
 
-    let _guard = if let Some(dsn) = config.sentry_dsn {
+    let _guard = if let Some(dsn) = &config.sentry_dsn {
         Some(sentry::init(sentry::ClientOptions {
             dsn: Some(dsn.parse().unwrap()),
             debug: true,
@@ -376,32 +382,88 @@ async fn main() {
             .unwrap_or(false)
     );
 
-    let use_webhooks = match config.use_webhooks {
-        Some(use_webhooks) if use_webhooks => true,
-        _ => false,
-    };
+    serve_metrics(config.clone()).await;
+
+    // Allow buffering more updates than can be run at once
+    let (update_tx, update_rx) = tokio::sync::mpsc::channel(CONCURRENT_HANDLERS * 2);
+    let (inline_tx, inline_rx) = tokio::sync::mpsc::channel(INLINE_HANDLERS * 2);
+
+    let shutdown = setup_shutdown();
+
+    let use_webhooks = matches!(config.use_webhooks, Some(use_webhooks) if use_webhooks);
+
+    // There are two ways to receive updates, long-polling and webhooks. Polling
+    // is easier for development as it does not require opening ports to the
+    // Internet. Webhooks are more performant. We can support either option by
+    // enabling one or the other method of receiving updates and pushing all
+    // updates into a mpsc channel. Then, we can have generic code to use the
+    // updates received by any method.
 
     if use_webhooks {
-        let webhook_endpoint = config.webhook_endpoint.expect("Missing WEBHOOK_ENDPOINT");
+        let webhook_endpoint = config
+            .webhook_endpoint
+            .as_ref()
+            .expect("Missing WEBHOOK_ENDPOINT");
         let set_webhook = SetWebhook {
-            url: webhook_endpoint,
+            url: webhook_endpoint.to_owned(),
         };
         if let Err(e) = bot.make_request(&set_webhook).await {
-            panic!(e);
+            panic!("unable to set webhook: {:?}", e);
         }
-        receive_webhook(
-            config.http_host.expect("Missing HTTP_HOST"),
-            config.http_secret.expect("Missing HTTP_SECRET"),
-            handler,
-        )
-        .await;
+
+        receive_webhook(update_tx, inline_tx, shutdown, config).await;
     } else {
         let delete_webhook = DeleteWebhook;
         if let Err(e) = bot.make_request(&delete_webhook).await {
-            panic!(e);
+            panic!("unable to delete webhook: {:?}", e);
         }
-        poll_updates(bot, handler).await;
+
+        poll_updates(update_tx, inline_tx, shutdown, bot).await;
     }
+
+    // We have broken updates into two categories, inline queries and everything
+    // else. Inline queries must be quickly answered otherwise users will assume
+    // something has gone wrong or Telegram will expire the query and prevent us
+    // from answering it. We can address this problem by running two separate
+    // worker queues. All inline queries are run together with a much higher
+    // concurrency limit. All other updates are run on a queue with lower
+    // concurrency limits as they are not as time-sensitive.
+
+    use futures::StreamExt;
+    use tokio_stream::wrappers::ReceiverStream;
+
+    // Spawn a new worker for inline queries, limited by `INLINE_HANDLERS`.
+    let h = handler.clone();
+    tokio::spawn(async move {
+        ReceiverStream::new(inline_rx)
+            .for_each_concurrent(INLINE_HANDLERS, |inline_query| {
+                let handler = h.clone();
+
+                async move {
+                    tokio::spawn(async move {
+                        handler.handle_update(*inline_query).await;
+                    })
+                    .await
+                    .unwrap();
+                }
+            })
+            .await;
+    });
+
+    // Process all other updates, limited by `CONCURRENT_HANDLERS`.
+    ReceiverStream::new(update_rx)
+        .for_each_concurrent(CONCURRENT_HANDLERS, |update| {
+            let handler = handler.clone();
+
+            async move {
+                tokio::spawn(async move {
+                    handler.handle_update(*update).await;
+                })
+                .await
+                .unwrap();
+            }
+        })
+        .await;
 }
 
 // MARK: Get Bot API updates
@@ -409,16 +471,14 @@ async fn main() {
 /// Handle an incoming HTTP POST request to /{token}.
 ///
 /// It spawns a handler for each request.
-#[tracing::instrument(skip(req, handler, secret))]
 async fn handle_request(
     req: hyper::Request<hyper::Body>,
-    count: Arc<std::sync::atomic::AtomicUsize>,
-    handler: Arc<MessageHandler>,
+    update_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    inline_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
     secret: &str,
+    templates: Arc<handlebars::Handlebars<'_>>,
 ) -> hyper::Result<hyper::Response<hyper::Body>> {
     use hyper::{Body, Response, StatusCode};
-
-    let now = std::time::Instant::now();
 
     tracing::trace!(method = ?req.method(), path = req.uri().path(), "got HTTP request");
 
@@ -427,7 +487,8 @@ async fn handle_request(
 
     match (req.method(), path) {
         (&hyper::Method::POST, path) if path == secret => {
-            tracing::trace!("handling update");
+            let _hist = REQUEST_DURATION.start_timer();
+
             let body = req.into_body();
             let bytes = hyper::body::to_bytes(body)
                 .await
@@ -443,24 +504,11 @@ async fn handle_request(
                 }
             };
 
-            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let handler_clone = handler.clone();
-            tokio::spawn(
-                async move {
-                    tracing::debug!("got update: {:?}", update);
-                    handler_clone.handle_update(update).await;
-                    count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-                    tracing::debug!("finished handling message");
-                }
-                .in_current_span(),
-            );
-
-            let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "http")
-                .add_field("duration", now.elapsed().as_millis() as i64);
-
-            if let Err(e) = handler.influx.query(&point).await {
-                capture_anyhow(&anyhow::anyhow!("InfluxDB error: {:?}", e));
-                tracing::error!("unable to send http request info to InfluxDB: {:?}", e);
+            let update = Box::new(update);
+            if update.inline_query.is_some() {
+                inline_tx.send(update).await.unwrap();
+            } else {
+                update_tx.send(update).await.unwrap();
             }
 
             Ok(Response::new(Body::from("✓")))
@@ -470,70 +518,174 @@ async fn handle_request(
             let body = req.into_body();
             let bytes = hyper::body::to_bytes(body)
                 .await
-                .expect("unable to read body bytes");
+                .expect("Unable to read body bytes");
 
-            tracing::debug!("Got video body: {:?}", bytes);
+            let update: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
 
-            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let handler_clone = handler.clone();
-            tokio::spawn(
-                async move {
-                    let update: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-                    let url = update
-                        .get("output_urls")
-                        .unwrap()
-                        .as_object()
-                        .unwrap()
-                        .get("mp4:720p")
-                        .unwrap()
-                        .as_str()
-                        .unwrap();
+            let id: i64 = uri.to_string().split('=').last().unwrap().parse().unwrap();
+            let progress = update.get("progress").and_then(|val| val.as_str());
 
-                    let id: i64 = uri.to_string().split('=').last().unwrap().parse().unwrap();
+            tracing::debug!(video_id = id, "Got video update: {:?}", update);
 
-                    tracing::debug!("got video update for id {}: {:?}", id, update);
+            if let Some(progress) = progress {
+                tracing::debug!("Got video progress, {}", progress);
 
-                    let conn = handler_clone.conn.check_out().await.unwrap();
-                    let video = crate::models::Video::lookup_id(&conn, id)
-                        .await
-                        .unwrap()
-                        .unwrap();
-                    crate::models::Video::set_processed_url(&conn, id, &url)
-                        .await
-                        .unwrap();
-
-                    let video_return_button = handler_clone
-                        .get_fluent_bundle(None, |bundle| {
-                            crate::utils::get_message(&bundle, "video-return-button", None).unwrap()
-                        })
-                        .await;
-                    let send_video = SendVideo {
-                        chat_id: video.chat_id.unwrap().into(),
-                        video: FileType::URL(url.to_owned()),
-                        reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(
-                            InlineKeyboardMarkup {
-                                inline_keyboard: vec![vec![InlineKeyboardButton {
-                                    text: video_return_button,
-                                    switch_inline_query: Some(video.source.to_owned()),
-                                    ..Default::default()
-                                }]],
-                            },
-                        )),
-                        supports_streaming: Some(true),
+                update_tx
+                    .send(Box::new(tgbotapi::Update {
+                        message: Some(tgbotapi::Message {
+                            text: Some(format!("/videoprogress {} {}", id, progress)),
+                            entities: Some(vec![tgbotapi::MessageEntity {
+                                entity_type: tgbotapi::MessageEntityType::BotCommand,
+                                offset: 0,
+                                length: 14,
+                                url: None,
+                                user: None,
+                            }]),
+                            ..Default::default()
+                        }),
                         ..Default::default()
-                    };
-                    handler_clone.make_request(&send_video).await.unwrap();
+                    }))
+                    .await
+                    .unwrap();
+            } else {
+                let video_url = update
+                    .get("output_urls")
+                    .unwrap()
+                    .as_object()
+                    .unwrap()
+                    .get("mp4:720p")
+                    .unwrap()
+                    .as_str()
+                    .unwrap();
 
-                    count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-                    tracing::debug!("finished handling video");
-                }
-                .in_current_span(),
-            );
+                let thumb_url = update
+                    .get("output_urls")
+                    .unwrap()
+                    .as_object()
+                    .unwrap()
+                    .get("jpg:250x0")
+                    .unwrap()
+                    .as_array()
+                    .unwrap()
+                    .first()
+                    .unwrap()
+                    .as_str()
+                    .unwrap();
+
+                update_tx
+                    .send(Box::new(tgbotapi::Update {
+                        message: Some(tgbotapi::Message {
+                            text: Some(format!(
+                                "/videocomplete {} {} {}",
+                                id, video_url, thumb_url
+                            )),
+                            entities: Some(vec![tgbotapi::MessageEntity {
+                                entity_type: tgbotapi::MessageEntityType::BotCommand,
+                                offset: 0,
+                                length: 14,
+                                url: None,
+                                user: None,
+                            }]),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }))
+                    .await
+                    .unwrap();
+            }
+
+            // let conn = handler_clone.conn.check_out().await.unwrap();
+            // let video = crate::models::Video::lookup_id(&conn, id)
+            //     .await
+            //     .unwrap()
+            //     .unwrap();
+            // crate::models::Video::set_processed_url(&conn, id, &url)
+            //     .await
+            //     .unwrap();
+
+            // let video_return_button = handler_clone
+            //     .get_fluent_bundle(None, |bundle| {
+            //         crate::utils::get_message(&bundle, "video-return-button", None).unwrap()
+            //     })
+            //     .await;
+            // let send_video = SendVideo {
+            //     chat_id: video.chat_id.unwrap().into(),
+            //     video: FileType::URL(url.to_owned()),
+            //     reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
+            //         inline_keyboard: vec![vec![InlineKeyboardButton {
+            //             text: video_return_button,
+            //             switch_inline_query: Some(video.source.to_owned()),
+            //             ..Default::default()
+            //         }]],
+            //     })),
+            //     supports_streaming: Some(true),
+            //     ..Default::default()
+            // };
+            // handler_clone.make_request(&send_video).await.unwrap();
+
+            // count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            // tracing::debug!("finished handling video");
 
             Ok(Response::new(Body::from("OK")))
         }
+        (&hyper::Method::GET, "/twitter/callback") => {
+            let query: std::collections::HashMap<String, String> = req
+                .uri()
+                .query()
+                .map(|v| {
+                    url::form_urlencoded::parse(v.as_bytes())
+                        .into_owned()
+                        .collect()
+                })
+                .unwrap_or_else(std::collections::HashMap::new);
+
+            let data: Option<()> = None;
+
+            if query.contains_key("denied") {
+                let denied = templates.render("twitter/denied", &data).unwrap();
+                return Ok(Response::new(Body::from(denied)));
+            }
+
+            let (token, verifier) = match (query.get("oauth_token"), query.get("oauth_verifier")) {
+                (Some(token), Some(verifier)) => (token, verifier),
+                _ => {
+                    let bad_request = templates.render("400", &data).unwrap();
+                    let mut resp = Response::new(Body::from(bad_request));
+                    *resp.status_mut() = StatusCode::BAD_REQUEST;
+                    return Ok(resp);
+                }
+            };
+
+            // This is extremely stupid but it works without having to pull
+            // a handler into HTTP requests
+            update_tx
+                .send(Box::new(tgbotapi::Update {
+                    message: Some(tgbotapi::Message {
+                        text: Some(format!("/twitterverify {} {}", token, verifier)),
+                        entities: Some(vec![tgbotapi::MessageEntity {
+                            entity_type: tgbotapi::MessageEntityType::BotCommand,
+                            offset: 0,
+                            length: 14,
+                            url: None,
+                            user: None,
+                        }]),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }))
+                .await
+                .unwrap();
+
+            let loggedin = templates.render("twitter/loggedin", &data).unwrap();
+            Ok(Response::new(Body::from(loggedin)))
+        }
+        (&hyper::Method::GET, "/") => {
+            let index = templates.render("home", &None::<()>).unwrap();
+            Ok(Response::new(Body::from(index)))
+        }
         _ => {
-            let mut not_found = Response::default();
+            let not_found = templates.render("404", &None::<()>).unwrap();
+            let mut not_found = Response::new(Body::from(not_found));
             *not_found.status_mut() = StatusCode::NOT_FOUND;
             Ok(not_found)
         }
@@ -541,149 +693,148 @@ async fn handle_request(
 }
 
 /// Start a web server to handle webhooks and pass updates to [handle_request].
-async fn receive_webhook(host: String, secret: String, handler: Arc<MessageHandler>) {
-    let addr = host.parse().expect("Invalid HTTP_HOST");
+async fn receive_webhook(
+    update_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    inline_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    mut shutdown: tokio::sync::mpsc::Receiver<bool>,
+    config: Config,
+) {
+    let addr = config
+        .http_host
+        .unwrap()
+        .parse()
+        .expect("Invalid HTTP_HOST");
 
-    let secret_path = format!("/{}", secret);
+    let secret_path = format!("/{}", config.http_secret.unwrap());
     let secret_path: &'static str = Box::leak(secret_path.into_boxed_str());
 
-    let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut hbs = handlebars::Handlebars::new();
+    hbs.set_strict_mode(true);
+    hbs.register_templates_directory(".hbs", "templates/")
+        .expect("templates contained bad data");
 
-    let count_clone = count.clone();
+    let templates = Arc::new(hbs);
+
     let make_svc = hyper::service::make_service_fn(move |_conn| {
-        let handler = handler.clone();
-        let count = count_clone.clone();
+        let update_tx = update_tx.clone();
+        let inline_tx = inline_tx.clone();
+        let templates = templates.clone();
         async move {
             Ok::<_, hyper::Error>(hyper::service::service_fn(move |req| {
-                handle_request(req, count.clone(), handler.clone(), secret_path)
+                handle_request(
+                    req,
+                    update_tx.clone(),
+                    inline_tx.clone(),
+                    secret_path,
+                    templates.clone(),
+                )
             }))
         }
     });
 
-    let server = hyper::Server::bind(&addr).serve(make_svc);
-
-    tracing::info!("listening on http://{}", addr);
-
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-
-    #[cfg(unix)]
     tokio::spawn(async move {
-        use tokio::signal;
+        tracing::info!("listening on http://{}", addr);
 
-        let mut stream = signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("unable to create terminate signal stream");
+        let graceful = hyper::Server::bind(&addr)
+            .serve(make_svc)
+            .with_graceful_shutdown(async {
+                shutdown.recv().await;
+                tracing::error!("shutting down http server");
+            });
 
-        tokio::select! {
-            _ = stream.recv() => shutdown_tx.send(true),
-            _ = signal::ctrl_c() => shutdown_tx.send(true),
+        if let Err(e) = graceful.await {
+            tracing::error!("server error: {:?}", e);
         }
     });
+}
 
-    #[cfg(not(unix))]
-    tokio::spawn(async move {
-        use tokio::signal;
+async fn metrics(
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, std::convert::Infallible> {
+    use hyper::{Body, Response, StatusCode};
 
-        signal::ctrl_c().await.expect("unable to await ctrl-c");
-        shutdown_tx.send(true).expect("unable to send shutdown");
-    });
+    match req.uri().path() {
+        "/health" => Ok(Response::new(Body::from("OK"))),
+        "/metrics" => {
+            tracing::trace!("encoding metrics");
 
-    let graceful = server.with_graceful_shutdown(async {
-        shutdown_rx.await.ok();
-        tracing::error!("shutting down HTTP server");
-    });
+            use prometheus::Encoder;
+            let encoder = prometheus::TextEncoder::new();
+            let metric_families = prometheus::gather();
+            let mut buf = vec![];
+            encoder.encode(&metric_families, &mut buf).unwrap();
 
-    if let Err(e) = graceful.await {
-        tracing::error!("server error: {:?}", e);
-    }
-
-    loop {
-        let count = count.load(std::sync::atomic::Ordering::SeqCst);
-        if count == 0 {
-            break;
+            Ok(Response::new(Body::from(buf)))
         }
-
-        tracing::warn!("waiting for {} requests to complete before shutdown", count);
-        tokio::time::delay_for(std::time::Duration::from_millis(200)).await;
+        _ => {
+            let mut not_found = Response::new(Body::default());
+            *not_found.status_mut() = StatusCode::NOT_FOUND;
+            Ok(not_found)
+        }
     }
 }
 
+async fn serve_metrics(config: Config) {
+    let addr = config.metrics_host.parse().expect("Invalid METRICS_HOST");
+
+    let make_svc = hyper::service::make_service_fn(|_conn| async {
+        Ok::<_, std::convert::Infallible>(hyper::service::service_fn(metrics))
+    });
+
+    tokio::spawn(async move {
+        tracing::info!("metrics listening on http://{}", addr);
+
+        hyper::Server::bind(&addr).serve(make_svc).await.unwrap();
+    });
+}
+
 /// Start polling updates using Bot API long polling.
-async fn poll_updates(bot: Arc<Telegram>, handler: Arc<MessageHandler>) {
-    let mut update_req = GetUpdates::default();
-    update_req.timeout = Some(30);
+async fn poll_updates(
+    update_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    inline_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    mut shutdown: tokio::sync::mpsc::Receiver<bool>,
+    bot: Arc<Telegram>,
+) {
+    let mut update_req = GetUpdates {
+        timeout: Some(30),
+        ..Default::default()
+    };
 
-    let (mut shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel(1);
-
-    #[cfg(unix)]
     tokio::spawn(async move {
-        use tokio::signal;
-
-        let mut stream = signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("unable to create terminate signal stream");
-
-        tokio::select! {
-            _ = stream.recv() => shutdown_tx.send(true).await.expect("unable to send shutdown"),
-            _ = signal::ctrl_c() => shutdown_tx.send(true).await.expect("unable to send shutdown"),
-        };
-    });
-
-    #[cfg(not(unix))]
-    tokio::spawn(async move {
-        use tokio::signal;
-
-        signal::ctrl_c().await.expect("unable to await ctrl-c");
-        shutdown_tx
-            .send(true)
-            .await
-            .expect("unable to send shutdown");
-    });
-
-    let waiting = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-
-    loop {
-        let updates = tokio::select! {
-            _ = shutdown_rx.recv() => {
-                tracing::error!("got shutdown request");
-                loop {
-                    let count = waiting.load(std::sync::atomic::Ordering::SeqCst);
-                    if count == 0 {
-                        break;
-                    }
-
-                    tracing::warn!("finishing {} requests before shutdown", count);
-                    tokio::time::delay_for(std::time::Duration::from_millis(200)).await;
+        loop {
+            let updates = tokio::select! {
+                _ = shutdown.recv() => {
+                    tracing::error!("got shutdown request");
+                    break;
                 }
-                break;
+
+                updates = bot.make_request(&update_req) => updates,
+            };
+
+            let updates = match updates {
+                Ok(updates) => updates,
+                Err(e) => {
+                    sentry::capture_error(&e);
+                    tracing::error!("unable to get updates: {:?}", e);
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    continue;
+                }
+            };
+
+            for update in updates {
+                let id = update.update_id;
+
+                let update = Box::new(update);
+                if update.inline_query.is_some() {
+                    inline_tx.send(update).await.unwrap();
+                } else {
+                    update_tx.send(update).await.unwrap();
+                }
+
+                update_req.offset = Some(id + 1);
             }
-            updates = bot.make_request(&update_req) => updates,
-        };
-
-        let updates = match updates {
-            Ok(updates) => updates,
-            Err(e) => {
-                sentry::capture_error(&e);
-                tracing::error!("unable to get updates: {:?}", e);
-                std::thread::sleep(std::time::Duration::from_secs(5));
-                continue;
-            }
-        };
-
-        for update in updates {
-            let id = update.update_id;
-
-            let handler = handler.clone();
-            let waiting = waiting.clone();
-
-            tokio::spawn(async move {
-                waiting.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                handler.handle_update(update).await;
-                tracing::debug!("finished handling update");
-                waiting.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-            });
-
-            update_req.offset = Some(id + 1);
         }
-    }
+    });
 }
 
 // MARK: Handling updates
@@ -698,7 +849,6 @@ pub struct MessageHandler {
     // API clients
     pub bot: Arc<Telegram>,
     pub fapi: Arc<fuzzysearch::FuzzySearch>,
-    pub influx: Arc<influxdb::Client>,
     pub finder: linkify::LinkFinder,
     pub s3: rusoto_s3::S3Client,
     pub coconut: coconut::Coconut,
@@ -708,7 +858,8 @@ pub struct MessageHandler {
     pub config: Config,
 
     // Storage
-    pub conn: quaint::pooled::Quaint,
+    pub conn: sqlx::Pool<sqlx::Postgres>,
+    pub redis: redis::aio::ConnectionManager,
 }
 
 impl MessageHandler {
@@ -716,11 +867,7 @@ impl MessageHandler {
     where
         C: FnOnce(&fluent::concurrent::FluentBundle<fluent::FluentResource>) -> R,
     {
-        let requested = if let Some(requested) = requested {
-            requested
-        } else {
-            "en-US"
-        };
+        let requested = requested.unwrap_or(L10N_LANGS[0]);
 
         tracing::trace!(lang = requested, "looking up language bundle");
 
@@ -734,9 +881,14 @@ impl MessageHandler {
 
         tracing::info!(lang = requested, "got new language, building bundle");
 
-        let requested_locale = requested
-            .parse::<LanguageIdentifier>()
-            .expect("requested locale is invalid");
+        let requested_locale = match requested.parse::<LanguageIdentifier>() {
+            Ok(locale) => locale,
+            Err(err) => {
+                tracing::error!("unknown locale: {:?}", err);
+                L10N_LANGS[0].parse::<LanguageIdentifier>().unwrap()
+            }
+        };
+
         let requested_locales: Vec<LanguageIdentifier> = vec![requested_locale];
         let default_locale = L10N_LANGS[0]
             .parse::<LanguageIdentifier>()
@@ -795,41 +947,120 @@ impl MessageHandler {
             .map(|from| from.language_code.clone())
             .flatten();
 
-        let msg = self
-            .get_fluent_bundle(lang_code.as_deref(), |bundle| {
-                if u.is_nil() {
-                    utils::get_message(&bundle, "error-generic", None)
-                } else {
-                    let f = format!("`{}`", u.to_string());
+        use redis::AsyncCommands;
+        let mut conn = self.redis.clone();
+        let key_list = format!("errors:{}", message.chat.id);
+        let key_message_id = format!("errors:message-id:{}", message.chat.id);
+        let recent_error_count: i32 = conn.llen(&key_list).await.ok().unwrap_or(0);
 
-                    let mut args = fluent::FluentArgs::new();
-                    args.insert("uuid", fluent::FluentValue::from(f));
-
-                    utils::get_message(&bundle, "error-uuid", Some(args))
-                }
-            })
-            .await;
-
-        let send_message = SendMessage {
-            chat_id: message.chat_id(),
-            text: msg.unwrap(),
-            parse_mode: Some(ParseMode::Markdown),
-            reply_to_message_id: Some(message.message_id),
-            reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
-                inline_keyboard: vec![vec![InlineKeyboardButton {
-                    text: "Delete".to_string(),
-                    callback_data: Some("delete".to_string()),
-                    ..Default::default()
-                }]],
-            })),
-            ..Default::default()
+        if let Err(e) = conn.lpush::<_, _, ()>(&key_list, u.to_string()).await {
+            tracing::error!("unable to insert error uuid in redis: {:?}", e);
+            sentry::capture_error(&e);
         };
 
-        if let Err(e) = self.make_request(&send_message).await {
-            tracing::error!("unable to send error message to user: {:?}", e);
-            utils::with_user_scope(message.from.as_ref(), None, || {
-                sentry::capture_error(&e);
-            });
+        if let Err(e) = conn.expire::<_, ()>(&key_list, 60 * 5).await {
+            tracing::error!("unable to set redis error expire: {:?}", e);
+            sentry::capture_error(&e);
+        }
+
+        if let Err(e) = conn.expire::<_, ()>(&key_message_id, 60 * 5).await {
+            tracing::error!("unable to set redis error message id expire: {:?}", e);
+            sentry::capture_error(&e);
+        }
+
+        let msg = self
+            .get_fluent_bundle(lang_code.as_deref(), |bundle| {
+                let mut args = fluent::FluentArgs::new();
+                args.insert("count", (recent_error_count + 1).into());
+
+                if u.is_nil() {
+                    if recent_error_count > 0 {
+                        utils::get_message(&bundle, "error-generic-count", Some(args))
+                    } else {
+                        utils::get_message(&bundle, "error-generic", None)
+                    }
+                } else {
+                    let f = format!("`{}`", u.to_string());
+                    args.insert("uuid", fluent::FluentValue::from(f));
+
+                    let name = if recent_error_count > 0 {
+                        "error-uuid-count"
+                    } else {
+                        "error-uuid"
+                    };
+
+                    utils::get_message(&bundle, name, Some(args))
+                }
+            })
+            .await
+            .unwrap();
+
+        let delete_markup = Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
+            inline_keyboard: vec![vec![InlineKeyboardButton {
+                text: "Delete".to_string(),
+                callback_data: Some("delete".to_string()),
+                ..Default::default()
+            }]],
+        }));
+
+        if recent_error_count > 0 {
+            let message_id: i32 = match conn.get(&key_message_id).await {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("unable to get error message-id to edit: {:?}", e);
+                    utils::with_user_scope(message.from.as_ref(), None, || {
+                        sentry::capture_error(&e);
+                    });
+
+                    return;
+                }
+            };
+
+            let edit_message = EditMessageText {
+                chat_id: message.chat_id(),
+                message_id: Some(message_id),
+                text: msg,
+                parse_mode: Some(ParseMode::Markdown),
+                reply_markup: delete_markup,
+                ..Default::default()
+            };
+
+            if let Err(e) = self.make_request(&edit_message).await {
+                tracing::error!("unable to edit error message to user: {:?}", e);
+                utils::with_user_scope(message.from.as_ref(), None, || {
+                    sentry::capture_error(&e);
+                });
+
+                let _ = conn.del::<_, ()>(&key_list).await;
+                let _ = conn.del::<_, ()>(&key_message_id).await;
+            }
+        } else {
+            let send_message = SendMessage {
+                chat_id: message.chat_id(),
+                text: msg,
+                parse_mode: Some(ParseMode::Markdown),
+                reply_to_message_id: Some(message.message_id),
+                reply_markup: delete_markup,
+                ..Default::default()
+            };
+
+            match self.make_request(&send_message).await {
+                Ok(resp) => {
+                    if let Err(e) = conn
+                        .set_ex::<_, _, ()>(key_message_id, resp.message_id, 60 * 5)
+                        .await
+                    {
+                        tracing::error!("unable to set redis error message id: {:?}", e);
+                        sentry::capture_error(&e);
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("unable to send error message to user: {:?}", e);
+                    utils::with_user_scope(message.from.as_ref(), None, || {
+                        sentry::capture_error(&e);
+                    });
+                }
+            }
         }
     }
 
@@ -905,6 +1136,10 @@ impl MessageHandler {
 
     #[tracing::instrument(skip(self, update))]
     async fn handle_update(&self, update: Update) {
+        let _hist = HANDLING_DURATION.start_timer();
+
+        tracing::trace!(?update, "handling update");
+
         sentry::configure_scope(|mut scope| {
             utils::add_sentry_tracing(&mut scope);
         });
@@ -922,14 +1157,20 @@ impl MessageHandler {
 
         for handler in &self.handlers {
             tracing::trace!(handler = handler.name(), "running handler");
+            let hist = HANDLER_DURATION
+                .get_metric_with_label_values(&[handler.name()])
+                .unwrap()
+                .start_timer();
 
             match handler.handle(&self, &update, command.as_ref()).await {
                 Ok(status) if status == handlers::Status::Completed => {
                     tracing::debug!(handler = handler.name(), "handled update");
+                    hist.stop_and_record();
                     break;
                 }
                 Err(e) => {
                     tracing::error!("error handling update: {:?}", e);
+                    hist.stop_and_record();
 
                     let mut tags = vec![("handler", handler.name().to_string())];
                     if let Some(user) = user {
@@ -948,7 +1189,9 @@ impl MessageHandler {
 
                     break;
                 }
-                _ => (),
+                _ => {
+                    hist.stop_and_discard();
+                }
             }
         }
     }
@@ -959,6 +1202,8 @@ impl MessageHandler {
     {
         use std::time::Duration;
 
+        TELEGRAM_REQUEST.inc();
+
         let mut attempts = 0;
 
         loop {
@@ -968,29 +1213,41 @@ impl MessageHandler {
             };
 
             if attempts > 2 {
+                TELEGRAM_ERROR.inc();
                 return Err(err);
             }
 
-            let telegram_error = match err {
-                tgbotapi::Error::Telegram(ref err) => err,
-                _ => return Err(err),
-            };
-
-            let params = match &telegram_error.parameters {
-                Some(params) => params,
-                _ => return Err(err),
-            };
-
-            let retry_after = match params.retry_after {
-                Some(retry_after) => retry_after,
-                _ => return Err(err),
+            let retry_after = match err {
+                tgbotapi::Error::Telegram(tgbotapi::TelegramError {
+                    parameters:
+                        Some(tgbotapi::ResponseParameters {
+                            retry_after: Some(retry_after),
+                            ..
+                        }),
+                    ..
+                }) => retry_after,
+                _ => {
+                    TELEGRAM_ERROR.inc();
+                    return Err(err);
+                }
             };
 
             tracing::warn!(retry_after, "rate limited");
 
-            tokio::time::delay_for(Duration::from_secs(retry_after as u64)).await;
+            tokio::time::sleep(Duration::from_secs(retry_after as u64)).await;
 
             attempts += 1;
         }
+    }
+}
+
+#[cfg(test)]
+pub mod test_helpers {
+    pub async fn get_redis() -> redis::aio::ConnectionManager {
+        let redis_client =
+            redis::Client::open(std::env::var("REDIS_DSN").expect("Missing REDIS_DSN")).unwrap();
+        redis::aio::ConnectionManager::new(redis_client)
+            .await
+            .expect("Unable to open Redis connection")
     }
 }

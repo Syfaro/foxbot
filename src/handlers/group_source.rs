@@ -2,8 +2,8 @@ use super::Status::*;
 use crate::models::{GroupConfig, GroupConfigKey};
 use crate::needs_field;
 use crate::utils::{
-    continuous_action, extract_links, find_best_photo, get_message, link_was_seen, match_image,
-    sort_results,
+    continuous_action, extract_links, find_best_photo, get_message, get_rating_bundle_name,
+    link_was_seen, match_image, sort_results,
 };
 use anyhow::Context;
 use async_trait::async_trait;
@@ -29,12 +29,7 @@ impl super::Handler for GroupSourceHandler {
         let message = needs_field!(update, message);
         let photo_sizes = needs_field!(message, photo);
 
-        let conn = handler
-            .conn
-            .check_out()
-            .await
-            .context("unable to check out database")?;
-        match GroupConfig::get(&conn, message.chat.id, GroupConfigKey::GroupAdd)
+        match GroupConfig::get(&handler.conn, message.chat.id, GroupConfigKey::GroupAdd)
             .await
             .context("unable to query group add config")?
         {
@@ -56,8 +51,14 @@ impl super::Handler for GroupSourceHandler {
         };
 
         let best_photo = find_best_photo(&photo_sizes).unwrap();
-        let mut matches =
-            match_image(&handler.bot, &handler.conn, &handler.fapi, &best_photo).await?;
+        let mut matches = match_image(
+            &handler.bot,
+            &handler.conn,
+            &handler.fapi,
+            &best_photo,
+            Some(3),
+        )
+        .await?;
         sort_results(
             &handler.conn,
             message.from.as_ref().unwrap().id,
@@ -103,7 +104,11 @@ impl super::Handler for GroupSourceHandler {
             .get_fluent_bundle(lang, |bundle| {
                 if wanted_matches.len() == 1 {
                     let mut args = fluent::FluentArgs::new();
-                    args.insert("link", wanted_matches.first().unwrap().url().into());
+                    let m = wanted_matches.first().unwrap();
+                    args.insert("link", m.url().into());
+                    let rating =
+                        get_message(&bundle, get_rating_bundle_name(&m.rating), None).unwrap();
+                    args.insert("rating", rating.into());
 
                     get_message(bundle, "automatic-single", Some(args)).unwrap()
                 } else {
@@ -115,7 +120,10 @@ impl super::Handler for GroupSourceHandler {
                     for result in wanted_matches {
                         let mut args = fluent::FluentArgs::new();
                         args.insert("link", result.url().into());
-                        args.insert("distance", result.distance.unwrap().into());
+                        let rating =
+                            get_message(&bundle, get_rating_bundle_name(&result.rating), None)
+                                .unwrap();
+                        args.insert("rating", rating.into());
 
                         buf.push_str(
                             &get_message(bundle, "automatic-multiple-result", Some(args)).unwrap(),

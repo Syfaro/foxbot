@@ -3,14 +3,18 @@ use std::collections::HashMap;
 use tgbotapi::{requests::*, *};
 
 use super::Status::*;
-use crate::models::{GroupConfig, GroupConfigKey, Twitter, TwitterRequest};
+use crate::models::{GroupConfig, GroupConfigKey};
 use crate::needs_field;
 use crate::utils::{
-    build_alternate_response, continuous_action, find_best_photo, find_images, get_message,
-    match_image, parse_known_bots, sort_results,
+    build_alternate_response, can_delete_in_chat, continuous_action, find_best_photo, find_images,
+    get_message, match_image, parse_known_bots, sort_results, source_reply,
 };
 
 // TODO: there's a lot of shared code between these commands.
+
+lazy_static::lazy_static! {
+    static ref USED_COMMANDS: prometheus::HistogramVec = prometheus::register_histogram_vec!("foxbot_commands_duration_seconds", "Processing duration for each command", &["command"]).unwrap();
+}
 
 pub struct CommandHandler;
 
@@ -33,8 +37,6 @@ impl super::Handler for CommandHandler {
             None => return Ok(Ignored),
         };
 
-        let now = std::time::Instant::now();
-
         if let Some(username) = command.username {
             let bot_username = handler.bot_user.username.as_ref().unwrap();
             if username.to_lowercase() != bot_username.to_lowercase() {
@@ -43,11 +45,14 @@ impl super::Handler for CommandHandler {
             }
         }
 
+        let _hist = USED_COMMANDS
+            .get_metric_with_label_values(&[command.name.as_ref()])
+            .unwrap()
+            .start_timer();
         tracing::debug!(command = ?command.name, "got command");
 
         match command.name.as_ref() {
             "/help" | "/start" => handler.handle_welcome(message, &command.name).await,
-            "/twitter" => self.authenticate_twitter(&handler, message).await,
             "/mirror" => self.handle_mirror(&handler, message).await,
             "/source" => self.handle_source(&handler, message).await,
             "/alts" => self.handle_alts(&handler, message).await,
@@ -60,81 +65,11 @@ impl super::Handler for CommandHandler {
             }
         }?;
 
-        let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "command")
-            .add_tag("command", command.name)
-            .add_field("duration", now.elapsed().as_millis() as i64);
-
-        let _ = handler.influx.query(&point).await;
-
         Ok(Completed)
     }
 }
 
 impl CommandHandler {
-    async fn authenticate_twitter(
-        &self,
-        handler: &crate::MessageHandler,
-        message: &Message,
-    ) -> anyhow::Result<()> {
-        let now = std::time::Instant::now();
-
-        if message.chat.chat_type != ChatType::Private {
-            handler
-                .send_generic_reply(&message, "twitter-private")
-                .await?;
-            return Ok(());
-        }
-
-        let user = message.from.as_ref().unwrap();
-
-        let con_token = egg_mode::KeyPair::new(
-            handler.config.twitter_consumer_key.clone(),
-            handler.config.twitter_consumer_secret.clone(),
-        );
-
-        let request_token = egg_mode::auth::request_token(&con_token, "oob").await?;
-
-        let conn = handler.conn.check_out().await?;
-        Twitter::set_request(
-            &conn,
-            user.id,
-            TwitterRequest {
-                request_key: request_token.key.to_string(),
-                request_secret: request_token.secret.to_string(),
-            },
-        )
-        .await?;
-
-        let url = egg_mode::auth::authorize_url(&request_token);
-
-        let mut args = fluent::FluentArgs::new();
-        args.insert("link", fluent::FluentValue::from(url));
-
-        let text = handler
-            .get_fluent_bundle(user.language_code.as_deref(), |bundle| {
-                get_message(&bundle, "twitter-oob", Some(args)).unwrap()
-            })
-            .await;
-
-        let send_message = SendMessage {
-            chat_id: message.chat_id(),
-            text,
-            reply_markup: Some(ReplyMarkup::ForceReply(ForceReply::selective())),
-            reply_to_message_id: Some(message.message_id),
-            ..Default::default()
-        };
-
-        handler.make_request(&send_message).await?;
-
-        let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "twitter")
-            .add_tag("type", "new")
-            .add_field("duration", now.elapsed().as_millis() as i64);
-
-        let _ = handler.influx.query(&point).await;
-
-        Ok(())
-    }
-
     async fn handle_mirror(
         &self,
         handler: &crate::MessageHandler,
@@ -163,6 +98,8 @@ impl CommandHandler {
         };
 
         if links.is_empty() {
+            drop(action);
+
             handler
                 .send_generic_reply(&message, "mirror-no-links")
                 .await?;
@@ -288,7 +225,7 @@ impl CommandHandler {
         handler: &crate::MessageHandler,
         message: &Message,
     ) -> anyhow::Result<()> {
-        let _action = continuous_action(
+        let action = continuous_action(
             handler.bot.clone(),
             12,
             message.chat_id(),
@@ -296,39 +233,20 @@ impl CommandHandler {
             ChatAction::Typing,
         );
 
-        let conn = handler.conn.check_out().await?;
-
-        let is_admin: Option<bool> =
-            GroupConfig::get(&conn, message.chat.id, GroupConfigKey::IsAdmin).await?;
-        let is_admin = match is_admin {
-            Some(admin) => admin,
-            None => {
-                let get_chat_member = GetChatMember {
-                    user_id: handler.bot_user.id,
-                    chat_id: message.chat_id(),
-                };
-                let bot_member = handler.make_request(&get_chat_member).await?;
-
-                let is_admin = bot_member.status.is_admin();
-
-                GroupConfig::set(
-                    &conn,
-                    GroupConfigKey::IsAdmin,
-                    message.chat.id,
-                    false,
-                    is_admin,
-                )
-                .await?;
-
-                is_admin
-            }
-        };
+        let can_delete = can_delete_in_chat(
+            &handler.bot,
+            &handler.conn,
+            message.chat.id,
+            handler.bot_user.id,
+            false,
+        )
+        .await?;
 
         let summoning_id = message.message_id;
 
         let (mut reply_to_id, message) = if let Some(reply_to_message) = &message.reply_to_message {
             let reply = &**reply_to_message;
-            let reply_id = if is_admin {
+            let reply_id = if can_delete {
                 reply.message_id
             } else {
                 message.message_id
@@ -342,6 +260,8 @@ impl CommandHandler {
         let photo = match &message.photo {
             Some(photo) if !photo.is_empty() => photo,
             _ => {
+                drop(action);
+
                 handler
                     .send_generic_reply(&message, "source-no-photo")
                     .await?;
@@ -349,7 +269,7 @@ impl CommandHandler {
             }
         };
 
-        if is_admin {
+        if can_delete {
             let delete_message = DeleteMessage {
                 chat_id: message.chat_id(),
                 message_id: summoning_id,
@@ -361,8 +281,15 @@ impl CommandHandler {
                 match err {
                     tgbotapi::Error::Telegram(_err) => {
                         tracing::warn!("got error trying to delete summoning message");
-                        GroupConfig::delete(&conn, GroupConfigKey::IsAdmin, message.chat.id)
-                            .await?;
+                        // Recheck if we have delete permissions, ignoring cache
+                        can_delete_in_chat(
+                            &handler.bot,
+                            &handler.conn,
+                            message.chat.id,
+                            handler.bot_user.id,
+                            true,
+                        )
+                        .await?;
                     }
                     _ => return Err(err.into()),
                 }
@@ -370,8 +297,14 @@ impl CommandHandler {
         }
 
         let best_photo = find_best_photo(&photo).unwrap();
-        let mut matches =
-            match_image(&handler.bot, &handler.conn, &handler.fapi, &best_photo).await?;
+        let mut matches = match_image(
+            &handler.bot,
+            &handler.conn,
+            &handler.fapi,
+            &best_photo,
+            Some(3),
+        )
+        .await?;
         sort_results(
             &handler.conn,
             message.from.as_ref().unwrap().id,
@@ -379,41 +312,22 @@ impl CommandHandler {
         )
         .await?;
 
-        let result = match matches.first() {
-            Some(result) => result,
-            None => {
-                handler
-                    .send_generic_reply(&message, "reverse-no-results")
-                    .await?;
-                return Ok(());
-            }
-        };
-
-        let name = if result.distance.unwrap() < 5 {
-            "reverse-good-result"
-        } else {
-            "reverse-bad-result"
-        };
-
-        let mut args = fluent::FluentArgs::new();
-        args.insert(
-            "distance",
-            fluent::FluentValue::from(result.distance.unwrap()),
-        );
-        args.insert("link", fluent::FluentValue::from(result.url()));
-
         let text = handler
             .get_fluent_bundle(
                 message.from.as_ref().unwrap().language_code.as_deref(),
-                |bundle| get_message(&bundle, name, Some(args)).unwrap(),
+                |bundle| source_reply(&matches, &bundle),
             )
             .await;
 
-        let disable_preview =
-            GroupConfig::get::<bool>(&conn, message.chat.id, GroupConfigKey::GroupNoPreviews)
-                .await?
-                .is_some()
-                || result.distance.unwrap() > 5;
+        let disable_preview = GroupConfig::get::<bool>(
+            &handler.conn,
+            message.chat.id,
+            GroupConfigKey::GroupNoPreviews,
+        )
+        .await?
+        .is_some();
+
+        drop(action);
 
         let send_message = SendMessage {
             chat_id: message.chat.id.into(),
@@ -435,7 +349,7 @@ impl CommandHandler {
         handler: &crate::MessageHandler,
         message: &Message,
     ) -> anyhow::Result<()> {
-        let _action = continuous_action(
+        let action = continuous_action(
             handler.bot.clone(),
             12,
             message.chat_id(),
@@ -453,7 +367,14 @@ impl CommandHandler {
         let matches = match &message.photo {
             Some(photo) => {
                 let best_photo = find_best_photo(&photo).unwrap();
-                match_image(&handler.bot, &handler.conn, &handler.fapi, &best_photo).await?
+                match_image(
+                    &handler.bot,
+                    &handler.conn,
+                    &handler.fapi,
+                    &best_photo,
+                    Some(10),
+                )
+                .await?
             }
             None => {
                 let mut links = vec![];
@@ -472,11 +393,15 @@ impl CommandHandler {
                 }
 
                 if links.is_empty() {
+                    drop(action);
+
                     handler
                         .send_generic_reply(&message, "source-no-photo")
                         .await?;
                     return Ok(());
                 } else if links.len() > 1 {
+                    drop(action);
+
                     handler
                         .send_generic_reply(&message, "alternate-multiple-photo")
                         .await?;
@@ -505,6 +430,8 @@ impl CommandHandler {
                         .unwrap()
                         .to_vec(),
                     None => {
+                        drop(action);
+
                         handler
                             .send_generic_reply(&message, "source-no-photo")
                             .await?;
@@ -514,13 +441,15 @@ impl CommandHandler {
 
                 handler
                     .fapi
-                    .image_search(&bytes, fuzzysearch::MatchType::Close)
+                    .image_search(&bytes, fuzzysearch::MatchType::Close, Some(10))
                     .await?
                     .matches
             }
         };
 
         if matches.is_empty() {
+            drop(action);
+
             handler
                 .send_generic_reply(&message, "reverse-no-results")
                 .await?;
@@ -562,7 +491,7 @@ impl CommandHandler {
             )
             .await;
 
-        drop(_action);
+        drop(action);
 
         if used_hashes.is_empty() {
             handler
@@ -581,7 +510,7 @@ impl CommandHandler {
 
         let sent = handler.make_request(&send_message).await?;
 
-        let matches = handler.fapi.lookup_hashes(used_hashes).await?;
+        let matches = handler.fapi.lookup_hashes(&used_hashes, Some(10)).await?;
 
         if matches.is_empty() {
             handler
@@ -593,19 +522,12 @@ impl CommandHandler {
         for m in matches {
             if let Some(artist) = results.get_mut(&m.artists.clone().unwrap()) {
                 artist.push(fuzzysearch::File {
-                    id: m.id,
-                    site_id: m.site_id,
                     distance: hamming::distance_fast(
                         &m.hash.unwrap().to_be_bytes(),
                         &m.searched_hash.unwrap().to_be_bytes(),
                     )
                     .ok(),
-                    hash: m.hash,
-                    url: m.url,
-                    filename: m.filename,
-                    artists: m.artists.clone(),
-                    site_info: None,
-                    searched_hash: None,
+                    ..m
                 });
             }
         }
@@ -679,6 +601,16 @@ impl CommandHandler {
         };
         let bot_member = handler.make_request(&get_chat_member).await?;
 
+        // Already fetching it, should save it for trying to delete summoning
+        // messages.
+        GroupConfig::set(
+            &handler.conn,
+            GroupConfigKey::HasDeletePermission,
+            message.chat.id,
+            bot_member.can_delete_messages.unwrap_or(false),
+        )
+        .await?;
+
         if !bot_member.status.is_admin() {
             handler
                 .send_generic_reply(&message, "automatic-enable-bot-not-admin")
@@ -698,29 +630,25 @@ impl CommandHandler {
             return Ok(());
         }
 
-        let conn = handler.conn.check_out().await?;
+        let result = GroupConfig::get(&handler.conn, message.chat.id, GroupConfigKey::GroupAdd)
+            .await?
+            .unwrap_or(false);
 
-        let result: Option<bool> =
-            GroupConfig::get(&conn, message.chat.id, GroupConfigKey::GroupAdd).await?;
+        GroupConfig::set(
+            &handler.conn,
+            GroupConfigKey::GroupAdd,
+            message.chat.id,
+            !result,
+        )
+        .await?;
 
-        if result.is_some() {
-            GroupConfig::delete(&conn, GroupConfigKey::GroupAdd, message.chat.id).await?;
-            handler
-                .send_generic_reply(&message, "automatic-disable")
-                .await?;
+        let name = if !result {
+            "automatic-enable-success"
         } else {
-            GroupConfig::set(
-                &conn,
-                GroupConfigKey::GroupAdd,
-                message.chat.id,
-                false,
-                true,
-            )
-            .await?;
-            handler
-                .send_generic_reply(&message, "automatic-enable-success")
-                .await?;
-        }
+            "automatic-disable"
+        };
+
+        handler.send_generic_reply(&message, name).await?;
 
         Ok(())
     }
@@ -734,29 +662,29 @@ impl CommandHandler {
             return Ok(());
         }
 
-        let conn = handler.conn.check_out().await?;
+        let result = GroupConfig::get(
+            &handler.conn,
+            message.chat.id,
+            GroupConfigKey::GroupNoPreviews,
+        )
+        .await?
+        .unwrap_or(true);
 
-        let result: Option<bool> =
-            GroupConfig::get(&conn, message.chat.id, GroupConfigKey::GroupNoPreviews).await?;
+        GroupConfig::set(
+            &handler.conn,
+            GroupConfigKey::GroupNoPreviews,
+            message.chat.id,
+            !result,
+        )
+        .await?;
 
-        if result.is_some() {
-            GroupConfig::delete(&conn, GroupConfigKey::GroupNoPreviews, message.chat.id).await?;
-            handler
-                .send_generic_reply(&message, "automatic-preview-enable")
-                .await?;
+        let name = if !result {
+            "automatic-preview-enable"
         } else {
-            GroupConfig::set(
-                &conn,
-                GroupConfigKey::GroupNoPreviews,
-                message.chat.id,
-                false,
-                false,
-            )
-            .await?;
-            handler
-                .send_generic_reply(&message, "automatic-preview-disable")
-                .await?;
-        }
+            "automatic-preview-disable"
+        };
+
+        handler.send_generic_reply(&message, name).await?;
 
         Ok(())
     }

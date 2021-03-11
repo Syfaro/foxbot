@@ -1,0 +1,477 @@
+{
+  "db": "PostgreSQL",
+  "1f7522d283b5d4de8916d1ebc6ecc94f326e2ff81ed53b132f67660c355a5867": {
+    "query": "INSERT INTO twitter_account (user_id, consumer_key, consumer_secret) VALUES ($1, $2, $3)",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Text",
+          "Text"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "24bded212f38d7d7f7ea45eadc24c1b39847aa237b251a9afdf0329905f86e52": {
+    "query": "SELECT value FROM user_config WHERE user_id = $1 AND name = $2",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "value",
+          "type_info": "Jsonb"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Text"
+        ]
+      },
+      "nullable": [
+        false
+      ]
+    }
+  },
+  "306521b8db215138c72d94a88a7a7fca5f2d73ce6aa1295b13191c11ff21b77e": {
+    "query": "INSERT INTO twitter_auth (user_id, request_key, request_secret) VALUES ($1, $2, $3)",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Text",
+          "Text"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "3311ffe861875a80e268eb8699957611cc57ac2b154c2b301cfa320157fabdf7": {
+    "query": "INSERT INTO videos (url, source) VALUES ($1, $2) RETURNING id",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Int4"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text",
+          "Text"
+        ]
+      },
+      "nullable": [
+        false
+      ]
+    }
+  },
+  "3dd1ec96436781e96e7cf25af7d38007d21bca735234b5d7f42725f8a2c5fc6a": {
+    "query": "SELECT id, post_url, thumb, cdn_url, width, height FROM cached_post WHERE post_url = $1 AND thumb = $2",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 1,
+          "name": "post_url",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 2,
+          "name": "thumb",
+          "type_info": "Bool"
+        },
+        {
+          "ordinal": 3,
+          "name": "cdn_url",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 4,
+          "name": "width",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 5,
+          "name": "height",
+          "type_info": "Int4"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text",
+          "Bool"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ]
+    }
+  },
+  "3e5b922666587ac7304abb0f97c5a2c26226350eccc1b2eb2781f3edcab0e1a8": {
+    "query": "DELETE FROM twitter_account WHERE user_id = $1",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int8"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "41afdd0730fc8458438791c8e392ddbb75f7f3a1cb39d9f452e263d80951bf0e": {
+    "query": "UPDATE videos SET chat_id = $1, message_id = $2 WHERE id = $3",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Int4",
+          "Int4"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "4d667cd271c6e8c1e4d3d079806aff30149eba66866888513f32c376132db11c": {
+    "query": "DELETE FROM group_config WHERE chat_id = $1 AND name = $2",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Text"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "51ab9e5e7cd8d2b21259a2eaf933df39f2e3a2961351dc0acaa7bc5a72b6eb8d": {
+    "query": "SELECT hash FROM file_id_cache WHERE file_id = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "hash",
+          "type_info": "Int8"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        false
+      ]
+    }
+  },
+  "52c23d9a5157ef70d22fd35ac5f2afcd43d57497333ac049ff5be50b014f9ac7": {
+    "query": "\n            INSERT INTO user_config (user_id, name, value)\n            VALUES ($1, $2, $3)\n            ON CONFLICT (user_id, name)\n            DO\n                UPDATE SET value = EXCLUDED.value\n        ",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Text",
+          "Jsonb"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "77f5d6866fc999ad65c32ed4516bcdb1a9b0c97f506a220100b0b79debb69274": {
+    "query": "SELECT value FROM group_config WHERE chat_id = $1 AND name = $2",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "value",
+          "type_info": "Jsonb"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Text"
+        ]
+      },
+      "nullable": [
+        false
+      ]
+    }
+  },
+  "8aa273b8cbbf5716a002fa1197b586805df9d902f5268de8fda93590c3c1d31e": {
+    "query": "SELECT id, processed, source, url, mp4_url, thumb_url, chat_id, message_id FROM videos WHERE url = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 1,
+          "name": "processed",
+          "type_info": "Bool"
+        },
+        {
+          "ordinal": 2,
+          "name": "source",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 3,
+          "name": "url",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 4,
+          "name": "mp4_url",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 5,
+          "name": "thumb_url",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 6,
+          "name": "chat_id",
+          "type_info": "Int8"
+        },
+        {
+          "ordinal": 7,
+          "name": "message_id",
+          "type_info": "Int4"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        false,
+        false,
+        true,
+        true,
+        true,
+        true
+      ]
+    }
+  },
+  "8db7f4bc7ed9ca705d1ff4dbe690093fe7ebc322745faef3881323510d8c7104": {
+    "query": "SELECT id, processed, source, url, mp4_url, thumb_url, chat_id, message_id FROM videos WHERE id = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 1,
+          "name": "processed",
+          "type_info": "Bool"
+        },
+        {
+          "ordinal": 2,
+          "name": "source",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 3,
+          "name": "url",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 4,
+          "name": "mp4_url",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 5,
+          "name": "thumb_url",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 6,
+          "name": "chat_id",
+          "type_info": "Int8"
+        },
+        {
+          "ordinal": 7,
+          "name": "message_id",
+          "type_info": "Int4"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Int4"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        false,
+        false,
+        true,
+        true,
+        true,
+        true
+      ]
+    }
+  },
+  "a175383e1564396906c79e6958a06aeef59c188c4aa160ce08e922170370ab50": {
+    "query": "\n            INSERT INTO group_config (chat_id, name, value)\n            VALUES ($1, $2, $3)\n            ON CONFLICT (chat_id, name)\n            DO\n                UPDATE SET value = EXCLUDED.value\n        ",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Text",
+          "Jsonb"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "a9056bc8b66bd4f6c6774f3b4e2f58588e3766ebf41e1a52d8f394110850c606": {
+    "query": "INSERT INTO cached_post (post_url, thumb, cdn_url, width, height) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Int4"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text",
+          "Bool",
+          "Text",
+          "Int4",
+          "Int4"
+        ]
+      },
+      "nullable": [
+        false
+      ]
+    }
+  },
+  "abc8fe7876be76ec0835a9e32d99caa5761a46d6e628200e4bfda7e9ffc60f4c": {
+    "query": "UPDATE videos SET processed = true, mp4_url = $1, thumb_url = $2 WHERE id = $3",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Text",
+          "Text",
+          "Int4"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "b026472c90c2ce35575846b3aa4b4d1f57e08443011ac2426776a5f17bb561e8": {
+    "query": "SELECT consumer_key, consumer_secret FROM twitter_account WHERE user_id = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "consumer_key",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 1,
+          "name": "consumer_secret",
+          "type_info": "Text"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Int8"
+        ]
+      },
+      "nullable": [
+        false,
+        false
+      ]
+    }
+  },
+  "d3e2621b8dac678405b17592ae217521caf11fefb742d3383d33804300c5bfaf": {
+    "query": "SELECT user_id, request_key, request_secret FROM twitter_auth WHERE request_key = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "user_id",
+          "type_info": "Int8"
+        },
+        {
+          "ordinal": 1,
+          "name": "request_key",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 2,
+          "name": "request_secret",
+          "type_info": "Text"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        false
+      ]
+    }
+  },
+  "dd986c2fcd7aefb700f383e25b41c896a60a8d6954d6af206c41658e6455ae45": {
+    "query": "DELETE FROM twitter_auth WHERE user_id = $1",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int8"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "dde2f98c7e317bd0a9a22f55310a4aac1a9b25ee136fbdb9e7e1fe1109f554ba": {
+    "query": "INSERT INTO file_id_cache (file_id, hash) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Text",
+          "Int8"
+        ]
+      },
+      "nullable": []
+    }
+  }
+}

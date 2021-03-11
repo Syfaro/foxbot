@@ -1,10 +1,9 @@
 pub struct Coconut {
     api_token: String,
     webhook: String,
-    s3_endpoint: String,
-    s3_token: String,
-    s3_secret: String,
-    s3_bucket: String,
+    b2_account_id: String,
+    b2_app_key: String,
+    b2_bucket_id: String,
 
     client: reqwest::Client,
 }
@@ -15,20 +14,18 @@ impl Coconut {
     pub fn new(
         api_token: String,
         webhook: String,
-        s3_endpoint: String,
-        s3_token: String,
-        s3_secret: String,
-        s3_bucket: String,
+        b2_account_id: String,
+        b2_app_key: String,
+        b2_bucket_id: String,
     ) -> Self {
         let client = reqwest::Client::new();
 
         Self {
             api_token,
             webhook,
-            s3_endpoint,
-            s3_token,
-            s3_secret,
-            s3_bucket,
+            b2_account_id,
+            b2_app_key,
+            b2_bucket_id,
 
             client,
         }
@@ -53,30 +50,30 @@ impl Coconut {
             return Err(anyhow::anyhow!("Unable to create encode job"));
         }
 
+        tracing::trace!("Sent encode job: {:?}", resp.text().await);
+
         Ok(())
     }
 
     fn build_config(&self, source: &str, name: &str) -> String {
         format!(
             "
-            var access_key = {access}
-            var secret_key = {secret}
-            var bucket = {bucket}
-            var host = {host}
-            var cdn = s3://$access_key:$secret_key@$bucket
+            var account_id = {account_id}
+            var app_key = {app_key}
+            var bucket_id = {bucket_id}
+            var cdn = b2://$account_id:$app_key@$bucket_id
 
             # Settings
             set source = {source}
-            set webhook = {webhook}?id={name}
+            set webhook = {webhook}?id={name}, events=true
 
             # Outputs
-            -> mp4:720p = $cdn/video/{name}.mp4?host=$host
-            -> jpg:250x0 = $cdn/thumbnail/{name}.jpg?host=$host, number=1
+            -> mp4:720p = $cdn/video/{name}.mp4
+            -> jpg:250x0 = $cdn/thumbnail/{name}.jpg, number=1
         ",
-            access = self.s3_token,
-            secret = self.s3_secret,
-            bucket = self.s3_bucket,
-            host = self.s3_endpoint,
+            account_id = self.b2_account_id,
+            app_key = self.b2_app_key,
+            bucket_id = self.b2_bucket_id,
             source = source,
             webhook = self.webhook,
             name = name

@@ -5,14 +5,11 @@ authors = ["Syfaro <syfaro@huefox.com>"]
 edition = "2018"
 
 [features]
-default = ["postgres"]
-
-sqlite = ["rusqlite", "barrel", "quaint/full-sqlite", "refinery/rusqlite"]
-postgres = ["tokio-postgres", "quaint/full-postgresql", "refinery/tokio-postgres"]
+env = ["dotenv"]
 
 [dependencies]
-reqwest = { version = "0.10", features = ["json", "stream"] }
-linkify = "0.4"
+reqwest = { version = "0.11", features = ["json", "stream"] }
+linkify = "0.5"
 rand = "0.7"
 regex = "1"
 scraper = "0.12"
@@ -20,30 +17,33 @@ async-trait = "0.1"
 fluent = "0.12"
 fluent-langneg = "0.13"
 unic-langid = "0.9"
-hyper = "0.13"
+hyper = { version = "0.14", features = ["server"] }
+url = "2"
 hamming = "0.1"
+handlebars = { version = "3", features = ["dir_source"] }
+dotenv = { version = "0.15", optional = true }
 
 sha2 = "0.9"
 image = "0.23"
-infer = "0.2"
-bytes = "0.5"
+bytes = "1"
 hex = "0.4"
 
-sentry = { version = "0.19", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "reqwest", "debug-logs"] }
+sentry = { version = "0.22", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "reqwest", "debug-logs"] }
 uuid = "0.8"
 anyhow = "1"
 thiserror = "1"
-influxdb = "0.0.6"
+lazy_static = "1"
+prometheus = { version = "0.12", features = ["process"] }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 envy = "0.4"
 
-egg-mode = "0.15"
-tokio = { version = "0.2", features = ["macros", "time", "stream", "sync", "signal"] }
-tokio-util = { version = "0.3", features = ["codec"] }
+egg-mode = { git = "https://github.com/egg-mode-rs/egg-mode" }
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+tokio-util = { version = "0.6", features = ["codec"] }
 futures = "0.3"
-futures-util = "0.3"
 
 tgbotapi = { git = "https://github.com/Syfaro/tgbotapi-rs" }
 cfscrape = { git = "https://github.com/Syfaro/cfscrape-rs" }
@@ -56,15 +56,12 @@ opentelemetry = "0.6"
 opentelemetry-jaeger = "0.5"
 tracing-opentelemetry = "0.5"
 
-refinery = "0.2"
-quaint = "0.2.0-alpha.13"
-rusqlite = { version = "0.21", features = ["bundled"], optional = true }
-tokio-postgres = { version = "0.5", optional = true }
-barrel = { version = "0.6", features = ["sqlite3"], optional = true }
+redis = { version = "0.20", features = ["connection-manager", "tokio-comp"] }
+sqlx = { version = "0.5", default-features = false, features = ["runtime-tokio-rustls", "macros", "postgres", "offline", "json", "migrate"] }
 
-rusoto_core = "0.44"
-rusoto_credential = "0.44"
-rusoto_s3 = "0.44"
+rusoto_core = "0.46"
+rusoto_credential = "0.46"
+rusoto_s3 = "0.46"
 
 [profile.release]
 lto = true

@@ -1,0 +1,2 @@
+ALTER TABLE twitter_account ALTER COLUMN user_id SET NOT NULL;
+ALTER TABLE twitter_auth ALTER COLUMN user_id SET NOT NULL;

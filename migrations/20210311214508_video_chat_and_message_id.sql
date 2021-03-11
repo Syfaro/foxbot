@@ -1,0 +1,3 @@
+ALTER TABLE videos ADD COLUMN chat_id BIGINT;
+ALTER TABLE videos ADD COLUMN message_id INTEGER;
+ALTER TABLE videos ADD COLUMN thumb_url TEXT;

@@ -15,7 +15,7 @@ pub struct SiteCallback<'a> {
     pub results: Vec<crate::PostInfo>,
 }
 
-#[tracing::instrument(skip(user, sites, callback))]
+#[tracing::instrument(err, skip(user, sites, callback))]
 pub async fn find_images<'a, C>(
     user: &tgbotapi::User,
     links: Vec<&'a str>,
@@ -75,15 +75,18 @@ pub struct ImageInfo {
 /// * Converts image to JPEG if not already and resizes if thumbnail
 /// * Uploads to S3 bucket
 /// * Saves in cache
-#[tracing::instrument(skip(conn, s3, s3_bucket, s3_url))]
+#[tracing::instrument(err, skip(conn, s3, s3_bucket, s3_url, data))]
 async fn upload_image(
-    conn: &quaint::pooled::PooledConnection,
+    conn: &sqlx::Pool<sqlx::Postgres>,
     s3: &rusoto_s3::S3Client,
     s3_bucket: &str,
     s3_url: &str,
     url: &str,
     thumb: bool,
+    data: &bytes::Bytes,
 ) -> anyhow::Result<ImageInfo> {
+    use bytes::BufMut;
+
     if let Some(cached_post) = CachedPost::get(&conn, &url, thumb)
         .await
         .context("unable to get cached post")?
@@ -94,21 +97,28 @@ async fn upload_image(
         });
     }
 
-    let data = reqwest::get(url).await?.bytes().await?;
-
-    let info = infer::Infer::new();
-
     let im = image::load_from_memory(&data)?;
 
-    let (im, buf) = match info.get(&data) {
-        Some(inf) if !thumb && inf.mime == "image/jpeg" => (im, data),
-        _ => {
-            use bytes::buf::BufMutExt;
-            let im = if thumb { im.thumbnail(400, 400) } else { im };
-            let mut buf = bytes::BytesMut::with_capacity(2 * 1024 * 1024).writer();
-            im.write_to(&mut buf, image::ImageOutputFormat::Jpeg(90))?;
-            (im, buf.into_inner().freeze())
-        }
+    // We need to determine what processing to do, if any, on the image before
+    // caching it. We can start by checking if this is a thumbnail. If so, we
+    // should thumbnail it to a 400x400 image. Then, check if the image is
+    // larger than 5MB. If it is, we should resize it down to 2000x2000.
+    // Otherwise, perform no processing on the image and cache the original.
+    //
+    // This used to always convert images to JPEGs, but it does not appear that
+    // any Telegram client actually requires this.
+    let (im, buf) = if thumb {
+        let im = im.thumbnail(400, 400);
+        let mut buf = bytes::BytesMut::with_capacity(2_000_000).writer();
+        im.write_to(&mut buf, image::ImageOutputFormat::Jpeg(90))?;
+        (im, buf.into_inner().freeze())
+    } else if data.len() > 5_000_000 {
+        let im = im.resize(2000, 2000, image::imageops::FilterType::Lanczos3);
+        let mut buf = bytes::BytesMut::with_capacity(2_000_000).writer();
+        im.write_to(&mut buf, image::ImageOutputFormat::Jpeg(90))?;
+        (im, buf.into_inner().freeze())
+    } else {
+        (im, data.clone())
     };
 
     use image::GenericImageView;
@@ -149,17 +159,53 @@ async fn upload_image(
     })
 }
 
+/// Download image from URL and return bytes.
+///
+/// Will fail if the download is larger than 50MB.
+#[tracing::instrument]
+pub async fn download_image(url: &str) -> anyhow::Result<bytes::Bytes> {
+    use bytes::BufMut;
+
+    let mut resp = reqwest::get(url).await?;
+    let content_length = resp.content_length().unwrap_or(2_000_000);
+    if resp.content_length().unwrap_or_default() > 50_000_000 {
+        return Err(anyhow::anyhow!("content length is too large"));
+    }
+
+    let mut data = bytes::BytesMut::with_capacity(content_length as usize);
+    let mut size = 0;
+
+    while let Some(chunk) = resp.chunk().await? {
+        size += chunk.len();
+        if size > 50_000_000 {
+            return Err(anyhow::anyhow!("body was too long"));
+        }
+        data.put(chunk);
+    }
+
+    Ok(data.freeze())
+}
+
 /// Download URL from post and calculate image dimensions, returning a new
 /// PostInfo.
-pub async fn size_post(post: &crate::PostInfo) -> anyhow::Result<crate::PostInfo> {
+#[tracing::instrument(skip(data))]
+pub async fn size_post(
+    post: &crate::PostInfo,
+    data: &bytes::Bytes,
+) -> anyhow::Result<crate::PostInfo> {
     use image::GenericImageView;
 
-    let data = reqwest::get(&post.url).await?.bytes().await?;
+    // If we already have image dimensions, assume they're valid and reuse.
+    if post.image_dimensions.is_some() {
+        return Ok(post.to_owned());
+    }
+
     let im = image::load_from_memory(&data)?;
     let dimensions = im.dimensions();
 
     Ok(crate::PostInfo {
         image_dimensions: Some(dimensions),
+        image_size: Some(data.len()),
         ..post.to_owned()
     })
 }
@@ -167,18 +213,20 @@ pub async fn size_post(post: &crate::PostInfo) -> anyhow::Result<crate::PostInfo
 /// Download URL from post, calculate image dimensions, convert to JPEG and
 /// generate thumbnail, and upload to S3 bucket. Returns a new PostInfo with
 /// the updated URLs and dimensions.
+#[tracing::instrument(err, skip(conn, s3, s3_bucket, s3_url, data))]
 pub async fn cache_post(
-    conn: &quaint::pooled::PooledConnection,
+    conn: &sqlx::Pool<sqlx::Postgres>,
     s3: &rusoto_s3::S3Client,
     s3_bucket: &str,
     s3_url: &str,
     post: &crate::PostInfo,
+    data: &bytes::Bytes,
 ) -> anyhow::Result<crate::PostInfo> {
-    let image = upload_image(&conn, &s3, &s3_bucket, &s3_url, &post.url, false).await?;
+    let image = upload_image(&conn, &s3, &s3_bucket, &s3_url, &post.url, false, &data).await?;
 
     let thumb = if let Some(thumb) = &post.thumb {
         Some(
-            upload_image(&conn, &s3, &s3_bucket, &s3_url, &thumb, true)
+            upload_image(&conn, &s3, &s3_bucket, &s3_url, &thumb, true, &data)
                 .await?
                 .url,
         )
@@ -294,7 +342,7 @@ pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (S
         let mut args = fluent::FluentArgs::new();
         args.insert("name", artist_name.into());
         s.push_str(&get_message(&bundle, "alternate-posted-by", Some(args)).unwrap());
-        s.push_str("\n");
+        s.push('\n');
         let mut subs: Vec<fuzzysearch::File> = item.1.to_vec();
         subs.sort_by(|a, b| a.id.partial_cmp(&b.id).unwrap());
         subs.dedup_by(|a, b| a.id == b.id);
@@ -303,12 +351,14 @@ pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (S
             tracing::trace!(site = sub.site_name(), id = sub.id, "looking at submission");
             let mut args = fluent::FluentArgs::new();
             args.insert("link", sub.url().into());
-            args.insert("distance", sub.distance.unwrap().into());
+            args.insert("distance", sub.distance.unwrap_or(10).into());
+            let rating = get_message(&bundle, get_rating_bundle_name(&sub.rating), None).unwrap();
+            args.insert("rating", rating.into());
             s.push_str(&get_message(&bundle, "alternate-distance", Some(args)).unwrap());
-            s.push_str("\n");
+            s.push('\n');
             used_hashes.push(sub.hash.unwrap());
         }
-        s.push_str("\n");
+        s.push('\n');
     }
 
     (s, used_hashes)
@@ -357,9 +407,9 @@ pub fn continuous_action(
     user: Option<tgbotapi::User>,
     action: tgbotapi::requests::ChatAction,
 ) -> ContinuousAction {
-    use futures::future::FutureExt;
-    use futures_util::stream::StreamExt;
+    use futures::StreamExt;
     use std::time::Duration;
+    use tokio_stream::wrappers::IntervalStream;
 
     let (tx, rx) = tokio::sync::oneshot::channel();
 
@@ -370,7 +420,7 @@ pub fn continuous_action(
             let mut count: usize = 0;
 
             let timer = Box::pin(
-                tokio::time::interval(Duration::from_secs(5))
+                IntervalStream::new(tokio::time::interval(Duration::from_secs(5)))
                     .take_while(|_| {
                         tracing::trace!(count, "evaluating chat action");
                         count += 1;
@@ -384,16 +434,12 @@ pub fn continuous_action(
                             });
                         }
                     }),
-            )
-            .fuse();
+            );
 
-            let was_ended = if let futures::future::Either::Right(_) =
-                futures::future::select(timer, rx).await
-            {
-                true
-            } else {
-                false
-            };
+            let was_ended = matches!(
+                futures::future::select(timer, rx).await,
+                futures::future::Either::Right(_)
+            );
 
             tracing::trace!(count, was_ended, "chat action ended");
         }
@@ -412,23 +458,19 @@ impl Drop for ContinuousAction {
     }
 }
 
-#[tracing::instrument(skip(bot, conn, fapi))]
+#[tracing::instrument(err, skip(bot, conn, fapi))]
 pub async fn match_image(
     bot: &tgbotapi::Telegram,
-    conn: &quaint::pooled::Quaint,
+    conn: &sqlx::Pool<sqlx::Postgres>,
     fapi: &fuzzysearch::FuzzySearch,
     file: &tgbotapi::PhotoSize,
+    distance: Option<i64>,
 ) -> anyhow::Result<Vec<fuzzysearch::File>> {
-    let conn = conn
-        .check_out()
-        .await
-        .context("unable to check out database")?;
-
     if let Some(hash) = FileCache::get(&conn, &file.file_unique_id)
         .await
         .context("unable to query file cache")?
     {
-        return lookup_single_hash(&fapi, hash).await;
+        return lookup_single_hash(&fapi, hash, distance).await;
     }
 
     let get_file = tgbotapi::requests::GetFile {
@@ -454,15 +496,16 @@ pub async fn match_image(
         .await
         .context("unable to set file cache")?;
 
-    lookup_single_hash(&fapi, hash).await
+    lookup_single_hash(&fapi, hash, distance).await
 }
 
 async fn lookup_single_hash(
     fapi: &fuzzysearch::FuzzySearch,
     hash: i64,
+    distance: Option<i64>,
 ) -> anyhow::Result<Vec<fuzzysearch::File>> {
     let mut matches = fapi
-        .lookup_hashes(vec![hash])
+        .lookup_hashes(&[hash], distance)
         .await
         .context("unable to lookup hash")?;
 
@@ -482,19 +525,14 @@ async fn lookup_single_hash(
 }
 
 pub async fn sort_results(
-    conn: &quaint::pooled::Quaint,
-    user_id: i32,
+    conn: &sqlx::Pool<sqlx::Postgres>,
+    user_id: i64,
     results: &mut Vec<fuzzysearch::File>,
 ) -> anyhow::Result<()> {
     // If we have 1 or fewer items, we don't need to do any sorting.
     if results.len() <= 1 {
         return Ok(());
     }
-
-    let conn = conn
-        .check_out()
-        .await
-        .context("unable to check out database")?;
 
     let row: Option<Vec<String>> = UserConfig::get(&conn, UserConfigKey::SiteSortOrder, user_id)
         .await
@@ -527,23 +565,10 @@ pub async fn sort_results(
     Ok(())
 }
 
-pub async fn use_source_name(conn: &quaint::pooled::Quaint, user_id: i32) -> anyhow::Result<bool> {
-    let conn = conn
-        .check_out()
-        .await
-        .context("unable to check out database")?;
-    let row = UserConfig::get(&conn, UserConfigKey::SourceName, user_id)
-        .await
-        .context("unable to query user source name config")?
-        .unwrap_or(false);
-
-    Ok(row)
-}
-
 /// Extract all possible links from a Message. It looks at the text,
 /// caption, and all buttons within an inline keyboard. Uses URL parsing from
 /// Telegram.
-pub fn extract_links<'m>(message: &'m tgbotapi::Message) -> Vec<&'m str> {
+pub fn extract_links(message: &tgbotapi::Message) -> Vec<&str> {
     let mut links: Vec<&str> = vec![];
 
     // See if it was posted with a bot that included an inline keyboard.
@@ -592,10 +617,37 @@ fn extract_entity_links<'a>(
     links
 }
 
+/// Try to calculate a UTF16 position in a UTF8 string.
+///
+/// This is required because Telegram provides entities in UTF16 code units.
+///
+/// # Panics
+///
+/// This will panic if the position is not available in the data.
+fn utf16_pos_in_utf8(data: &str, pos: usize) -> usize {
+    let mut utf8_pos: usize = 0;
+    let mut utf16_pos: usize = 0;
+
+    for c in data.chars() {
+        if utf16_pos == pos {
+            return utf8_pos;
+        }
+
+        utf8_pos += c.len_utf8();
+        utf16_pos += c.len_utf16();
+    }
+
+    if utf16_pos == pos {
+        return utf8_pos;
+    }
+
+    panic!("invalid utf-16 position");
+}
+
 /// Extract text from a message entity.
 fn get_entity_text<'a>(text: &'a str, entity: &tgbotapi::MessageEntity) -> &'a str {
-    let start = entity.offset as usize;
-    let end = start + entity.length as usize;
+    let start = utf16_pos_in_utf8(&text, entity.offset as usize);
+    let end = utf16_pos_in_utf8(&text, (entity.offset + entity.length) as usize);
 
     &text[start..end]
 }
@@ -622,18 +674,6 @@ pub fn link_was_seen(
             _ => false,
         },
     )
-}
-
-pub async fn get_matches(
-    bot: &tgbotapi::Telegram,
-    fapi: &fuzzysearch::FuzzySearch,
-    conn: &quaint::pooled::Quaint,
-    sizes: &[tgbotapi::PhotoSize],
-) -> anyhow::Result<Option<fuzzysearch::File>> {
-    // Find the highest resolution size of the image and download.
-    let best_photo = find_best_photo(&sizes).unwrap();
-    let matches = match_image(&bot, &conn, &fapi, &best_photo).await?;
-    Ok(matches.into_iter().next())
 }
 
 pub fn user_from_update(update: &tgbotapi::Update) -> Option<&tgbotapi::User> {
@@ -668,6 +708,104 @@ pub fn user_from_update(update: &tgbotapi::Update) -> Option<&tgbotapi::User> {
     }
 }
 
+pub async fn can_delete_in_chat(
+    bot: &tgbotapi::Telegram,
+    conn: &sqlx::Pool<sqlx::Postgres>,
+    chat_id: i64,
+    user_id: i64,
+    ignore_cache: bool,
+) -> anyhow::Result<bool> {
+    use crate::models::{GroupConfig, GroupConfigKey};
+
+    // If we're not ignoring cache, start by checking if we already have a value
+    // in the database.
+    if !ignore_cache {
+        let can_delete: Option<bool> =
+            GroupConfig::get(&conn, chat_id, GroupConfigKey::HasDeletePermission).await?;
+
+        // If we had a value we're done, return it.
+        if let Some(can_delete) = can_delete {
+            return Ok(can_delete);
+        }
+    }
+
+    // Load the user ID (likely the Bot's user ID), check if they have the
+    // permission to delete messages.
+    let chat_member = bot
+        .make_request(&tgbotapi::requests::GetChatMember {
+            chat_id: chat_id.into(),
+            user_id,
+        })
+        .await?;
+    let can_delete = chat_member.can_delete_messages.unwrap_or(false);
+
+    // Cache the new value.
+    GroupConfig::set(
+        &conn,
+        GroupConfigKey::HasDeletePermission,
+        chat_id,
+        can_delete,
+    )
+    .await?;
+
+    Ok(can_delete)
+}
+
+pub fn get_rating_bundle_name(rating: &Option<fuzzysearch::Rating>) -> &'static str {
+    match rating {
+        Some(fuzzysearch::Rating::General) => "rating-general",
+        Some(fuzzysearch::Rating::Mature) | Some(fuzzysearch::Rating::Adult) => "rating-adult",
+        None => "rating-unknown",
+    }
+}
+
+pub fn source_reply(matches: &[fuzzysearch::File], bundle: Bundle<'_>) -> String {
+    let first = match matches.first() {
+        Some(result) => result,
+        None => return get_message(&bundle, "reverse-no-results", None).unwrap(),
+    };
+
+    let similar: Vec<&fuzzysearch::File> = matches
+        .iter()
+        .skip(1)
+        .take_while(|m| m.distance.unwrap() == first.distance.unwrap())
+        .collect();
+    tracing::debug!(
+        distance = first.distance.unwrap(),
+        "discovered match distance"
+    );
+
+    if similar.is_empty() {
+        let mut args = fluent::FluentArgs::new();
+        args.insert("link", first.url().into());
+
+        let rating = get_rating_bundle_name(&first.rating);
+        let rating = get_message(&bundle, rating, None).unwrap();
+        args.insert("rating", rating.into());
+
+        get_message(&bundle, "reverse-result", Some(args)).unwrap()
+    } else {
+        let mut items = Vec::with_capacity(2 + similar.len());
+
+        let text = get_message(&bundle, "reverse-multiple-results", None).unwrap();
+        items.push(text);
+
+        for file in vec![first].into_iter().chain(similar) {
+            let mut args = fluent::FluentArgs::new();
+            args.insert("link", file.url().into());
+
+            let rating = get_rating_bundle_name(&file.rating);
+            let rating = get_message(&bundle, rating, None).unwrap();
+            args.insert("rating", rating.into());
+
+            let result = get_message(&bundle, "reverse-multiple-item", Some(args)).unwrap();
+            items.push(result);
+        }
+
+        items.join("\n")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     fn get_finder() -> linkify::LinkFinder {
@@ -675,6 +813,56 @@ mod tests {
         finder.kinds(&[linkify::LinkKind::Url]);
 
         finder
+    }
+
+    #[test]
+    fn test_get_entity_text() {
+        use super::get_entity_text;
+
+        let url = get_entity_text(
+            "hello world http://test.com",
+            &tgbotapi::MessageEntity {
+                entity_type: tgbotapi::MessageEntityType::URL,
+                offset: 12,
+                length: 15,
+                url: None,
+                user: None,
+            },
+        );
+        assert_eq!(
+            url, "http://test.com",
+            "should be able to get url in middle of text"
+        );
+
+        let url = get_entity_text(
+            "http://test.com",
+            &tgbotapi::MessageEntity {
+                entity_type: tgbotapi::MessageEntityType::URL,
+                offset: 0,
+                length: 15,
+                url: None,
+                user: None,
+            },
+        );
+        assert_eq!(
+            url, "http://test.com",
+            "should be able to get url at start of text"
+        );
+
+        let url = get_entity_text(
+            "△ http://example.com/ △",
+            &tgbotapi::MessageEntity {
+                entity_type: tgbotapi::MessageEntityType::URL,
+                offset: 2,
+                length: 19,
+                url: None,
+                user: None,
+            },
+        );
+        assert_eq!(
+            url, "http://example.com/",
+            "should be able to get url with wide characters"
+        );
     }
 
     #[test]

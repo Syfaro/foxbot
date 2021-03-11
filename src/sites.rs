@@ -34,6 +34,8 @@ pub struct PostInfo {
     pub site_name: &'static str,
     /// Width and height of image, if available
     pub image_dimensions: Option<(u32, u32)>,
+    /// Size of image in bytes, if available
+    pub image_size: Option<usize>,
 }
 
 fn get_file_ext(name: &str) -> Option<&str> {
@@ -50,7 +52,7 @@ pub trait Site {
     async fn url_supported(&mut self, url: &str) -> bool;
     async fn get_images(
         &mut self,
-        user_id: i32,
+        user_id: i64,
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>>;
 }
@@ -104,7 +106,10 @@ impl Direct {
             Err(_) => return None,
         };
 
-        let results = self.fautil.image_search(&body, MatchType::Exact).await;
+        let results = self
+            .fautil
+            .image_search(&body, MatchType::Exact, Some(1))
+            .await;
 
         match results {
             Ok(results) => results.matches.into_iter().next(),
@@ -160,7 +165,7 @@ impl Site for Direct {
 
     async fn get_images(
         &mut self,
-        _user_id: i32,
+        _user_id: i64,
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let u = url.to_string();
@@ -319,7 +324,7 @@ impl Site for E621 {
 
     async fn get_images(
         &mut self,
-        _user_id: i32,
+        _user_id: i64,
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let endpoint = if self.show.is_match(url) {
@@ -353,14 +358,14 @@ pub struct Twitter {
     matcher: regex::Regex,
     consumer: egg_mode::KeyPair,
     token: egg_mode::Token,
-    conn: quaint::pooled::Quaint,
+    conn: sqlx::Pool<sqlx::Postgres>,
 }
 
 impl Twitter {
     pub async fn new(
         consumer_key: String,
         consumer_secret: String,
-        conn: quaint::pooled::Quaint,
+        conn: sqlx::Pool<sqlx::Postgres>,
     ) -> Self {
         use egg_mode::KeyPair;
 
@@ -405,7 +410,7 @@ impl Site for Twitter {
 
     async fn get_images(
         &mut self,
-        user_id: i32,
+        user_id: i64,
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let captures = self.matcher.captures(url).unwrap();
@@ -413,12 +418,7 @@ impl Site for Twitter {
 
         tracing::trace!(user_id, "attempting to find saved credentials",);
 
-        let conn = self
-            .conn
-            .check_out()
-            .await
-            .context("unable to check out database")?;
-        let account = TwitterModel::get_account(&conn, user_id)
+        let account = TwitterModel::get_account(&self.conn, user_id)
             .await
             .context("unable to query twitter account")?;
 
@@ -457,7 +457,7 @@ impl Site for Twitter {
                         title: Some(user.screen_name.clone()),
                         extra_caption: Some(text.clone()),
                         site_name: self.name(),
-                        image_dimensions: None,
+                        ..Default::default()
                     },
                     None => PostInfo {
                         file_type: get_file_ext(&item.media_url_https).unwrap().to_owned(),
@@ -644,7 +644,7 @@ impl Site for FurAffinity {
 
     async fn get_images(
         &mut self,
-        _user_id: i32,
+        _user_id: i64,
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let image = if url.contains("facdn.net/art/") {
@@ -740,7 +740,7 @@ impl Site for Mastodon {
 
     async fn get_images(
         &mut self,
-        _user_id: i32,
+        _user_id: i64,
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let captures = self.matcher.captures(url).unwrap();
@@ -818,7 +818,7 @@ impl Site for Weasyl {
 
     async fn get_images(
         &mut self,
-        _user_id: i32,
+        _user_id: i64,
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let captures = self.matcher.captures(url).unwrap();
@@ -1044,7 +1044,7 @@ impl Site for Inkbunny {
 
     async fn get_images(
         &mut self,
-        _user_id: i32,
+        _user_id: i64,
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let captures = self.matcher.captures(url).unwrap();
@@ -1068,5 +1068,124 @@ impl Site for Inkbunny {
         }
 
         Ok(Some(results))
+    }
+}
+
+pub struct DeviantArt {
+    client: reqwest::Client,
+    matcher: regex::Regex,
+}
+
+/// DeviantArt oEmbed responses can contain either integers or strings, so
+/// we provide a wrapper type for serde to deserialize from.
+#[derive(Clone, Copy, Debug)]
+struct AlwaysNum(u32);
+
+// This code is heavily based on the example from here:
+// https://users.rust-lang.org/t/deserialize-a-number-that-may-be-inside-a-string-serde-json/27318/4
+impl<'de> serde::Deserialize<'de> for AlwaysNum {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct NumVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for NumVisitor {
+            type Value = AlwaysNum;
+
+            fn expecting(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                fmt.write_str("integer or string")
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, val: u64) -> Result<Self::Value, E> {
+                use std::convert::TryFrom;
+
+                match u32::try_from(val) {
+                    Ok(val) => Ok(AlwaysNum(val)),
+                    Err(_) => Err(E::custom("invalid integer")),
+                }
+            }
+
+            fn visit_str<E: serde::de::Error>(self, val: &str) -> Result<Self::Value, E> {
+                match val.parse::<u32>() {
+                    Ok(val) => self.visit_u32(val),
+                    Err(_) => Err(E::custom("failed to parse integer")),
+                }
+            }
+        }
+
+        deserializer.deserialize_any(NumVisitor)
+    }
+}
+
+#[derive(Deserialize)]
+struct DeviantArtOEmbed {
+    #[serde(rename = "type")]
+    file_type: String,
+    url: String,
+    thumbnail_url: String,
+    width: AlwaysNum,
+    height: AlwaysNum,
+}
+
+impl DeviantArt {
+    pub fn new() -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            matcher: regex::Regex::new(r#"(?:(?:deviantart\.com/(?:.+/)?art/.+-|fav\.me/)(?P<id>\d+)|sta\.sh/(?P<code>\w+))"#)
+                .unwrap(),
+        }
+    }
+
+    fn get_id(&self, captures: &regex::Captures) -> Option<String> {
+        if let Some(id) = captures.name("id") {
+            return Some(id.as_str().to_string());
+        }
+
+        if let Some(code) = captures.name("code") {
+            return Some(code.as_str().to_string());
+        }
+
+        None
+    }
+}
+
+#[async_trait]
+impl Site for DeviantArt {
+    fn name(&self) -> &'static str {
+        "DeviantArt"
+    }
+
+    async fn url_supported(&mut self, url: &str) -> bool {
+        self.matcher.is_match(url)
+    }
+
+    fn url_id(&self, url: &str) -> Option<String> {
+        self.matcher
+            .captures(url)
+            .and_then(|captures| self.get_id(&captures))
+            .map(|id| format!("DeviantArt-{}", id))
+    }
+
+    async fn get_images(
+        &mut self,
+        _user_id: i64,
+        url: &str,
+    ) -> anyhow::Result<Option<Vec<PostInfo>>> {
+        let mut endpoint = url::Url::parse("https://backend.deviantart.com/oembed").unwrap();
+        endpoint.query_pairs_mut().append_pair("url", url);
+
+        let resp: DeviantArtOEmbed = self.client.get(endpoint).send().await?.json().await?;
+
+        if resp.file_type != "photo" {
+            return Ok(None);
+        }
+
+        Ok(Some(vec![PostInfo {
+            file_type: "png".to_string(),
+            url: resp.url,
+            thumb: Some(resp.thumbnail_url),
+            source_link: Some(url.to_owned()),
+            site_name: self.name(),
+            image_dimensions: Some((resp.width.0, resp.height.0)),
+            ..Default::default()
+        }]))
     }
 }

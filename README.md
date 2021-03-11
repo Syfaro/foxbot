@@ -23,21 +23,31 @@ Env Name                   | Description
 ---------------------------|------------
 `FA_A`                     | FurAffinity cookie 'a' from authenticated user
 `FA_B`                     | FurAffinity cookie 'b' from authenticated user
-`FAUTIL_APITOKEN`          | API Token for [fuzzysearch.net](https://fuzzysearch.net)
 `WEASYL_APITOKEN`          | API Token for [weasyl.com](https://www.weasyl.com)
-`TELEGRAM_APITOKEN`        | API Token for Telegram, from Botfather
+`INKBUNNY_USERNAME`        | Username for [Inkbunny](https://inkbunny.net)
+`INKBUNNY_PASSWORD`        | Password for [Inkbunny](https://inkbunny.net)
 `TWITTER_CONSUMER_KEY`     | Twitter app consumer key
 `TWITTER_CONSUMER_KEY`     | Twitter app consumer secret
-`USE_WEBHOOKS`             | If should configure and use webhooks instead of polling
-`WEBHOOK_ENDPOINT`         | If using webhooks, endpoint to set with Telegram
-`HTTP_HOST`                | If using webhooks, host to listen for updates on
-`HTTP_SECRET`              | If using webhooks, secret endpoint to use for Telegram updates
-`INFLUX_HOST`              | InfluxDB host, including scheme
-`INFLUX_DB`                | InfluxDB database name
-`INFLUX_USER`              | InfluxDB username
-`INFLUX_PASS`              | InfluxDB password
-`SENTRY_DSN`               | Sentry DSN to report errors
-`SENTRY_ORGANIZATION_SLUG` | Sentry organization slug
-`SENTRY_PROJECT_SLUG`      | Sentry project slug
+`TWITTER_CALLBACK`         | Twitter callback URL for authentication
 `JAEGER_COLLECTOR`         | Jaeger collector endpoint
-`DATABASE`                 | Path to SQLite database to store configuration and persistent cache
+`SENTRY_DSN`               | Optional, Sentry DSN to report errors
+`SENTRY_ORGANIZATION_SLUG` | Optional, Sentry organization slug for user error messages
+`SENTRY_PROJECT_SLUG`      | Optional, Sentry project slug for user error messages
+`TELEGRAM_APITOKEN`        | API Token for Telegram, from Botfather
+`USE_WEBHOOKS`             | Optional, if should configure and use webhooks instead of polling
+`WEBHOOK_ENDPOINT`         | Optional, if using webhooks, endpoint to set with Telegram
+`HTTP_HOST`                | Optional, host to listen for webhooks
+`HTTP_SECRET`              | Optional, if using webhooks, secret endpoint to use for Telegram updates
+`S3_ENDPOINT`              | Endpoint for S3 for cached images and video storage
+`S3_REGION`                | Region for S3
+`S3_TOKEN`                 | S3 access token
+`S3_SECRET`                | S3 secret token
+`S3_BUCKET`                | S3 bucket
+`S3_URL`                   | URL to use for generating path to file in S3 bucket
+`FAUTIL_APITOKEN`          | API Token for [fuzzysearch.net](https://fuzzysearch.net)
+`CACHE_ALL_IMAGES`         | Optional, download and cache all inline images
+`METRICS_HOST`             | Host to expose Prometheus metrics, health check
+`DB_HOST`                  | Host for PostgreSQL database
+`DB_USER`                  | User for PostgreSQL database
+`DB_PASS`                  | Password for PostgreSQL database
+`DB_NAME`                  | Name of PostgreSQL database

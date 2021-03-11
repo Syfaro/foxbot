@@ -8,6 +8,9 @@ use anyhow::Context;
 use async_trait::async_trait;
 use tgbotapi::{requests::*, *};
 
+/// Telegram allows inline results up to 5MB.
+static MAX_IMAGE_SIZE: usize = 5_000_000;
+
 pub struct InlineHandler;
 
 #[derive(PartialEq)]
@@ -27,13 +30,14 @@ impl InlineHandler {
             Some(id) => id,
             None => return Ok(()),
         };
-        let id: i64 = match id.parse() {
+        let id: i32 = match id.parse() {
             Ok(id) => id,
             Err(_err) => return Ok(()),
         };
 
-        let conn = handler.conn.check_out().await?;
-        let video = Video::lookup_id(&conn, id).await?.expect("missing video");
+        let video = Video::lookup_id(&handler.conn, id)
+            .await?
+            .expect("missing video");
 
         handler
             .coconut
@@ -58,7 +62,7 @@ impl InlineHandler {
         };
         let sent = handler.make_request(&send_message).await?;
 
-        Video::set_message_id(&conn, id, sent.chat.id, sent.message_id).await?;
+        Video::set_message_id(&handler.conn, id, sent.chat.id, sent.message_id).await?;
 
         Ok(())
     }
@@ -86,6 +90,68 @@ impl super::Handler for InlineHandler {
                         }
                     }
                 }
+                Some(cmd) if cmd.name == "/videoprogress" => {
+                    tracing::info!("Got video progress: {:?}", cmd);
+                    let text = message.text.clone().unwrap_or_default();
+                    let args: Vec<_> = text.split(' ').collect();
+                    let id: i32 = args[1].parse().unwrap();
+                    let progress = args[2];
+                    let video = crate::models::Video::lookup_id(&handler.conn, id)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    let edit_message = EditMessageText {
+                        chat_id: video.chat_id.unwrap().into(),
+                        message_id: video.message_id,
+                        text: format!("{} complete...", progress),
+                        ..Default::default()
+                    };
+                    handler.make_request(&edit_message).await.unwrap();
+                    return Ok(Completed);
+                }
+                Some(cmd) if cmd.name == "/videocomplete" => {
+                    let text = message.text.clone().unwrap_or_default();
+                    let args: Vec<_> = text.split(' ').collect();
+                    let id: i32 = args[1].parse().unwrap();
+                    let mp4_url = args[2];
+                    let thumb_url = args[3];
+                    let video = crate::models::Video::lookup_id(&handler.conn, id)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    crate::models::Video::set_processed_url(
+                        &handler.conn,
+                        id,
+                        &mp4_url,
+                        &thumb_url,
+                    )
+                    .await
+                    .unwrap();
+
+                    let video_return_button = handler
+                        .get_fluent_bundle(None, |bundle| {
+                            crate::utils::get_message(&bundle, "video-return-button", None).unwrap()
+                        })
+                        .await;
+                    let send_video = SendVideo {
+                        chat_id: video.chat_id.unwrap().into(),
+                        video: FileType::URL(mp4_url.to_owned()),
+                        reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(
+                            InlineKeyboardMarkup {
+                                inline_keyboard: vec![vec![InlineKeyboardButton {
+                                    text: video_return_button,
+                                    switch_inline_query: Some(video.source.to_owned()),
+                                    ..Default::default()
+                                }]],
+                            },
+                        )),
+                        supports_streaming: Some(true),
+                        ..Default::default()
+                    };
+                    handler.make_request(&send_video).await.unwrap();
+
+                    tracing::debug!("Finished handling video");
+                }
                 _ => (),
             }
         }
@@ -98,32 +164,18 @@ impl super::Handler for InlineHandler {
         tracing::info!(query = ?inline.query, "got query");
         tracing::debug!(?links, "found links");
 
-        let influx = handler.influx.clone();
         // Lock sites in order to find which of these links are usable
         {
             let mut sites = handler.sites.lock().await;
             let links = links.iter().map(|link| link.as_str()).collect();
             find_images(&inline.from, links, &mut sites, &mut |info| {
-                let influx = influx.clone();
-                let duration = info.duration;
-                let count = info.results.len();
-                let name = info.site.name();
-
-                // Log a point to InfluxDB with information about our inline query
-                tokio::spawn(async move {
-                    let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "inline")
-                        .add_tag("site", name.replace(" ", "_"))
-                        .add_field("count", count as i32)
-                        .add_field("duration", duration);
-
-                    influx.query(&point).await
-                });
-
                 results.extend(info.results);
             })
             .await
             .context("unable to find images")?;
         }
+
+        let is_personal = results.iter().any(|result| result.personal);
 
         let mut responses: Vec<(ResultType, InlineQueryResult)> = vec![];
 
@@ -166,7 +218,7 @@ impl super::Handler for InlineHandler {
         let mut answer_inline = AnswerInlineQuery {
             inline_query_id: inline.id.to_owned(),
             results: cleaned_responses,
-            is_personal: Some(true), // Everything is personal because of config
+            is_personal: Some(is_personal),
             ..Default::default()
         };
 
@@ -181,7 +233,7 @@ impl super::Handler for InlineHandler {
         // parameters to go and process that video.
         if let Some(video) = has_video {
             answer_inline.switch_pm_text = Some("Process video".to_string());
-            answer_inline.switch_pm_parameter = Some(video.id.to_owned());
+            answer_inline.switch_pm_parameter = Some(video.id);
 
             // Do not cache! We quickly want to change this result after
             // processing is completed.
@@ -205,12 +257,9 @@ async fn process_result(
     result: &PostInfo,
     from: &User,
 ) -> anyhow::Result<Option<Vec<(ResultType, InlineQueryResult)>>> {
-    let (direct, source) = handler
+    let direct = handler
         .get_fluent_bundle(from.language_code.as_deref(), |bundle| {
-            (
-                get_message(&bundle, "inline-direct", None).unwrap(),
-                get_message(&bundle, "inline-source", None).unwrap(),
-            )
+            get_message(&bundle, "inline-direct", None).unwrap()
         })
         .await;
 
@@ -222,15 +271,7 @@ async fn process_result(
     }];
 
     if let Some(source_link) = &result.source_link {
-        let use_name = use_source_name(&handler.conn, from.id)
-            .await
-            .unwrap_or(false);
-
-        let text = if use_name {
-            result.site_name.to_string()
-        } else {
-            source
-        };
+        let text = result.site_name.to_string();
 
         row.push(InlineKeyboardButton {
             text,
@@ -262,6 +303,7 @@ async fn process_result(
 
             Ok(Some(results))
         }
+        "mp4" => Ok(Some(build_mp4_result(&result, thumb_url, &keyboard))),
         "gif" => Ok(Some(build_gif_result(&result, thumb_url, &keyboard))),
         other => {
             tracing::warn!(file_type = other, "got unusable type");
@@ -279,28 +321,42 @@ async fn build_image_result(
     let mut result = result.to_owned();
     result.thumb = Some(thumb_url);
 
-    let conn = handler
-        .conn
-        .check_out()
-        .await
-        .context("unable to check out database")?;
-
-    // Check if we should cache images, top priority option. If not, check if
-    // we should size them (this should probably always be true). And finally,
-    // if no other options are set we should pass the result through untouched.
-    let result = if handler.config.cache_images.unwrap_or(false) {
+    // There is a bit of processing required to figure out how to handle an
+    // image before sending it off to Telegram. First, we check if the config
+    // specifies we should cache (re-upload) all images to the S3 bucket. If
+    // enabled, this is all we have to do. Otherwise, we need to download the
+    // image to make sure that it is below Telegram's 5MB image limit. This also
+    // allows us to calculate an image height and width to resolve a bug in
+    // Telegram Desktop[^1].
+    //
+    // [^1]: https://github.com/telegramdesktop/tdesktop/issues/4580
+    let data = download_image(&result.url).await?;
+    let result = if handler.config.cache_all_images.unwrap_or(false) {
         cache_post(
-            &conn,
+            &handler.conn,
             &handler.s3,
             &handler.config.s3_bucket,
             &handler.config.s3_url,
             &result,
+            &data,
         )
         .await?
-    } else if handler.config.size_images.unwrap_or(false) {
-        size_post(&result).await?
     } else {
-        result
+        let result = size_post(&result, &data).await?;
+
+        if result.image_size.unwrap_or_default() > MAX_IMAGE_SIZE {
+            cache_post(
+                &handler.conn,
+                &handler.s3,
+                &handler.config.s3_bucket,
+                &handler.config.s3_url,
+                &result,
+                &data,
+            )
+            .await?
+        } else {
+            result
+        }
     };
 
     let mut photo = InlineQueryResult::photo(
@@ -339,14 +395,12 @@ async fn build_image_result(
 }
 
 async fn build_webm_result(
-    conn: &quaint::pooled::Quaint,
+    conn: &sqlx::Pool<sqlx::Postgres>,
     result: &crate::sites::PostInfo,
     thumb_url: String,
     keyboard: &InlineKeyboardMarkup,
     source_link: &str,
 ) -> anyhow::Result<Vec<(ResultType, InlineQueryResult)>> {
-    let conn = conn.check_out().await?;
-
     let video = match Video::lookup_url(&conn, &result.url).await? {
         None => {
             let id = Video::insert_url(&conn, &result.url, &source_link).await?;
@@ -364,7 +418,7 @@ async fn build_webm_result(
         Some(video) => video,
     };
 
-    let (full_url, thumb_url) = (video.mp4_url.unwrap(), thumb_url);
+    let full_url = video.mp4_url.unwrap();
 
     let mut video = InlineQueryResult::video(
         generate_id(),
@@ -397,12 +451,40 @@ async fn build_webm_result(
     Ok(results)
 }
 
+fn build_mp4_result(
+    result: &crate::sites::PostInfo,
+    thumb_url: String,
+    keyboard: &InlineKeyboardMarkup,
+) -> Vec<(ResultType, InlineQueryResult)> {
+    let full_url = result.url.clone();
+
+    let mut video = InlineQueryResult::video(
+        generate_id(),
+        full_url,
+        "video/mp4".to_string(),
+        thumb_url,
+        result
+            .extra_caption
+            .clone()
+            .unwrap_or_else(|| result.site_name.to_owned()),
+    );
+    video.reply_markup = Some(keyboard.clone());
+
+    if let Some(message) = &result.extra_caption {
+        if let InlineQueryType::Video(ref mut result) = video.content {
+            result.caption = Some(message.to_owned());
+        }
+    }
+
+    vec![(ResultType::Ready, video)]
+}
+
 fn build_gif_result(
     result: &crate::sites::PostInfo,
     thumb_url: String,
     keyboard: &InlineKeyboardMarkup,
 ) -> Vec<(ResultType, InlineQueryResult)> {
-    let (full_url, thumb_url) = (result.url.clone(), thumb_url);
+    let full_url = result.url.clone();
 
     let mut gif = InlineQueryResult::gif(generate_id(), full_url.to_owned(), thumb_url.to_owned());
     gif.reply_markup = Some(keyboard.clone());

@@ -61,26 +61,21 @@ async fn name(
         .and_then(|from| from.language_code.as_deref());
 
     if data.ends_with(":t") {
-        let conn = handler
-            .conn
-            .check_out()
-            .await
-            .context("unable to check out database")?;
-
-        let source_name: Option<bool> =
-            UserConfig::get(&conn, UserConfigKey::SourceName, callback_query.from.id)
-                .await
-                .context("unable to query user source name setting")?;
-        let existed = source_name.is_some();
+        let source_name: Option<bool> = UserConfig::get(
+            &handler.conn,
+            UserConfigKey::SourceName,
+            callback_query.from.id,
+        )
+        .await
+        .context("unable to query user source name setting")?;
         let source_name = source_name.unwrap_or(false);
 
         let source_name = !source_name;
 
         UserConfig::set(
-            &conn,
+            &handler.conn,
             "source-name",
             callback_query.from.id,
-            existed,
             source_name,
         )
         .await
@@ -144,13 +139,7 @@ async fn name_keyboard(
     handler: &crate::MessageHandler,
     from: &User,
 ) -> anyhow::Result<InlineKeyboardMarkup> {
-    let conn = handler
-        .conn
-        .check_out()
-        .await
-        .context("unable to check out database")?;
-
-    let enabled = UserConfig::get(&conn, UserConfigKey::SourceName, from.id)
+    let enabled = UserConfig::get(&handler.conn, UserConfigKey::SourceName, from.id)
         .await
         .context("unable to query user source setting")?
         .unwrap_or(false);
@@ -241,17 +230,13 @@ async fn order(
         let site = data.split(':').nth(2).unwrap().parse().unwrap();
         let pos: usize = pos.parse().unwrap();
 
-        let conn = handler
-            .conn
-            .check_out()
-            .await
-            .context("unable to check out database")?;
-
-        let order: Option<Vec<String>> =
-            UserConfig::get(&conn, UserConfigKey::SiteSortOrder, callback_query.from.id)
-                .await
-                .context("unable to query user site sort order")?;
-        let has_config = order.is_some();
+        let order: Option<Vec<String>> = UserConfig::get(
+            &handler.conn,
+            UserConfigKey::SiteSortOrder,
+            callback_query.from.id,
+        )
+        .await
+        .context("unable to query user site sort order")?;
         let mut sites = match order {
             Some(sites) => sites.iter().map(|item| item.parse().unwrap()).collect(),
             None => Sites::default_order(),
@@ -271,10 +256,9 @@ async fn order(
         sites.insert(pos, site.clone());
 
         UserConfig::set(
-            &conn,
+            &handler.conn,
             "site-sort-order",
             callback_query.from.id,
-            has_config,
             sites,
         )
         .await
@@ -403,14 +387,9 @@ async fn send_settings_message(
 }
 
 async fn sort_order_keyboard(
-    conn: &quaint::pooled::Quaint,
-    user_id: i32,
+    conn: &sqlx::Pool<sqlx::Postgres>,
+    user_id: i64,
 ) -> anyhow::Result<InlineKeyboardMarkup> {
-    let conn = conn
-        .check_out()
-        .await
-        .context("unable to check out database")?;
-
     let row: Option<Vec<String>> = UserConfig::get(&conn, UserConfigKey::SiteSortOrder, user_id)
         .await
         .context("unable to query user sort order")?;

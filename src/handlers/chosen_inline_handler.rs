@@ -13,16 +13,14 @@ impl super::Handler for ChosenInlineHandler {
 
     async fn handle(
         &self,
-        handler: &crate::MessageHandler,
+        _handler: &crate::MessageHandler,
         update: &Update,
         _command: Option<&Command>,
     ) -> anyhow::Result<super::Status> {
-        let chosen_result = needs_field!(update, chosen_inline_result);
+        let _chosen_result = needs_field!(update, chosen_inline_result);
 
-        let point = influxdb::Query::write_query(influxdb::Timestamp::Now, "chosen")
-            .add_field("user_id", chosen_result.from.id);
-
-        let _ = handler.influx.query(&point).await;
+        // This doesn't need to do anything, returning completed will count it
+        // as a chosen inline handler already.
 
         Ok(Completed)
     }
