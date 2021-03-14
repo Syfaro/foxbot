@@ -343,17 +343,15 @@ async fn main() {
         redis,
     });
 
-    let _guard = if let Some(dsn) = &config.sentry_dsn {
-        Some(sentry::init(sentry::ClientOptions {
-            dsn: Some(dsn.parse().unwrap()),
+    let _guard = config.sentry_dsn.as_ref().map(|sentry_dsn| {
+        sentry::init(sentry::ClientOptions {
+            dsn: Some(sentry_dsn.parse().unwrap()),
             debug: true,
             release: option_env!("RELEASE").map(std::borrow::Cow::from),
             attach_stacktrace: true,
             ..Default::default()
-        }))
-    } else {
-        None
-    };
+        })
+    });
 
     tracing::info!(
         "sentry enabled: {}",

@@ -132,11 +132,10 @@ impl CommandHandler {
             if result.file_type == "mp4" {
                 let video = SendVideo {
                     chat_id: message.chat_id(),
-                    caption: if let Some(source_link) = &result.source_link {
-                        Some(source_link.to_owned())
-                    } else {
-                        None
-                    },
+                    caption: result
+                        .source_link
+                        .as_ref()
+                        .map(|source_link| source_link.to_owned()),
                     video: FileType::URL(result.url.clone()),
                     reply_to_message_id: Some(message.message_id),
                     ..Default::default()
@@ -146,11 +145,10 @@ impl CommandHandler {
             } else {
                 let photo = SendPhoto {
                     chat_id: message.chat_id(),
-                    caption: if let Some(source_link) = &result.source_link {
-                        Some(source_link.to_owned())
-                    } else {
-                        None
-                    },
+                    caption: result
+                        .source_link
+                        .as_ref()
+                        .map(|source_link| source_link.to_owned()),
                     photo: FileType::URL(result.url.clone()),
                     reply_to_message_id: Some(message.message_id),
                     ..Default::default()
@@ -165,20 +163,18 @@ impl CommandHandler {
                     .map(|result| match result.file_type.as_ref() {
                         "mp4" => InputMedia::Video(InputMediaVideo {
                             media: FileType::URL(result.url.to_owned()),
-                            caption: if let Some(source_link) = &result.source_link {
-                                Some(source_link.to_owned())
-                            } else {
-                                None
-                            },
+                            caption: result
+                                .source_link
+                                .as_ref()
+                                .map(|source_link| source_link.to_owned()),
                             ..Default::default()
                         }),
                         _ => InputMedia::Photo(InputMediaPhoto {
                             media: FileType::URL(result.url.to_owned()),
-                            caption: if let Some(source_link) = &result.source_link {
-                                Some(source_link.to_owned())
-                            } else {
-                                None
-                            },
+                            caption: result
+                                .source_link
+                                .as_ref()
+                                .map(|source_link| source_link.to_owned()),
                             ..Default::default()
                         }),
                     })
