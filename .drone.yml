@@ -44,6 +44,8 @@ trigger:
   event:
     exclude:
     - promote
+    - cron
+    - custom
 
 ---
 kind: pipeline
@@ -98,7 +100,6 @@ steps:
   pull: always
   image: plugins/docker
   settings:
-    debug: true
     password:
       from_secret: docker_password
     registry: registry.huefox.com
@@ -181,13 +182,46 @@ steps:
     target:
     - production
 
+image_pull_secrets:
+- dockerconfig
+
 trigger:
   event:
     exclude:
     - pull_request
+    - cron
+    - custom
+
+---
+kind: pipeline
+type: docker
+name: base
+
+platform:
+  os: linux
+  arch: amd64
+
+steps:
+- name: build
+  image: plugins/docker
+  settings:
+    dockerfile: Dockerfile.base
+    password:
+      from_secret: docker_password
+    registry: registry.huefox.com
+    repo: registry.huefox.com/foxbot-base
+    tags:
+    - latest
+    username:
+      from_secret: docker_username
+
+trigger:
+  event:
+  - cron
+  - custom
 
 ---
 kind: signature
-hmac: 56948fc1ef40a52b846746ab0ed09367dd545c49b1e5b6984fd948341f6d99f3
+hmac: bde44b2785843d477b66f8a181d5f160131562ef2da2f38d395654cb3d6857db
 
 ...
