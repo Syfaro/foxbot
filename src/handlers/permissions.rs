@@ -35,6 +35,18 @@ impl super::Handler for PermissionHandler {
         )
         .await?;
 
+        let data = serde_json::to_value(&my_chat_member.new_chat_member).unwrap();
+
+        if let Err(err) = sqlx::query!(
+            "INSERT INTO permission (chat_id, updated_at, permissions) VALUES ($1, to_timestamp($2::int), $3)",
+            my_chat_member.chat.id,
+            my_chat_member.date,
+            data
+        )
+        .execute(&handler.conn).await {
+            tracing::error!("Unable to save permission change: {:?}", err);
+        }
+
         Ok(Completed)
     }
 }

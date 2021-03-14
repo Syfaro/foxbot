@@ -2908,6 +2908,7 @@ dependencies = [
  "sqlx-rt",
  "stringprep",
  "thiserror",
+ "time 0.2.25",
  "tokio-stream",
  "url",
  "webpki",
@@ -3111,7 +3112,7 @@ dependencies = [
 [[package]]
 name = "tgbotapi"
 version = "0.1.0"
-source = "git+https://github.com/Syfaro/tgbotapi-rs#634e1798e1f5b74d188da57960d92722d3041ad5"
+source = "git+https://github.com/Syfaro/tgbotapi-rs#ee3c0c88b9a81d9e8397965b38eaa4d68b9150b4"
 dependencies = [
  "reqwest",
  "serde",
