@@ -107,13 +107,20 @@ async fn upload_image(
     //
     // This used to always convert images to JPEGs, but it does not appear that
     // any Telegram client actually requires this.
+    //
+    // When we do have to convert images to JPEGs, make sure to convert them to
+    // Rgb8 before attempting to encode the data. Certain images can have larger
+    // bit depths that can't be represented as JPEGs and generate an error
+    // instead of working as expected.
     let (im, buf) = if thumb {
         let im = im.thumbnail(400, 400);
+        let im = image::DynamicImage::ImageRgb8(im.into_rgb8());
         let mut buf = bytes::BytesMut::with_capacity(2_000_000).writer();
         im.write_to(&mut buf, image::ImageOutputFormat::Jpeg(90))?;
         (im, buf.into_inner().freeze())
     } else if data.len() > 5_000_000 {
         let im = im.resize(2000, 2000, image::imageops::FilterType::Lanczos3);
+        let im = image::DynamicImage::ImageRgb8(im.into_rgb8());
         let mut buf = bytes::BytesMut::with_capacity(2_000_000).writer();
         im.write_to(&mut buf, image::ImageOutputFormat::Jpeg(90))?;
         (im, buf.into_inner().freeze())
