@@ -154,6 +154,8 @@ steps:
       from_secret: deploy_host
     key:
       from_secret: deploy_key
+    port:
+      from_secret: deploy_port
     script:
     - export VCS_REF=${DRONE_COMMIT_SHA}
     - bash /deploy/foxbot.sh
@@ -222,6 +224,6 @@ trigger:
 
 ---
 kind: signature
-hmac: bde44b2785843d477b66f8a181d5f160131562ef2da2f38d395654cb3d6857db
+hmac: a046001f57b235b17324729fe497f5e3a2dd73910ca9dbe04ef8e9a1b8519c70
 
 ...
