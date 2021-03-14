@@ -307,6 +307,7 @@ async fn main() {
         Box::new(handlers::SettingsHandler),
         Box::new(handlers::TwitterHandler),
         Box::new(handlers::ErrorCleanup),
+        Box::new(handlers::PermissionHandler),
     ];
 
     let region = rusoto_core::Region::Custom {
@@ -385,6 +386,7 @@ async fn main() {
             .expect("Missing WEBHOOK_ENDPOINT");
         let set_webhook = SetWebhook {
             url: webhook_endpoint.to_owned(),
+            ..Default::default()
         };
         if let Err(e) = bot.make_request(&set_webhook).await {
             panic!("unable to set webhook: {:?}", e);

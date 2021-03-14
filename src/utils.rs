@@ -616,7 +616,7 @@ fn extract_entity_links<'a>(
     for entity in entities {
         if entity.entity_type == tgbotapi::MessageEntityType::TextLink {
             links.push(entity.url.as_ref().unwrap());
-        } else if entity.entity_type == tgbotapi::MessageEntityType::URL {
+        } else if entity.entity_type == tgbotapi::MessageEntityType::Url {
             links.push(get_entity_text(&text, &entity));
         }
     }
@@ -829,7 +829,7 @@ mod tests {
         let url = get_entity_text(
             "hello world http://test.com",
             &tgbotapi::MessageEntity {
-                entity_type: tgbotapi::MessageEntityType::URL,
+                entity_type: tgbotapi::MessageEntityType::Url,
                 offset: 12,
                 length: 15,
                 url: None,
@@ -844,7 +844,7 @@ mod tests {
         let url = get_entity_text(
             "http://test.com",
             &tgbotapi::MessageEntity {
-                entity_type: tgbotapi::MessageEntityType::URL,
+                entity_type: tgbotapi::MessageEntityType::Url,
                 offset: 0,
                 length: 15,
                 url: None,
@@ -859,7 +859,7 @@ mod tests {
         let url = get_entity_text(
             "△ http://example.com/ △",
             &tgbotapi::MessageEntity {
-                entity_type: tgbotapi::MessageEntityType::URL,
+                entity_type: tgbotapi::MessageEntityType::Url,
                 offset: 2,
                 length: 19,
                 url: None,
@@ -897,7 +897,7 @@ mod tests {
                 ],
             }),
             entities: Some(vec![tgbotapi::MessageEntity {
-                entity_type: tgbotapi::MessageEntityType::URL,
+                entity_type: tgbotapi::MessageEntityType::Url,
                 offset: 0,
                 length: 22,
                 url: Some("https://www.weasyl.com".to_string()),

@@ -136,7 +136,7 @@ impl CommandHandler {
                         .source_link
                         .as_ref()
                         .map(|source_link| source_link.to_owned()),
-                    video: FileType::URL(result.url.clone()),
+                    video: FileType::Url(result.url.clone()),
                     reply_to_message_id: Some(message.message_id),
                     ..Default::default()
                 };
@@ -149,7 +149,7 @@ impl CommandHandler {
                         .source_link
                         .as_ref()
                         .map(|source_link| source_link.to_owned()),
-                    photo: FileType::URL(result.url.clone()),
+                    photo: FileType::Url(result.url.clone()),
                     reply_to_message_id: Some(message.message_id),
                     ..Default::default()
                 };
@@ -162,7 +162,7 @@ impl CommandHandler {
                     .iter()
                     .map(|result| match result.file_type.as_ref() {
                         "mp4" => InputMedia::Video(InputMediaVideo {
-                            media: FileType::URL(result.url.to_owned()),
+                            media: FileType::Url(result.url.to_owned()),
                             caption: result
                                 .source_link
                                 .as_ref()
@@ -170,7 +170,7 @@ impl CommandHandler {
                             ..Default::default()
                         }),
                         _ => InputMedia::Photo(InputMediaPhoto {
-                            media: FileType::URL(result.url.to_owned()),
+                            media: FileType::Url(result.url.to_owned()),
                             caption: result
                                 .source_link
                                 .as_ref()
