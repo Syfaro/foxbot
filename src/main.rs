@@ -522,10 +522,11 @@ async fn handle_request(
 
             let update: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
 
-            let id: i64 = uri.to_string().split('=').last().unwrap().parse().unwrap();
+            let url = uri.to_string();
+            let display_name = url.split('=').last().unwrap();
             let progress = update.get("progress").and_then(|val| val.as_str());
 
-            tracing::debug!(video_id = id, "Got video update: {:?}", update);
+            tracing::debug!(display_name, "Got video update: {:?}", update);
 
             if let Some(progress) = progress {
                 tracing::debug!("Got video progress, {}", progress);
@@ -533,7 +534,7 @@ async fn handle_request(
                 update_tx
                     .send(Box::new(tgbotapi::Update {
                         message: Some(tgbotapi::Message {
-                            text: Some(format!("/videoprogress {} {}", id, progress)),
+                            text: Some(format!("/videoprogress {} {}", display_name, progress)),
                             entities: Some(vec![tgbotapi::MessageEntity {
                                 entity_type: tgbotapi::MessageEntityType::BotCommand,
                                 offset: 0,
@@ -577,7 +578,7 @@ async fn handle_request(
                         message: Some(tgbotapi::Message {
                             text: Some(format!(
                                 "/videocomplete {} {} {}",
-                                id, video_url, thumb_url
+                                display_name, video_url, thumb_url
                             )),
                             entities: Some(vec![tgbotapi::MessageEntity {
                                 entity_type: tgbotapi::MessageEntityType::BotCommand,
@@ -1102,7 +1103,7 @@ impl MessageHandler {
         self.make_request(&send_message).await.map_err(Into::into)
     }
 
-    #[tracing::instrument(skip(self, update))]
+    #[tracing::instrument(skip(self, update), fields(user_id, chat_id))]
     async fn handle_update(&self, update: Update) {
         let _hist = HANDLING_DURATION.start_timer();
 
@@ -1113,9 +1114,14 @@ impl MessageHandler {
         });
 
         let user = utils::user_from_update(&update);
+        let chat = utils::chat_from_update(&update);
 
         if let Some(user) = user {
-            tracing::trace!(user_id = user.id, "found user associated with update");
+            tracing::Span::current().record("user_id", &user.id);
+        }
+
+        if let Some(chat) = chat {
+            tracing::Span::current().record("chat_id", &chat.id);
         }
 
         let command = update
@@ -1143,6 +1149,9 @@ impl MessageHandler {
                     let mut tags = vec![("handler", handler.name().to_string())];
                     if let Some(user) = user {
                         tags.push(("user_id", user.id.to_string()));
+                    }
+                    if let Some(chat) = chat {
+                        tags.push(("chat_id", chat.id.to_string()));
                     }
                     if let Some(command) = command {
                         tags.push(("command", command.name));

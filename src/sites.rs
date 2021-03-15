@@ -90,7 +90,7 @@ impl Direct {
             .build()
             .expect("Unable to create client");
 
-        Self { fautil, client }
+        Self { client, fautil }
     }
 
     async fn reverse_search(&self, url: &str) -> Option<fuzzysearch::File> {

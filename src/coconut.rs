@@ -73,12 +73,12 @@ impl Coconut {
 
             # Settings
             set source = {source}
-            set webhook = {webhook}?id={name}, events=true
+            set webhook = {webhook}?name={name}, events=true
 
             # Outputs
             -> mp4:720p = $cdn/video/{name}.mp4, if=$source_duration <= 60
             -> mp4:480p = $cdn/video/{name}.mp4, if=$source_duration <= 120 AND $source_duration > 60
-            -> mp4:360p = $cdn/video/{name}.mp4, if=$source_duration > 120, duration = 200
+            -> mp4:360p = $cdn/video/{name}.mp4, if=$source_duration > 120, duration = 150
             -> jpg:250x0 = $cdn/thumbnail/{name}.jpg, number=1
         ",
             account_id = self.b2_account_id,

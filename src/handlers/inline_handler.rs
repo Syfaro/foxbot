@@ -35,14 +35,18 @@ impl InlineHandler {
             Err(_err) => return Ok(()),
         };
 
-        let video = Video::lookup_id(&handler.conn, id)
+        let video = Video::lookup_internal_id(&handler.conn, id)
             .await?
             .expect("missing video");
 
-        handler
-            .coconut
-            .start_video(&video.url, &video.id.to_string())
-            .await?;
+        if video.job_id.is_none() {
+            let job_id = handler
+                .coconut
+                .start_video(&video.url, &video.display_name)
+                .await?;
+
+            Video::set_job_id(&handler.conn, id, job_id).await?;
+        }
 
         let lang = message
             .from
@@ -62,11 +66,12 @@ impl InlineHandler {
         };
         let sent = handler.make_request(&send_message).await?;
 
-        Video::set_message_id(&handler.conn, id, sent.chat.id, sent.message_id).await?;
+        Video::add_message_id(&handler.conn, id, sent.chat.id, sent.message_id).await?;
 
         Ok(())
     }
 
+    #[tracing::instrument(skip(self, handler, message), fields(video_id, progress))]
     async fn video_progress(
         &self,
         handler: &crate::MessageHandler,
@@ -76,29 +81,17 @@ impl InlineHandler {
 
         let text = message.text.clone().context("Progress was missing text")?;
         let args: Vec<_> = text.split(' ').collect();
-        let id: i32 = args
-            .get(1)
-            .context("Progress was missing ID")?
-            .parse()
-            .context("Progress ID was not number")?;
+        let display_name = args.get(1).context("Progress was missing ID")?;
         let progress = args
             .get(2)
             .context("Progress was missing progress percentage")?;
+        tracing::Span::current().record("progress", &progress);
 
-        let video = match crate::models::Video::lookup_id(&handler.conn, id).await? {
-            Some(video) => video,
-            None => {
-                handler
-                    .send_generic_reply(&message, "video-unknown")
-                    .await?;
-                return Ok(Completed);
-            }
-        };
-
-        let chat_id = match video.chat_id {
-            Some(chat_id) => chat_id,
-            None => return Ok(Completed),
-        };
+        let video = crate::models::Video::lookup_display_name(&handler.conn, &display_name)
+            .await?
+            .context("Video was missing")?;
+        tracing::Span::current().record("video_id", &video.id);
+        let messages = crate::models::Video::associated_messages(&handler.conn, video.id).await?;
 
         let msg = handler
             .get_fluent_bundle(
@@ -114,17 +107,20 @@ impl InlineHandler {
             )
             .await;
 
-        let edit_message = EditMessageText {
-            chat_id: chat_id.into(),
-            message_id: video.message_id,
-            text: msg,
-            ..Default::default()
-        };
-        handler.make_request(&edit_message).await?;
+        for message in messages {
+            let edit_message = EditMessageText {
+                chat_id: message.0.into(),
+                message_id: Some(message.1),
+                text: msg.clone(),
+                ..Default::default()
+            };
+            handler.make_request(&edit_message).await?;
+        }
 
-        return Ok(Completed);
+        Ok(Completed)
     }
 
+    #[tracing::instrument(skip(self, handler, message), fields(video_id))]
     async fn video_complete(
         &self,
         handler: &crate::MessageHandler,
@@ -132,29 +128,26 @@ impl InlineHandler {
     ) -> anyhow::Result<super::Status> {
         let text = message.text.clone().unwrap_or_default();
         let args: Vec<_> = text.split(' ').collect();
-        let id: i32 = args[1].parse().unwrap();
-        let mp4_url = args[2];
-        let thumb_url = args[3];
+        let display_name = args.get(1).context("Progress was missing ID")?;
+        let mp4_url = *args.get(2).context("Complete was missing MP4 URL")?;
+        let thumb_url = args.get(3).context("Complete was missing thumb URL")?;
 
-        let video = match crate::models::Video::lookup_id(&handler.conn, id).await? {
-            Some(video) => video,
-            None => {
-                handler
-                    .send_generic_reply(&message, "video-unknown")
-                    .await?;
-                return Ok(Completed);
-            }
+        let video = crate::models::Video::lookup_display_name(&handler.conn, &display_name)
+            .await?
+            .context("Video was missing")?;
+        tracing::Span::current().record("video_id", &video.id);
+        crate::models::Video::set_processed_url(&handler.conn, video.id, &mp4_url, &thumb_url)
+            .await?;
+
+        let mut messages =
+            crate::models::Video::associated_messages(&handler.conn, video.id).await?;
+
+        tracing::debug!(count = messages.len(), "Found messages associated with job");
+
+        let first = match messages.pop() {
+            Some(msg) => msg,
+            None => return Ok(Completed),
         };
-
-        let action = continuous_action(
-            handler.bot.clone(),
-            6,
-            video.chat_id.unwrap().into(),
-            message.from.clone(),
-            ChatAction::UploadVideo,
-        );
-
-        crate::models::Video::set_processed_url(&handler.conn, id, &mp4_url, &thumb_url).await?;
 
         let video_return_button = handler
             .get_fluent_bundle(None, |bundle| {
@@ -162,13 +155,25 @@ impl InlineHandler {
             })
             .await;
 
+        // First, we should handle one message to upload the file. This is a
+        // special case because afterwards all additional messages can be sent
+        // the existing file ID instead of a new upload.
+
+        let action = continuous_action(
+            handler.bot.clone(),
+            6,
+            first.0.into(),
+            message.from.clone(),
+            ChatAction::UploadVideo,
+        );
+
         let send_video = SendVideo {
-            chat_id: video.chat_id.unwrap().into(),
+            chat_id: first.0.into(),
             video: FileType::Url(mp4_url.to_owned()),
             reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
                 inline_keyboard: vec![vec![InlineKeyboardButton {
-                    text: video_return_button,
-                    switch_inline_query: Some(video.source.to_owned()),
+                    text: video_return_button.clone(),
+                    switch_inline_query: Some(video.display_url.to_owned()),
                     ..Default::default()
                 }]],
             })),
@@ -176,8 +181,38 @@ impl InlineHandler {
             ..Default::default()
         };
 
-        handler.make_request(&send_video).await?;
+        let message = handler.make_request(&send_video).await?;
         drop(action);
+
+        // Now that we've sent the first message, send each additional message
+        // with the returned video ID.
+
+        let file_id = message
+            .video
+            .context("Sent video was missing file ID")?
+            .file_id;
+
+        tracing::debug!(%file_id, "Sent video, reusing for additional messages");
+
+        for message in messages {
+            let send_video = SendVideo {
+                chat_id: message.0.into(),
+                video: FileType::FileID(file_id.clone()),
+                reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
+                    inline_keyboard: vec![vec![InlineKeyboardButton {
+                        text: video_return_button.clone(),
+                        switch_inline_query: Some(video.display_url.to_owned()),
+                        ..Default::default()
+                    }]],
+                })),
+                supports_streaming: Some(true),
+                ..Default::default()
+            };
+
+            if let Err(err) = handler.make_request(&send_video).await {
+                tracing::error!("Unable to send video: {:?}", err);
+            }
+        }
 
         tracing::debug!("Finished handling video");
 
@@ -207,10 +242,10 @@ impl super::Handler for InlineHandler {
                         }
                     }
                 }
-                Some(cmd) if cmd.name == "/videoprogress" => {
+                Some(cmd) if cmd.name == "/videoprogress" && message.message_id == 0 => {
                     return self.video_progress(&handler, &message).await;
                 }
-                Some(cmd) if cmd.name == "/videocomplete" => {
+                Some(cmd) if cmd.name == "/videocomplete" && message.message_id == 0 => {
                     return self.video_complete(&handler, &message).await;
                 }
                 _ => (),
@@ -358,9 +393,24 @@ async fn process_result(
                 None => result.url.clone(),
             };
 
-            let results = build_webm_result(&handler.conn, &result, thumb_url, &keyboard, &source)
-                .await
-                .expect("unable to process webm results");
+            let url_id = {
+                let sites = handler.sites.lock().await;
+                sites
+                    .iter()
+                    .find_map(|site| site.url_id(&source))
+                    .context("Result being processed was missing URL ID")?
+            };
+
+            let results = build_webm_result(
+                &handler.conn,
+                &result,
+                thumb_url,
+                &keyboard,
+                url_id,
+                &source,
+            )
+            .await
+            .expect("unable to process webm results");
 
             Ok(Some(results))
         }
@@ -460,11 +510,15 @@ async fn build_webm_result(
     result: &crate::sites::PostInfo,
     thumb_url: String,
     keyboard: &InlineKeyboardMarkup,
-    source_link: &str,
+    url_id: String,
+    display_url: &str,
 ) -> anyhow::Result<Vec<(ResultType, InlineQueryResult)>> {
-    let video = match Video::lookup_url(&conn, &result.url).await? {
+    let video = match Video::lookup_url_id(&conn, &url_id).await? {
         None => {
-            let id = Video::insert_url(&conn, &result.url, &source_link).await?;
+            let display_name = generate_id();
+            let id =
+                Video::insert_new_media(&conn, &url_id, &result.url, &display_url, &display_name)
+                    .await?;
             return Ok(vec![(
                 ResultType::VideoToBeProcessed,
                 InlineQueryResult::article(format!("process-{}", id), "".into(), "".into()),

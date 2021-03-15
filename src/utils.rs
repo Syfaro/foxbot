@@ -715,6 +715,40 @@ pub fn user_from_update(update: &tgbotapi::Update) -> Option<&tgbotapi::User> {
     }
 }
 
+pub fn chat_from_update(update: &tgbotapi::Update) -> Option<&tgbotapi::Chat> {
+    use tgbotapi::*;
+
+    let chat = match &update {
+        Update {
+            message: Some(message),
+            ..
+        } => &message.chat,
+        Update {
+            edited_message: Some(message),
+            ..
+        } => &message.chat,
+        Update {
+            channel_post: Some(message),
+            ..
+        } => &message.chat,
+        Update {
+            edited_channel_post: Some(message),
+            ..
+        } => &message.chat,
+        Update {
+            my_chat_member: Some(chat_member),
+            ..
+        } => &chat_member.chat,
+        Update {
+            chat_member: Some(chat_member),
+            ..
+        } => &chat_member.chat,
+        _ => return None,
+    };
+
+    Some(chat)
+}
+
 pub async fn can_delete_in_chat(
     bot: &tgbotapi::Telegram,
     conn: &sqlx::Pool<sqlx::Postgres>,
