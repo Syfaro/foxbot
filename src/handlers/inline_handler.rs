@@ -66,6 +66,123 @@ impl InlineHandler {
 
         Ok(())
     }
+
+    async fn video_progress(
+        &self,
+        handler: &crate::MessageHandler,
+        message: &Message,
+    ) -> anyhow::Result<super::Status> {
+        tracing::info!("Got video progress: {:?}", message.text);
+
+        let text = message.text.clone().context("Progress was missing text")?;
+        let args: Vec<_> = text.split(' ').collect();
+        let id: i32 = args
+            .get(1)
+            .context("Progress was missing ID")?
+            .parse()
+            .context("Progress ID was not number")?;
+        let progress = args
+            .get(2)
+            .context("Progress was missing progress percentage")?;
+
+        let video = match crate::models::Video::lookup_id(&handler.conn, id).await? {
+            Some(video) => video,
+            None => {
+                handler
+                    .send_generic_reply(&message, "video-unknown")
+                    .await?;
+                return Ok(Completed);
+            }
+        };
+
+        let chat_id = match video.chat_id {
+            Some(chat_id) => chat_id,
+            None => return Ok(Completed),
+        };
+
+        let msg = handler
+            .get_fluent_bundle(
+                message
+                    .from
+                    .as_ref()
+                    .and_then(|from| from.language_code.as_deref()),
+                |bundle| {
+                    let mut args = fluent::FluentArgs::new();
+                    args.insert("percent", progress.to_string().into());
+                    get_message(&bundle, "video-progress", Some(args)).unwrap()
+                },
+            )
+            .await;
+
+        let edit_message = EditMessageText {
+            chat_id: chat_id.into(),
+            message_id: video.message_id,
+            text: msg,
+            ..Default::default()
+        };
+        handler.make_request(&edit_message).await?;
+
+        return Ok(Completed);
+    }
+
+    async fn video_complete(
+        &self,
+        handler: &crate::MessageHandler,
+        message: &Message,
+    ) -> anyhow::Result<super::Status> {
+        let text = message.text.clone().unwrap_or_default();
+        let args: Vec<_> = text.split(' ').collect();
+        let id: i32 = args[1].parse().unwrap();
+        let mp4_url = args[2];
+        let thumb_url = args[3];
+
+        let video = match crate::models::Video::lookup_id(&handler.conn, id).await? {
+            Some(video) => video,
+            None => {
+                handler
+                    .send_generic_reply(&message, "video-unknown")
+                    .await?;
+                return Ok(Completed);
+            }
+        };
+
+        let action = continuous_action(
+            handler.bot.clone(),
+            6,
+            video.chat_id.unwrap().into(),
+            message.from.clone(),
+            ChatAction::UploadVideo,
+        );
+
+        crate::models::Video::set_processed_url(&handler.conn, id, &mp4_url, &thumb_url).await?;
+
+        let video_return_button = handler
+            .get_fluent_bundle(None, |bundle| {
+                crate::utils::get_message(&bundle, "video-return-button", None).unwrap()
+            })
+            .await;
+
+        let send_video = SendVideo {
+            chat_id: video.chat_id.unwrap().into(),
+            video: FileType::URL(mp4_url.to_owned()),
+            reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
+                inline_keyboard: vec![vec![InlineKeyboardButton {
+                    text: video_return_button,
+                    switch_inline_query: Some(video.source.to_owned()),
+                    ..Default::default()
+                }]],
+            })),
+            supports_streaming: Some(true),
+            ..Default::default()
+        };
+
+        handler.make_request(&send_video).await?;
+        drop(action);
+
+        tracing::debug!("Finished handling video");
+
+        Ok(Completed)
+    }
 }
 
 #[async_trait]
@@ -91,83 +208,10 @@ impl super::Handler for InlineHandler {
                     }
                 }
                 Some(cmd) if cmd.name == "/videoprogress" => {
-                    tracing::info!("Got video progress: {:?}", cmd);
-                    let text = message.text.clone().unwrap_or_default();
-                    let args: Vec<_> = text.split(' ').collect();
-                    let id: i32 = args[1].parse().unwrap();
-                    let progress = args[2];
-                    let video = crate::models::Video::lookup_id(&handler.conn, id)
-                        .await
-                        .unwrap()
-                        .unwrap();
-                    let edit_message = EditMessageText {
-                        chat_id: video.chat_id.unwrap().into(),
-                        message_id: video.message_id,
-                        text: format!("{} complete...", progress),
-                        ..Default::default()
-                    };
-                    handler.make_request(&edit_message).await.unwrap();
-                    return Ok(Completed);
+                    return self.video_progress(&handler, &message).await;
                 }
                 Some(cmd) if cmd.name == "/videocomplete" => {
-                    let text = message.text.clone().unwrap_or_default();
-                    let args: Vec<_> = text.split(' ').collect();
-                    let id: i32 = args[1].parse().unwrap();
-                    let mp4_url = args[2];
-                    let thumb_url = args[3];
-
-                    let video = crate::models::Video::lookup_id(&handler.conn, id)
-                        .await
-                        .unwrap()
-                        .unwrap();
-
-                    let action = continuous_action(
-                        handler.bot.clone(),
-                        6,
-                        video.chat_id.unwrap().into(),
-                        message.from.clone(),
-                        ChatAction::UploadVideo,
-                    );
-
-                    crate::models::Video::set_processed_url(
-                        &handler.conn,
-                        id,
-                        &mp4_url,
-                        &thumb_url,
-                    )
-                    .await
-                    .unwrap();
-
-                    // Give video time to process? It often seems to fail if
-                    // trying to upload immediately.
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
-                    let video_return_button = handler
-                        .get_fluent_bundle(None, |bundle| {
-                            crate::utils::get_message(&bundle, "video-return-button", None).unwrap()
-                        })
-                        .await;
-
-                    let send_video = SendVideo {
-                        chat_id: video.chat_id.unwrap().into(),
-                        video: FileType::URL(mp4_url.to_owned()),
-                        reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(
-                            InlineKeyboardMarkup {
-                                inline_keyboard: vec![vec![InlineKeyboardButton {
-                                    text: video_return_button,
-                                    switch_inline_query: Some(video.source.to_owned()),
-                                    ..Default::default()
-                                }]],
-                            },
-                        )),
-                        supports_streaming: Some(true),
-                        ..Default::default()
-                    };
-
-                    handler.make_request(&send_video).await?;
-                    drop(action);
-
-                    tracing::debug!("Finished handling video");
+                    return self.video_complete(&handler, &message).await;
                 }
                 _ => (),
             }

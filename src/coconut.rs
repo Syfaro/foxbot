@@ -1,3 +1,5 @@
+use anyhow::Context;
+
 pub struct Coconut {
     api_token: String,
     webhook: String,
@@ -31,7 +33,7 @@ impl Coconut {
         }
     }
 
-    pub async fn start_video(&self, source: &str, name: &str) -> anyhow::Result<()> {
+    pub async fn start_video(&self, source: &str, name: &str) -> anyhow::Result<i32> {
         let config = self.build_config(&source, &name);
 
         let resp = self
@@ -50,9 +52,15 @@ impl Coconut {
             return Err(anyhow::anyhow!("Unable to create encode job"));
         }
 
-        tracing::trace!("Sent encode job: {:?}", resp.text().await);
+        let json: serde_json::Value = resp.json().await?;
+        tracing::trace!("Sent encode job: {:?}", json);
 
-        Ok(())
+        let id = json
+            .get("id")
+            .context("Coconut response missing ID")?
+            .as_i64()
+            .context("Coconut response ID was not number")?;
+        Ok(id as i32)
     }
 
     fn build_config(&self, source: &str, name: &str) -> String {
@@ -68,7 +76,9 @@ impl Coconut {
             set webhook = {webhook}?id={name}, events=true
 
             # Outputs
-            -> mp4:720p = $cdn/video/{name}.mp4
+            -> mp4:720p = $cdn/video/{name}.mp4, if=$source_duration <= 60
+            -> mp4:480p = $cdn/video/{name}.mp4, if=$source_duration <= 120 AND $source_duration > 60
+            -> mp4:360p = $cdn/video/{name}.mp4, if=$source_duration > 120
             -> jpg:250x0 = $cdn/thumbnail/{name}.jpg, number=1
         ",
             account_id = self.b2_account_id,

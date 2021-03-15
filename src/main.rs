@@ -548,21 +548,21 @@ async fn handle_request(
                     .await
                     .unwrap();
             } else {
-                let video_url = update
-                    .get("output_urls")
-                    .unwrap()
-                    .as_object()
-                    .unwrap()
-                    .get("mp4:720p")
-                    .unwrap()
-                    .as_str()
-                    .unwrap();
+                let output_urls = update.get("output_urls").unwrap().as_object().unwrap();
 
-                let thumb_url = update
-                    .get("output_urls")
-                    .unwrap()
-                    .as_object()
-                    .unwrap()
+                let video_url = if let Some(video) = output_urls.get("mp4:720p") {
+                    video
+                } else if let Some(video) = output_urls.get("mp4:480p") {
+                    video
+                } else if let Some(video) = output_urls.get("mp4:360p") {
+                    video
+                } else {
+                    panic!("missing video");
+                }
+                .as_str()
+                .unwrap();
+
+                let thumb_url = output_urls
                     .get("jpg:250x0")
                     .unwrap()
                     .as_array()
