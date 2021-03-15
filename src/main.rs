@@ -594,38 +594,6 @@ async fn handle_request(
                     .unwrap();
             }
 
-            // let conn = handler_clone.conn.check_out().await.unwrap();
-            // let video = crate::models::Video::lookup_id(&conn, id)
-            //     .await
-            //     .unwrap()
-            //     .unwrap();
-            // crate::models::Video::set_processed_url(&conn, id, &url)
-            //     .await
-            //     .unwrap();
-
-            // let video_return_button = handler_clone
-            //     .get_fluent_bundle(None, |bundle| {
-            //         crate::utils::get_message(&bundle, "video-return-button", None).unwrap()
-            //     })
-            //     .await;
-            // let send_video = SendVideo {
-            //     chat_id: video.chat_id.unwrap().into(),
-            //     video: FileType::URL(url.to_owned()),
-            //     reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
-            //         inline_keyboard: vec![vec![InlineKeyboardButton {
-            //             text: video_return_button,
-            //             switch_inline_query: Some(video.source.to_owned()),
-            //             ..Default::default()
-            //         }]],
-            //     })),
-            //     supports_streaming: Some(true),
-            //     ..Default::default()
-            // };
-            // handler_clone.make_request(&send_video).await.unwrap();
-
-            // count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-            // tracing::debug!("finished handling video");
-
             Ok(Response::new(Body::from("OK")))
         }
         (&hyper::Method::GET, "/twitter/callback") => {

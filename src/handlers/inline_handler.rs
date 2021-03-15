@@ -115,10 +115,20 @@ impl super::Handler for InlineHandler {
                     let id: i32 = args[1].parse().unwrap();
                     let mp4_url = args[2];
                     let thumb_url = args[3];
+
                     let video = crate::models::Video::lookup_id(&handler.conn, id)
                         .await
                         .unwrap()
                         .unwrap();
+
+                    let action = continuous_action(
+                        handler.bot.clone(),
+                        6,
+                        video.chat_id.unwrap().into(),
+                        message.from.clone(),
+                        ChatAction::UploadVideo,
+                    );
+
                     crate::models::Video::set_processed_url(
                         &handler.conn,
                         id,
@@ -128,11 +138,16 @@ impl super::Handler for InlineHandler {
                     .await
                     .unwrap();
 
+                    // Give video time to process? It often seems to fail if
+                    // trying to upload immediately.
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
                     let video_return_button = handler
                         .get_fluent_bundle(None, |bundle| {
                             crate::utils::get_message(&bundle, "video-return-button", None).unwrap()
                         })
                         .await;
+
                     let send_video = SendVideo {
                         chat_id: video.chat_id.unwrap().into(),
                         video: FileType::URL(mp4_url.to_owned()),
@@ -148,7 +163,9 @@ impl super::Handler for InlineHandler {
                         supports_streaming: Some(true),
                         ..Default::default()
                     };
-                    handler.make_request(&send_video).await.unwrap();
+
+                    handler.make_request(&send_video).await?;
+                    drop(action);
 
                     tracing::debug!("Finished handling video");
                 }
