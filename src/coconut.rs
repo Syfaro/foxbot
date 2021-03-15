@@ -78,7 +78,7 @@ impl Coconut {
             # Outputs
             -> mp4:720p = $cdn/video/{name}.mp4, if=$source_duration <= 60
             -> mp4:480p = $cdn/video/{name}.mp4, if=$source_duration <= 120 AND $source_duration > 60
-            -> mp4:360p = $cdn/video/{name}.mp4, if=$source_duration > 120
+            -> mp4:360p = $cdn/video/{name}.mp4, if=$source_duration > 120, duration = 200
             -> jpg:250x0 = $cdn/thumbnail/{name}.jpg, number=1
         ",
             account_id = self.b2_account_id,
