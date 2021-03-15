@@ -164,7 +164,7 @@ impl InlineHandler {
 
         let send_video = SendVideo {
             chat_id: video.chat_id.unwrap().into(),
-            video: FileType::URL(mp4_url.to_owned()),
+            video: FileType::Url(mp4_url.to_owned()),
             reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
                 inline_keyboard: vec![vec![InlineKeyboardButton {
                     text: video_return_button,
@@ -556,7 +556,7 @@ fn build_gif_result(
         let mut gif = InlineQueryResult::gif(generate_id(), full_url, thumb_url);
         gif.reply_markup = Some(keyboard.clone());
 
-        if let InlineQueryType::GIF(ref mut result) = gif.content {
+        if let InlineQueryType::Gif(ref mut result) = gif.content {
             result.caption = Some(message.to_string());
         }
 

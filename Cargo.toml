@@ -57,7 +57,7 @@ opentelemetry-jaeger = "0.5"
 tracing-opentelemetry = "0.5"
 
 redis = { version = "0.20", features = ["connection-manager", "tokio-comp"] }
-sqlx = { version = "0.5", default-features = false, features = ["runtime-tokio-rustls", "macros", "postgres", "offline", "json", "migrate"] }
+sqlx = { version = "0.5", default-features = false, features = ["runtime-tokio-rustls", "macros", "postgres", "offline", "json", "migrate", "time"] }
 
 rusoto_core = "0.46"
 rusoto_credential = "0.46"

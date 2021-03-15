@@ -44,6 +44,8 @@ trigger:
   event:
     exclude:
     - promote
+    - cron
+    - custom
 
 ---
 kind: pipeline
@@ -98,7 +100,6 @@ steps:
   pull: always
   image: plugins/docker
   settings:
-    debug: true
     password:
       from_secret: docker_password
     registry: registry.huefox.com
@@ -153,6 +154,8 @@ steps:
       from_secret: deploy_host
     key:
       from_secret: deploy_key
+    port:
+      from_secret: deploy_port
     script:
     - export VCS_REF=${DRONE_COMMIT_SHA}
     - bash /deploy/foxbot.sh
@@ -181,13 +184,46 @@ steps:
     target:
     - production
 
+image_pull_secrets:
+- dockerconfig
+
 trigger:
   event:
     exclude:
     - pull_request
+    - cron
+    - custom
+
+---
+kind: pipeline
+type: docker
+name: base
+
+platform:
+  os: linux
+  arch: amd64
+
+steps:
+- name: build
+  image: plugins/docker
+  settings:
+    dockerfile: Dockerfile.base
+    password:
+      from_secret: docker_password
+    registry: registry.huefox.com
+    repo: registry.huefox.com/foxbot-base
+    tags:
+    - latest
+    username:
+      from_secret: docker_username
+
+trigger:
+  event:
+  - cron
+  - custom
 
 ---
 kind: signature
-hmac: 56948fc1ef40a52b846746ab0ed09367dd545c49b1e5b6984fd948341f6d99f3
+hmac: a046001f57b235b17324729fe497f5e3a2dd73910ca9dbe04ef8e9a1b8519c70
 
 ...

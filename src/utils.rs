@@ -107,13 +107,20 @@ async fn upload_image(
     //
     // This used to always convert images to JPEGs, but it does not appear that
     // any Telegram client actually requires this.
+    //
+    // When we do have to convert images to JPEGs, make sure to convert them to
+    // Rgb8 before attempting to encode the data. Certain images can have larger
+    // bit depths that can't be represented as JPEGs and generate an error
+    // instead of working as expected.
     let (im, buf) = if thumb {
         let im = im.thumbnail(400, 400);
+        let im = image::DynamicImage::ImageRgb8(im.into_rgb8());
         let mut buf = bytes::BytesMut::with_capacity(2_000_000).writer();
         im.write_to(&mut buf, image::ImageOutputFormat::Jpeg(90))?;
         (im, buf.into_inner().freeze())
     } else if data.len() > 5_000_000 {
         let im = im.resize(2000, 2000, image::imageops::FilterType::Lanczos3);
+        let im = image::DynamicImage::ImageRgb8(im.into_rgb8());
         let mut buf = bytes::BytesMut::with_capacity(2_000_000).writer();
         im.write_to(&mut buf, image::ImageOutputFormat::Jpeg(90))?;
         (im, buf.into_inner().freeze())
@@ -609,7 +616,7 @@ fn extract_entity_links<'a>(
     for entity in entities {
         if entity.entity_type == tgbotapi::MessageEntityType::TextLink {
             links.push(entity.url.as_ref().unwrap());
-        } else if entity.entity_type == tgbotapi::MessageEntityType::URL {
+        } else if entity.entity_type == tgbotapi::MessageEntityType::Url {
             links.push(get_entity_text(&text, &entity));
         }
     }
@@ -822,7 +829,7 @@ mod tests {
         let url = get_entity_text(
             "hello world http://test.com",
             &tgbotapi::MessageEntity {
-                entity_type: tgbotapi::MessageEntityType::URL,
+                entity_type: tgbotapi::MessageEntityType::Url,
                 offset: 12,
                 length: 15,
                 url: None,
@@ -837,7 +844,7 @@ mod tests {
         let url = get_entity_text(
             "http://test.com",
             &tgbotapi::MessageEntity {
-                entity_type: tgbotapi::MessageEntityType::URL,
+                entity_type: tgbotapi::MessageEntityType::Url,
                 offset: 0,
                 length: 15,
                 url: None,
@@ -852,7 +859,7 @@ mod tests {
         let url = get_entity_text(
             "△ http://example.com/ △",
             &tgbotapi::MessageEntity {
-                entity_type: tgbotapi::MessageEntityType::URL,
+                entity_type: tgbotapi::MessageEntityType::Url,
                 offset: 2,
                 length: 19,
                 url: None,
@@ -890,7 +897,7 @@ mod tests {
                 ],
             }),
             entities: Some(vec![tgbotapi::MessageEntity {
-                entity_type: tgbotapi::MessageEntityType::URL,
+                entity_type: tgbotapi::MessageEntityType::Url,
                 offset: 0,
                 length: 22,
                 url: Some("https://www.weasyl.com".to_string()),

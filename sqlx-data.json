@@ -121,6 +121,20 @@
       ]
     }
   },
+  "3e4586878ed2c0623f86df6ef9f07b8172e5396273f36bccce37f0868d6116e9": {
+    "query": "INSERT INTO permission (chat_id, updated_at, permissions) VALUES ($1, to_timestamp($2::int), $3)",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Int4",
+          "Jsonb"
+        ]
+      },
+      "nullable": []
+    }
+  },
   "3e5b922666587ac7304abb0f97c5a2c26226350eccc1b2eb2781f3edcab0e1a8": {
     "query": "DELETE FROM twitter_account WHERE user_id = $1",
     "describe": {

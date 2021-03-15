@@ -317,6 +317,7 @@ async fn main() {
         Box::new(handlers::SettingsHandler),
         Box::new(handlers::TwitterHandler),
         Box::new(handlers::ErrorCleanup),
+        Box::new(handlers::PermissionHandler),
     ];
 
     let region = rusoto_core::Region::Custom {
@@ -362,17 +363,15 @@ async fn main() {
         redis,
     });
 
-    let _guard = if let Some(dsn) = &config.sentry_dsn {
-        Some(sentry::init(sentry::ClientOptions {
-            dsn: Some(dsn.parse().unwrap()),
+    let _guard = config.sentry_dsn.as_ref().map(|sentry_dsn| {
+        sentry::init(sentry::ClientOptions {
+            dsn: Some(sentry_dsn.parse().unwrap()),
             debug: true,
             release: option_env!("RELEASE").map(std::borrow::Cow::from),
             attach_stacktrace: true,
             ..Default::default()
-        }))
-    } else {
-        None
-    };
+        })
+    });
 
     tracing::info!(
         "sentry enabled: {}",
@@ -406,6 +405,7 @@ async fn main() {
             .expect("Missing WEBHOOK_ENDPOINT");
         let set_webhook = SetWebhook {
             url: webhook_endpoint.to_owned(),
+            ..Default::default()
         };
         if let Err(e) = bot.make_request(&set_webhook).await {
             panic!("unable to set webhook: {:?}", e);
