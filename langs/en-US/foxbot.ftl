@@ -42,6 +42,10 @@ inline-source = Source
 inline-no-results-title = No results found
 inline-no-results-body = I could not find any results for the provided query.
 
+# Inline Results Misc
+inline-help = Help
+inline-process = Process Video
+
 # Inline Videos
 video-starting = Starting to process video...
 video-progress = Video processing is { $percent } complete...

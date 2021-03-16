@@ -317,14 +317,26 @@ impl super::Handler for InlineHandler {
         // If the query was empty, display a help button to make it easy to get
         // started using the bot.
         if inline.query.is_empty() {
-            answer_inline.switch_pm_text = Some("Help".to_string());
+            let help_text = handler
+                .get_fluent_bundle(inline.from.language_code.as_deref(), |bundle| {
+                    get_message(&bundle, "inline-help", None).unwrap()
+                })
+                .await;
+
+            answer_inline.switch_pm_text = Some(help_text);
             answer_inline.switch_pm_parameter = Some("help".to_string());
         }
 
         // If we had a video that needed to be processed, replace the switch pm
         // parameters to go and process that video.
         if let Some(video) = has_video {
-            answer_inline.switch_pm_text = Some("Process video".to_string());
+            let process_text = handler
+                .get_fluent_bundle(inline.from.language_code.as_deref(), |bundle| {
+                    get_message(&bundle, "inline-process", None).unwrap()
+                })
+                .await;
+
+            answer_inline.switch_pm_text = Some(process_text);
             answer_inline.switch_pm_parameter = Some(video.id);
 
             // Do not cache! We quickly want to change this result after
@@ -511,8 +523,8 @@ async fn build_webm_result(
 ) -> anyhow::Result<Vec<(ResultType, InlineQueryResult)>> {
     let video = match Video::lookup_url_id(&conn, &url_id).await? {
         None => {
-            let display_name = Video::insert_new_media(&conn, &url_id, &result.url, &display_url)
-                .await?;
+            let display_name =
+                Video::insert_new_media(&conn, &url_id, &result.url, &display_url).await?;
 
             return Ok(vec![(
                 ResultType::VideoToBeProcessed,
