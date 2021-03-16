@@ -25,20 +25,24 @@ impl InlineHandler {
         handler: &crate::MessageHandler,
         message: &Message,
     ) -> anyhow::Result<()> {
-        use futures::TryStreamExt;
-        use rusoto_s3::S3;
-        use tokio::io::AsyncWriteExt;
-        use tokio_stream::StreamExt;
-
         let text = message.text.as_ref().unwrap();
-        let id = match text.split('-').nth(1) {
+        let display_name = match text.split('-').nth(1) {
             Some(id) => id,
             None => return Ok(()),
         };
-        let id: i32 = match id.parse() {
-            Ok(id) => id,
-            Err(_err) => return Ok(()),
-        };
+
+        let video = Video::lookup_display_name(&handler.conn, display_name)
+            .await?
+            .expect("missing video");
+
+        if video.job_id.is_none() {
+            let job_id = handler
+                .coconut
+                .start_video(&video.url, &video.display_name)
+                .await?;
+
+            Video::set_job_id(&handler.conn, video.id, job_id).await?;
+        }
 
         let lang = message
             .from
@@ -58,118 +62,157 @@ impl InlineHandler {
         };
         let sent = handler.make_request(&send_message).await?;
 
-        let video = Video::lookup_id(&handler.conn, id)
+        Video::add_message_id(&handler.conn, video.id, sent.chat.id, sent.message_id).await?;
+
+        Ok(())
+    }
+
+    #[tracing::instrument(skip(self, handler, message), fields(video_id, progress))]
+    async fn video_progress(
+        &self,
+        handler: &crate::MessageHandler,
+        message: &Message,
+    ) -> anyhow::Result<super::Status> {
+        tracing::info!("Got video progress: {:?}", message.text);
+
+        let text = message.text.clone().context("Progress was missing text")?;
+        let args: Vec<_> = text.split(' ').collect();
+        let display_name = args.get(1).context("Progress was missing ID")?;
+        let progress = args
+            .get(2)
+            .context("Progress was missing progress percentage")?;
+        tracing::Span::current().record("progress", &progress);
+
+        let video = crate::models::Video::lookup_display_name(&handler.conn, &display_name)
             .await?
-            .expect("missing video");
+            .context("Video was missing")?;
+        tracing::Span::current().record("video_id", &video.id);
+        let messages = crate::models::Video::associated_messages(&handler.conn, video.id).await?;
 
-        let _ = std::fs::create_dir("videos");
+        let msg = handler
+            .get_fluent_bundle(
+                message
+                    .from
+                    .as_ref()
+                    .and_then(|from| from.language_code.as_deref()),
+                |bundle| {
+                    let mut args = fluent::FluentArgs::new();
+                    args.insert("percent", progress.to_string().into());
+                    get_message(&bundle, "video-progress", Some(args)).unwrap()
+                },
+            )
+            .await;
 
-        let name = format!("videos/{}.webm", generate_id());
-        let path = std::path::Path::new(&name);
-
-        let mut stream = reqwest::get(&video.url).await?.bytes_stream();
-        let mut file = tokio::fs::File::create(&path).await?;
-        let mut size: usize = 0;
-
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
-            size += chunk.len();
-
-            if size > 50_000_000 {
-                drop(file);
-                tokio::fs::remove_file(&path).await?;
-                let video_too_large = handler
-                    .get_fluent_bundle(lang, |bundle| {
-                        get_message(&bundle, "video-too-large", None).unwrap()
-                    })
-                    .await;
-                let edit_message = EditMessageText {
-                    message_id: Some(sent.message_id),
-                    chat_id: message.chat_id(),
-                    text: video_too_large,
-                    ..Default::default()
-                };
-                handler.make_request(&edit_message).await?;
-                return Ok(());
-            }
-
-            file.write(&chunk).await?;
+        for message in messages {
+            let edit_message = EditMessageText {
+                chat_id: message.0.into(),
+                message_id: Some(message.1),
+                text: msg.clone(),
+                ..Default::default()
+            };
+            handler.make_request(&edit_message).await?;
         }
 
-        let name_clone = name.clone();
-        let res = tokio::task::spawn_blocking(move || {
-            let name = name_clone;
-            crate::video::process_video(std::path::Path::new(&name))
-        })
-        .await??;
+        Ok(Completed)
+    }
 
-        drop(file);
-        tokio::fs::remove_file(&path).await?;
+    #[tracing::instrument(skip(self, handler, message), fields(video_id))]
+    async fn video_complete(
+        &self,
+        handler: &crate::MessageHandler,
+        message: &Message,
+    ) -> anyhow::Result<super::Status> {
+        let text = message.text.clone().unwrap_or_default();
+        let args: Vec<_> = text.split(' ').collect();
+        let display_name = args.get(1).context("Progress was missing ID")?;
+        let mp4_url = *args.get(2).context("Complete was missing MP4 URL")?;
+        let thumb_url = args.get(3).context("Complete was missing thumb URL")?;
 
-        let video_finished = handler
-            .get_fluent_bundle(lang, |bundle| {
-                get_message(&bundle, "video-finished", None).unwrap()
-            })
-            .await;
-        let edit_message = EditMessageText {
-            message_id: Some(sent.message_id),
-            chat_id: message.chat_id(),
-            text: video_finished,
-            ..Default::default()
+        let video = crate::models::Video::lookup_display_name(&handler.conn, &display_name)
+            .await?
+            .context("Video was missing")?;
+        tracing::Span::current().record("video_id", &video.id);
+        crate::models::Video::set_processed_url(&handler.conn, video.id, &mp4_url, &thumb_url)
+            .await?;
+
+        let mut messages =
+            crate::models::Video::associated_messages(&handler.conn, video.id).await?;
+
+        tracing::debug!(count = messages.len(), "Found messages associated with job");
+
+        let first = match messages.pop() {
+            Some(msg) => msg,
+            None => return Ok(Completed),
         };
-        handler.make_request(&edit_message).await?;
-
-        let file = tokio::fs::File::open(&res).await.unwrap();
-        let metadata = file.metadata().await?;
-
-        let byte_stream =
-            tokio_util::codec::FramedRead::new(file, tokio_util::codec::BytesCodec::new())
-                .map_ok(|bytes| bytes.freeze());
-        let byte_stream = rusoto_core::ByteStream::new(byte_stream);
-
-        let key = format!("{}.mp4", generate_id());
-
-        let put = rusoto_s3::PutObjectRequest {
-            acl: Some("public-read".into()),
-            bucket: handler.config.s3_bucket.clone(),
-            content_type: Some("video/mp4".into()),
-            key: key.clone(),
-            body: Some(byte_stream),
-            content_length: Some(metadata.len() as i64),
-            ..Default::default()
-        };
-
-        handler.s3.put_object(put).await.unwrap();
-        tokio::fs::remove_file(res).await.unwrap();
-
-        let mp4_url = format!(
-            "{}/{}/{}",
-            handler.config.s3_url, handler.config.s3_bucket, key
-        );
-
-        Video::set_processed_url(&handler.conn, &video.url, &mp4_url).await?;
 
         let video_return_button = handler
-            .get_fluent_bundle(lang, |bundle| {
-                get_message(&bundle, "video-return-button", None).unwrap()
+            .get_fluent_bundle(None, |bundle| {
+                crate::utils::get_message(&bundle, "video-return-button", None).unwrap()
             })
             .await;
+
+        // First, we should handle one message to upload the file. This is a
+        // special case because afterwards all additional messages can be sent
+        // the existing file ID instead of a new upload.
+
+        let action = continuous_action(
+            handler.bot.clone(),
+            6,
+            first.0.into(),
+            message.from.clone(),
+            ChatAction::UploadVideo,
+        );
+
         let send_video = SendVideo {
-            chat_id: message.chat_id(),
-            video: FileType::Url(mp4_url),
+            chat_id: first.0.into(),
+            video: FileType::Url(mp4_url.to_owned()),
             reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
                 inline_keyboard: vec![vec![InlineKeyboardButton {
-                    text: video_return_button,
-                    switch_inline_query: Some(video.source.to_owned()),
+                    text: video_return_button.clone(),
+                    switch_inline_query: Some(video.display_url.to_owned()),
                     ..Default::default()
                 }]],
             })),
             supports_streaming: Some(true),
             ..Default::default()
         };
-        handler.make_request(&send_video).await?;
 
-        Ok(())
+        let message = handler.make_request(&send_video).await?;
+        drop(action);
+
+        // Now that we've sent the first message, send each additional message
+        // with the returned video ID.
+
+        let file_id = message
+            .video
+            .context("Sent video was missing file ID")?
+            .file_id;
+
+        tracing::debug!(%file_id, "Sent video, reusing for additional messages");
+
+        for message in messages {
+            let send_video = SendVideo {
+                chat_id: message.0.into(),
+                video: FileType::FileID(file_id.clone()),
+                reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
+                    inline_keyboard: vec![vec![InlineKeyboardButton {
+                        text: video_return_button.clone(),
+                        switch_inline_query: Some(video.display_url.to_owned()),
+                        ..Default::default()
+                    }]],
+                })),
+                supports_streaming: Some(true),
+                ..Default::default()
+            };
+
+            if let Err(err) = handler.make_request(&send_video).await {
+                tracing::error!("Unable to send video: {:?}", err);
+            }
+        }
+
+        tracing::debug!("Finished handling video");
+
+        Ok(Completed)
     }
 }
 
@@ -194,6 +237,12 @@ impl super::Handler for InlineHandler {
                             return Ok(Completed);
                         }
                     }
+                }
+                Some(cmd) if cmd.name == "/videoprogress" && message.message_id == 0 => {
+                    return self.video_progress(&handler, &message).await;
+                }
+                Some(cmd) if cmd.name == "/videocomplete" && message.message_id == 0 => {
+                    return self.video_complete(&handler, &message).await;
                 }
                 _ => (),
             }
@@ -268,14 +317,26 @@ impl super::Handler for InlineHandler {
         // If the query was empty, display a help button to make it easy to get
         // started using the bot.
         if inline.query.is_empty() {
-            answer_inline.switch_pm_text = Some("Help".to_string());
+            let help_text = handler
+                .get_fluent_bundle(inline.from.language_code.as_deref(), |bundle| {
+                    get_message(&bundle, "inline-help", None).unwrap()
+                })
+                .await;
+
+            answer_inline.switch_pm_text = Some(help_text);
             answer_inline.switch_pm_parameter = Some("help".to_string());
         }
 
         // If we had a video that needed to be processed, replace the switch pm
         // parameters to go and process that video.
         if let Some(video) = has_video {
-            answer_inline.switch_pm_text = Some("Process video".to_string());
+            let process_text = handler
+                .get_fluent_bundle(inline.from.language_code.as_deref(), |bundle| {
+                    get_message(&bundle, "inline-process", None).unwrap()
+                })
+                .await;
+
+            answer_inline.switch_pm_text = Some(process_text);
             answer_inline.switch_pm_parameter = Some(video.id);
 
             // Do not cache! We quickly want to change this result after
@@ -340,9 +401,24 @@ async fn process_result(
                 None => result.url.clone(),
             };
 
-            let results = build_webm_result(&handler.conn, &result, thumb_url, &keyboard, &source)
-                .await
-                .expect("unable to process webm results");
+            let url_id = {
+                let sites = handler.sites.lock().await;
+                sites
+                    .iter()
+                    .find_map(|site| site.url_id(&source))
+                    .context("Result being processed was missing URL ID")?
+            };
+
+            let results = build_webm_result(
+                &handler.conn,
+                &result,
+                thumb_url,
+                &keyboard,
+                url_id,
+                &source,
+            )
+            .await
+            .expect("unable to process webm results");
 
             Ok(Some(results))
         }
@@ -442,20 +518,31 @@ async fn build_webm_result(
     result: &crate::sites::PostInfo,
     thumb_url: String,
     keyboard: &InlineKeyboardMarkup,
-    source_link: &str,
+    url_id: String,
+    display_url: &str,
 ) -> anyhow::Result<Vec<(ResultType, InlineQueryResult)>> {
-    let video = match Video::lookup_url(&conn, &result.url).await? {
+    let video = match Video::lookup_url_id(&conn, &url_id).await? {
         None => {
-            let id = Video::insert_url(&conn, &result.url, &source_link).await?;
+            let display_name =
+                Video::insert_new_media(&conn, &url_id, &result.url, &display_url).await?;
+
             return Ok(vec![(
                 ResultType::VideoToBeProcessed,
-                InlineQueryResult::article(format!("process-{}", id), "".into(), "".into()),
+                InlineQueryResult::article(
+                    format!("process-{}", display_name),
+                    "".into(),
+                    "".into(),
+                ),
             )]);
         }
         Some(video) if !video.processed => {
             return Ok(vec![(
                 ResultType::VideoToBeProcessed,
-                InlineQueryResult::article(format!("process-{}", video.id), "".into(), "".into()),
+                InlineQueryResult::article(
+                    format!("process-{}", video.display_name),
+                    "".into(),
+                    "".into(),
+                ),
             )]);
         }
         Some(video) => video,

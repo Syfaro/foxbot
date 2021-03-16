@@ -367,18 +367,26 @@ pub struct Video {
     pub url: String,
     /// The URL of the converted video.
     pub mp4_url: Option<String>,
+    /// The URL of the converted video's thumbnail.
+    pub thumb_url: Option<String>,
+    /// The display URL for returning to the user when processing is complete.
+    pub display_url: String,
+    /// A unique display name representing the file's path and public ID.
+    pub display_name: String,
+    /// A job ID, if one exists, from Coconut.
+    pub job_id: Option<i32>,
 }
 
 impl Video {
-    /// Lookup a Video by ID.
-    pub async fn lookup_id(
+    /// Lookup a video by the display name.
+    pub async fn lookup_display_name(
         conn: &sqlx::Pool<sqlx::Postgres>,
-        id: i32,
+        display_name: &str,
     ) -> anyhow::Result<Option<Video>> {
         let video = sqlx::query_as!(
             Video,
-            "SELECT id, processed, source, url, mp4_url FROM videos WHERE id = $1",
-            id
+            "SELECT id, processed, source, url, mp4_url, thumb_url, display_url, display_name, job_id FROM videos WHERE display_name = $1",
+            display_name
         )
         .fetch_optional(conn)
         .await?;
@@ -386,15 +394,15 @@ impl Video {
         Ok(video)
     }
 
-    /// Lookup a Video by URL.
-    pub async fn lookup_url(
+    /// Lookup a video by the URL ID.
+    pub async fn lookup_url_id(
         conn: &sqlx::Pool<sqlx::Postgres>,
-        url: &str,
+        url_id: &str,
     ) -> anyhow::Result<Option<Video>> {
         let video = sqlx::query_as!(
             Video,
-            "SELECT id, processed, source, url, mp4_url FROM videos WHERE url = $1",
-            url
+            "SELECT id, processed, source, url, mp4_url, thumb_url, display_url, display_name, job_id FROM videos WHERE source = $1",
+            url_id
         )
         .fetch_optional(conn)
         .await?;
@@ -402,38 +410,91 @@ impl Video {
         Ok(video)
     }
 
-    /// Insert a new URL into the database and return the ID.
-    pub async fn insert_url(
+    /// Insert a new media item with a given URL ID and media URL.
+    pub async fn insert_new_media(
         conn: &sqlx::Pool<sqlx::Postgres>,
-        url: &str,
-        source: &str,
-    ) -> anyhow::Result<i32> {
+        url_id: &str,
+        media_url: &str,
+        display_url: &str,
+    ) -> anyhow::Result<String> {
         let row = sqlx::query!(
-            "INSERT INTO videos (url, source) VALUES ($1, $2) RETURNING id",
-            url,
-            source
+            "INSERT INTO videos (source, url, display_url, display_name) VALUES ($1, $2, $3, $4) ON CONFLICT ON CONSTRAINT unique_source DO UPDATE SET source = EXCLUDED.source RETURNING display_name",
+            url_id,
+            media_url,
+            display_url,
+            crate::generate_id()
         )
         .fetch_one(conn)
         .await?;
 
-        Ok(row.id)
+        Ok(row.display_name)
     }
 
-    /// Update a video's mp4_url when it has been processed.
+    /// Set the Coconut job ID for the video.
+    pub async fn set_job_id(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        id: i32,
+        job_id: i32,
+    ) -> anyhow::Result<()> {
+        sqlx::query!("UPDATE videos SET job_id = $1 WHERE id = $2", job_id, id)
+            .execute(conn)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Update video by adding processed URLs.
     pub async fn set_processed_url(
         conn: &sqlx::Pool<sqlx::Postgres>,
-        url: &str,
+        id: i32,
         mp4_url: &str,
+        thumb_url: &str,
     ) -> anyhow::Result<()> {
         sqlx::query!(
-            "UPDATE videos SET processed = true, mp4_url = $1 WHERE url = $2",
+            "UPDATE videos SET processed = true, mp4_url = $1, thumb_url = $2 WHERE id = $3",
             mp4_url,
-            url
+            thumb_url,
+            id
         )
         .execute(conn)
         .await?;
 
         Ok(())
+    }
+
+    /// Add a new message associated with a video encoding job.
+    pub async fn add_message_id(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        id: i32,
+        chat_id: i64,
+        message_id: i32,
+    ) -> anyhow::Result<()> {
+        sqlx::query!(
+            "INSERT INTO video_job_message (video_id, chat_id, message_id) VALUES ($1, $2, $3)",
+            id,
+            chat_id,
+            message_id
+        )
+        .execute(conn)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Get messages associated with a video job.
+    pub async fn associated_messages(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        id: i32,
+    ) -> anyhow::Result<Vec<(i64, i32)>> {
+        let ids = sqlx::query!(
+            "SELECT chat_id, message_id FROM video_job_message WHERE video_id = $1",
+            id
+        )
+        .map(|row| (row.chat_id, row.message_id))
+        .fetch_all(conn)
+        .await?;
+
+        Ok(ids)
     }
 }
 

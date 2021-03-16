@@ -14,19 +14,6 @@
       "nullable": []
     }
   },
-  "24a6ba1caeb1dbede2cdc1de1cc5895b853dd2e35050213b22da2fdd4bb6cf92": {
-    "query": "UPDATE videos SET processed = true, mp4_url = $1 WHERE url = $2",
-    "describe": {
-      "columns": [],
-      "parameters": {
-        "Left": [
-          "Text",
-          "Text"
-        ]
-      },
-      "nullable": []
-    }
-  },
   "24bded212f38d7d7f7ea45eadc24c1b39847aa237b251a9afdf0329905f86e52": {
     "query": "SELECT value FROM user_config WHERE user_id = $1 AND name = $2",
     "describe": {
@@ -48,6 +35,29 @@
       ]
     }
   },
+  "28d26596fc13646a339972a6afd7de59cf78eeba3a122fb1efcf798f389ec8f5": {
+    "query": "INSERT INTO videos (source, url, display_url, display_name) VALUES ($1, $2, $3, $4) ON CONFLICT ON CONSTRAINT unique_source DO UPDATE SET source = EXCLUDED.source RETURNING display_name",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "display_name",
+          "type_info": "Text"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text",
+          "Text",
+          "Text",
+          "Text"
+        ]
+      },
+      "nullable": [
+        false
+      ]
+    }
+  },
   "306521b8db215138c72d94a88a7a7fca5f2d73ce6aa1295b13191c11ff21b77e": {
     "query": "INSERT INTO twitter_auth (user_id, request_key, request_secret) VALUES ($1, $2, $3)",
     "describe": {
@@ -60,27 +70,6 @@
         ]
       },
       "nullable": []
-    }
-  },
-  "3311ffe861875a80e268eb8699957611cc57ac2b154c2b301cfa320157fabdf7": {
-    "query": "INSERT INTO videos (url, source) VALUES ($1, $2) RETURNING id",
-    "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "id",
-          "type_info": "Int4"
-        }
-      ],
-      "parameters": {
-        "Left": [
-          "Text",
-          "Text"
-        ]
-      },
-      "nullable": [
-        false
-      ]
     }
   },
   "3dd1ec96436781e96e7cf25af7d38007d21bca735234b5d7f42725f8a2c5fc6a": {
@@ -228,47 +217,42 @@
       ]
     }
   },
-  "9d1716e0d1e1459adbe1275e868a5cd2b92917a16b5d5e4e6b9fdf5e74fc3d79": {
-    "query": "SELECT id, processed, source, url, mp4_url FROM videos WHERE url = $1",
+  "7f9bdd51e9430d93edebd6180a5ac2ad0d7172ebaf5bab5bffd44d447771518a": {
+    "query": "UPDATE videos SET job_id = $1 WHERE id = $2",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int4",
+          "Int4"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "8f699894e3caccf0c51b2356151520bf8d91d370ddf16ce79ade4a8c88c026f9": {
+    "query": "SELECT chat_id, message_id FROM video_job_message WHERE video_id = $1",
     "describe": {
       "columns": [
         {
           "ordinal": 0,
-          "name": "id",
-          "type_info": "Int4"
+          "name": "chat_id",
+          "type_info": "Int8"
         },
         {
           "ordinal": 1,
-          "name": "processed",
-          "type_info": "Bool"
-        },
-        {
-          "ordinal": 2,
-          "name": "source",
-          "type_info": "Text"
-        },
-        {
-          "ordinal": 3,
-          "name": "url",
-          "type_info": "Text"
-        },
-        {
-          "ordinal": 4,
-          "name": "mp4_url",
-          "type_info": "Text"
+          "name": "message_id",
+          "type_info": "Int4"
         }
       ],
       "parameters": {
         "Left": [
-          "Text"
+          "Int4"
         ]
       },
       "nullable": [
         false,
-        false,
-        false,
-        false,
-        true
+        false
       ]
     }
   },
@@ -310,6 +294,88 @@
       ]
     }
   },
+  "abc8fe7876be76ec0835a9e32d99caa5761a46d6e628200e4bfda7e9ffc60f4c": {
+    "query": "UPDATE videos SET processed = true, mp4_url = $1, thumb_url = $2 WHERE id = $3",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Text",
+          "Text",
+          "Int4"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "ad50f59424029be83b1cadb8b7f875037161bafb7e577023f69f0213bfafc647": {
+    "query": "SELECT id, processed, source, url, mp4_url, thumb_url, display_url, display_name, job_id FROM videos WHERE display_name = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 1,
+          "name": "processed",
+          "type_info": "Bool"
+        },
+        {
+          "ordinal": 2,
+          "name": "source",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 3,
+          "name": "url",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 4,
+          "name": "mp4_url",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 5,
+          "name": "thumb_url",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 6,
+          "name": "display_url",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 7,
+          "name": "display_name",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 8,
+          "name": "job_id",
+          "type_info": "Int4"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        false,
+        false,
+        true,
+        true,
+        false,
+        false,
+        true
+      ]
+    }
+  },
   "b026472c90c2ce35575846b3aa4b4d1f57e08443011ac2426776a5f17bb561e8": {
     "query": "SELECT consumer_key, consumer_secret FROM twitter_account WHERE user_id = $1",
     "describe": {
@@ -333,6 +399,74 @@
       "nullable": [
         false,
         false
+      ]
+    }
+  },
+  "c045fe7e6071507134e37ba0709f9602bf13d08a14af7f5831e50ef5a741f61c": {
+    "query": "SELECT id, processed, source, url, mp4_url, thumb_url, display_url, display_name, job_id FROM videos WHERE source = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 1,
+          "name": "processed",
+          "type_info": "Bool"
+        },
+        {
+          "ordinal": 2,
+          "name": "source",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 3,
+          "name": "url",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 4,
+          "name": "mp4_url",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 5,
+          "name": "thumb_url",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 6,
+          "name": "display_url",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 7,
+          "name": "display_name",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 8,
+          "name": "job_id",
+          "type_info": "Int4"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        false,
+        false,
+        true,
+        true,
+        false,
+        false,
+        true
       ]
     }
   },
@@ -368,6 +502,20 @@
       ]
     }
   },
+  "d953e6e2d6835e6b8ae91be1af3cde59e255ea5904809fb6928537158dc38e6c": {
+    "query": "INSERT INTO video_job_message (video_id, chat_id, message_id) VALUES ($1, $2, $3)",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int4",
+          "Int8",
+          "Int4"
+        ]
+      },
+      "nullable": []
+    }
+  },
   "dd986c2fcd7aefb700f383e25b41c896a60a8d6954d6af206c41658e6455ae45": {
     "query": "DELETE FROM twitter_auth WHERE user_id = $1",
     "describe": {
@@ -391,50 +539,6 @@
         ]
       },
       "nullable": []
-    }
-  },
-  "eb93f2f1eb83a6ed7dbf7eb4f7cb66e2aca27f80ee1210bb4fd7c93ec930d4a1": {
-    "query": "SELECT id, processed, source, url, mp4_url FROM videos WHERE id = $1",
-    "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "id",
-          "type_info": "Int4"
-        },
-        {
-          "ordinal": 1,
-          "name": "processed",
-          "type_info": "Bool"
-        },
-        {
-          "ordinal": 2,
-          "name": "source",
-          "type_info": "Text"
-        },
-        {
-          "ordinal": 3,
-          "name": "url",
-          "type_info": "Text"
-        },
-        {
-          "ordinal": 4,
-          "name": "mp4_url",
-          "type_info": "Text"
-        }
-      ],
-      "parameters": {
-        "Left": [
-          "Int4"
-        ]
-      },
-      "nullable": [
-        false,
-        false,
-        false,
-        false,
-        true
-      ]
     }
   }
 }

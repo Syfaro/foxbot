@@ -6,11 +6,11 @@ use tgbotapi::{requests::*, *};
 use tokio::sync::{Mutex, RwLock};
 use unic_langid::LanguageIdentifier;
 
+mod coconut;
 mod handlers;
 pub mod models;
 mod sites;
 mod utils;
-mod video;
 
 // MARK: Monitoring configuration
 
@@ -83,7 +83,7 @@ pub struct Config {
     pub http_host: Option<String>,
     http_secret: Option<String>,
 
-    // Video handling
+    // File storage
     pub s3_endpoint: String,
     pub s3_region: String,
     pub s3_token: String,
@@ -93,6 +93,16 @@ pub struct Config {
 
     pub fautil_apitoken: String,
 
+    // Video storage
+    pub b2_account_id: String,
+    pub b2_app_key: String,
+    pub b2_bucket_id: String,
+
+    pub coconut_apitoken: String,
+    pub coconut_webhook: String,
+
+    pub size_images: Option<bool>,
+    pub cache_images: Option<bool>,
     pub cache_all_images: Option<bool>,
 
     redis_dsn: String,
@@ -322,6 +332,14 @@ async fn main() {
     );
     let s3 = rusoto_s3::S3Client::new_with(client, provider, region);
 
+    let coconut = coconut::Coconut::new(
+        config.coconut_apitoken.clone(),
+        config.coconut_webhook.clone(),
+        config.b2_account_id.clone(),
+        config.b2_app_key.clone(),
+        config.b2_bucket_id.clone(),
+    );
+
     let redis_client = redis::Client::open(config.redis_dsn.clone()).unwrap();
     let redis = redis::aio::ConnectionManager::new(redis_client)
         .await
@@ -338,6 +356,7 @@ async fn main() {
         fapi,
         finder,
         s3,
+        coconut,
 
         sites: Mutex::new(sites),
         conn: pool,
@@ -461,7 +480,12 @@ async fn handle_request(
 ) -> hyper::Result<hyper::Response<hyper::Body>> {
     use hyper::{Body, Response, StatusCode};
 
-    match (req.method(), req.uri().path()) {
+    tracing::trace!(method = ?req.method(), path = req.uri().path(), "got HTTP request");
+
+    let path = req.uri().path();
+    let uri = req.uri().clone();
+
+    match (req.method(), path) {
         (&hyper::Method::POST, path) if path == secret => {
             let _hist = REQUEST_DURATION.start_timer();
 
@@ -488,6 +512,90 @@ async fn handle_request(
             }
 
             Ok(Response::new(Body::from("✓")))
+        }
+        (&hyper::Method::GET, "/health") => Ok(Response::new(Body::from("✓"))),
+        (&hyper::Method::POST, "/video") => {
+            let body = req.into_body();
+            let bytes = hyper::body::to_bytes(body)
+                .await
+                .expect("Unable to read body bytes");
+
+            let update: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+            let url = uri.to_string();
+            let display_name = url.split('=').last().unwrap();
+            let progress = update.get("progress").and_then(|val| val.as_str());
+
+            tracing::debug!(display_name, "Got video update: {:?}", update);
+
+            if let Some(progress) = progress {
+                tracing::debug!("Got video progress, {}", progress);
+
+                update_tx
+                    .send(Box::new(tgbotapi::Update {
+                        message: Some(tgbotapi::Message {
+                            text: Some(format!("/videoprogress {} {}", display_name, progress)),
+                            entities: Some(vec![tgbotapi::MessageEntity {
+                                entity_type: tgbotapi::MessageEntityType::BotCommand,
+                                offset: 0,
+                                length: 14,
+                                url: None,
+                                user: None,
+                            }]),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }))
+                    .await
+                    .unwrap();
+            } else {
+                let output_urls = update.get("output_urls").unwrap().as_object().unwrap();
+
+                let video_url = if let Some(video) = output_urls.get("mp4:720p") {
+                    video
+                } else if let Some(video) = output_urls.get("mp4:480p") {
+                    video
+                } else if let Some(video) = output_urls.get("mp4:360p") {
+                    video
+                } else {
+                    panic!("missing video");
+                }
+                .as_str()
+                .unwrap();
+
+                let thumb_url = output_urls
+                    .get("jpg:250x0")
+                    .unwrap()
+                    .as_array()
+                    .unwrap()
+                    .first()
+                    .unwrap()
+                    .as_str()
+                    .unwrap();
+
+                update_tx
+                    .send(Box::new(tgbotapi::Update {
+                        message: Some(tgbotapi::Message {
+                            text: Some(format!(
+                                "/videocomplete {} {} {}",
+                                display_name, video_url, thumb_url
+                            )),
+                            entities: Some(vec![tgbotapi::MessageEntity {
+                                entity_type: tgbotapi::MessageEntityType::BotCommand,
+                                offset: 0,
+                                length: 14,
+                                url: None,
+                                user: None,
+                            }]),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }))
+                    .await
+                    .unwrap();
+            }
+
+            Ok(Response::new(Body::from("OK")))
         }
         (&hyper::Method::GET, "/twitter/callback") => {
             let query: std::collections::HashMap<String, String> = req
@@ -712,6 +820,7 @@ pub struct MessageHandler {
     pub fapi: Arc<fuzzysearch::FuzzySearch>,
     pub finder: linkify::LinkFinder,
     pub s3: rusoto_s3::S3Client,
+    pub coconut: coconut::Coconut,
 
     // Configuration
     pub sites: Mutex<Vec<BoxedSite>>, // We always need mutable access, no reason to use a RwLock
@@ -994,7 +1103,7 @@ impl MessageHandler {
         self.make_request(&send_message).await.map_err(Into::into)
     }
 
-    #[tracing::instrument(skip(self, update))]
+    #[tracing::instrument(skip(self, update), fields(user_id, chat_id))]
     async fn handle_update(&self, update: Update) {
         let _hist = HANDLING_DURATION.start_timer();
 
@@ -1005,9 +1114,14 @@ impl MessageHandler {
         });
 
         let user = utils::user_from_update(&update);
+        let chat = utils::chat_from_update(&update);
 
         if let Some(user) = user {
-            tracing::trace!(user_id = user.id, "found user associated with update");
+            tracing::Span::current().record("user_id", &user.id);
+        }
+
+        if let Some(chat) = chat {
+            tracing::Span::current().record("chat_id", &chat.id);
         }
 
         let command = update
@@ -1035,6 +1149,9 @@ impl MessageHandler {
                     let mut tags = vec![("handler", handler.name().to_string())];
                     if let Some(user) = user {
                         tags.push(("user_id", user.id.to_string()));
+                    }
+                    if let Some(chat) = chat {
+                        tags.push(("chat_id", chat.id.to_string()));
                     }
                     if let Some(command) = command {
                         tags.push(("command", command.name));
