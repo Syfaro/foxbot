@@ -416,19 +416,18 @@ impl Video {
         url_id: &str,
         media_url: &str,
         display_url: &str,
-        display_name: &str,
-    ) -> anyhow::Result<i32> {
+    ) -> anyhow::Result<String> {
         let row = sqlx::query!(
-            "INSERT INTO videos (source, url, display_url, display_name) VALUES ($1, $2, $3, $4) ON CONFLICT ON CONSTRAINT unique_source DO UPDATE SET source = EXCLUDED.source RETURNING id",
+            "INSERT INTO videos (source, url, display_url, display_name) VALUES ($1, $2, $3, $4) ON CONFLICT ON CONSTRAINT unique_source DO UPDATE SET source = EXCLUDED.source RETURNING display_name",
             url_id,
             media_url,
             display_url,
-            display_name
+            crate::generate_id()
         )
         .fetch_one(conn)
         .await?;
 
-        Ok(row.id)
+        Ok(row.display_name)
     }
 
     /// Set the Coconut job ID for the video.

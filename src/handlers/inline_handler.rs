@@ -511,9 +511,9 @@ async fn build_webm_result(
 ) -> anyhow::Result<Vec<(ResultType, InlineQueryResult)>> {
     let video = match Video::lookup_url_id(&conn, &url_id).await? {
         None => {
-            let display_name = generate_id();
-            Video::insert_new_media(&conn, &url_id, &result.url, &display_url, &display_name)
+            let display_name = Video::insert_new_media(&conn, &url_id, &result.url, &display_url)
                 .await?;
+
             return Ok(vec![(
                 ResultType::VideoToBeProcessed,
                 InlineQueryResult::article(

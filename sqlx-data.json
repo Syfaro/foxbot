@@ -1,73 +1,5 @@
 {
   "db": "PostgreSQL",
-  "18dd4089a47d5bcdaa56fd951f25be797e1fbad5b06fe5cf69e1567feac86714": {
-    "query": "SELECT id, processed, source, url, mp4_url, thumb_url, display_url, display_name, job_id FROM videos WHERE id = $1",
-    "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "id",
-          "type_info": "Int4"
-        },
-        {
-          "ordinal": 1,
-          "name": "processed",
-          "type_info": "Bool"
-        },
-        {
-          "ordinal": 2,
-          "name": "source",
-          "type_info": "Text"
-        },
-        {
-          "ordinal": 3,
-          "name": "url",
-          "type_info": "Text"
-        },
-        {
-          "ordinal": 4,
-          "name": "mp4_url",
-          "type_info": "Text"
-        },
-        {
-          "ordinal": 5,
-          "name": "thumb_url",
-          "type_info": "Text"
-        },
-        {
-          "ordinal": 6,
-          "name": "display_url",
-          "type_info": "Text"
-        },
-        {
-          "ordinal": 7,
-          "name": "display_name",
-          "type_info": "Text"
-        },
-        {
-          "ordinal": 8,
-          "name": "job_id",
-          "type_info": "Int4"
-        }
-      ],
-      "parameters": {
-        "Left": [
-          "Int4"
-        ]
-      },
-      "nullable": [
-        false,
-        false,
-        false,
-        false,
-        true,
-        true,
-        false,
-        false,
-        true
-      ]
-    }
-  },
   "1f7522d283b5d4de8916d1ebc6ecc94f326e2ff81ed53b132f67660c355a5867": {
     "query": "INSERT INTO twitter_account (user_id, consumer_key, consumer_secret) VALUES ($1, $2, $3)",
     "describe": {
@@ -95,6 +27,29 @@
       "parameters": {
         "Left": [
           "Int8",
+          "Text"
+        ]
+      },
+      "nullable": [
+        false
+      ]
+    }
+  },
+  "28d26596fc13646a339972a6afd7de59cf78eeba3a122fb1efcf798f389ec8f5": {
+    "query": "INSERT INTO videos (source, url, display_url, display_name) VALUES ($1, $2, $3, $4) ON CONFLICT ON CONSTRAINT unique_source DO UPDATE SET source = EXCLUDED.source RETURNING display_name",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "display_name",
+          "type_info": "Text"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text",
+          "Text",
+          "Text",
           "Text"
         ]
       },
@@ -543,29 +498,6 @@
       "nullable": [
         false,
         false,
-        false
-      ]
-    }
-  },
-  "d55b7aeafbf54f0b5bb0105e260f30e2149f3351f33a9d53101611d055e9a411": {
-    "query": "INSERT INTO videos (source, url, display_url, display_name) VALUES ($1, $2, $3, $4) ON CONFLICT ON CONSTRAINT unique_source DO UPDATE SET source = EXCLUDED.source RETURNING id",
-    "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "id",
-          "type_info": "Int4"
-        }
-      ],
-      "parameters": {
-        "Left": [
-          "Text",
-          "Text",
-          "Text",
-          "Text"
-        ]
-      },
-      "nullable": [
         false
       ]
     }
