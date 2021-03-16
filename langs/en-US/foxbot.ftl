@@ -73,7 +73,7 @@ twitter-removed-account = Okay, got it. Your Twitter account has been removed.
 mirror-no-links = Sorry, I could not find any links to mirror images from.
 mirror-no-results = Sorry, I could not get any images from this message.
 mirror-missing =
-    In addition to these images, I could not fetch images from the following links:
+    I could not fetch images from the following links:
     
     { $links }
     

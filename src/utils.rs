@@ -1,10 +1,11 @@
 use anyhow::Context;
 use std::sync::Arc;
 use std::time::Instant;
+use tgbotapi::FileType;
 use tracing_futures::Instrument;
 
 use crate::models::{CachedPost, FileCache, Sites, UserConfig, UserConfigKey};
-use crate::BoxedSite;
+use crate::{BoxedSite, generate_id};
 
 type Bundle<'a> = &'a fluent::concurrent::FluentBundle<fluent::FluentResource>;
 
@@ -193,8 +194,7 @@ pub async fn download_image(url: &str) -> anyhow::Result<bytes::Bytes> {
     Ok(data.freeze())
 }
 
-/// Download URL from post and calculate image dimensions, returning a new
-/// PostInfo.
+/// Calculate image dimensions from provided data, returning a new PostInfo.
 #[tracing::instrument(skip(data))]
 pub async fn size_post(
     post: &crate::PostInfo,
@@ -845,6 +845,144 @@ pub fn source_reply(matches: &[fuzzysearch::File], bundle: Bundle<'_>) -> String
 
         items.join("\n")
     }
+}
+
+/// A wrapper around checking the size of a file at a given URL.
+///
+/// It manages checking the length using the content-length header if provided,
+/// or by downloading the contents if no such header exists. It also prevents
+/// resource attacks by limiting the maximum size of file it will download.
+pub struct CheckFileSize<'a> {
+    pub url: &'a str,
+    pub max_download: usize,
+
+    client: reqwest::Client,
+
+    size: Option<u64>,
+    pub bytes: Option<bytes::Bytes>,
+}
+
+impl<'a> CheckFileSize<'a> {
+    /// Create a new file size checker for a given URL, with a maximum file
+    /// download size.
+    pub fn new(url: &'a str, max_download: usize) -> Self {
+        Self {
+            url,
+            max_download,
+            client: reqwest::Client::new(),
+            size: None,
+            bytes: None,
+        }
+    }
+
+    /// Get the size of the file at the URL. May download the file if the
+    /// content-length header is not set.
+    #[tracing::instrument(skip(self), fields(url = self.url))]
+    pub async fn get_size(&mut self) -> anyhow::Result<u64> {
+        if let Some(size) = self.size {
+            tracing::trace!(size, "Already calculated file size");
+            return Ok(size);
+        }
+
+        let data = self.client.head(self.url).send().await?;
+
+        match data.content_length() {
+            Some(content_length) if content_length > 0 => {
+                tracing::debug!(
+                    content_length,
+                    "HEAD request yielded non-zero content-length header"
+                );
+
+                self.size = Some(content_length);
+                tracing::trace!(size = content_length, "Got content-length");
+                return Ok(content_length);
+            }
+            _ => {
+                tracing::debug!("HEAD request returned no content-length, downloading image");
+
+                let bytes = self.get_bytes().await?;
+                tracing::trace!(size = bytes.len(), "Downloaded bytes to calculate size");
+                Ok(bytes.len() as u64)
+            }
+        }
+    }
+
+    /// Get the bytes at the given URL.
+    #[tracing::instrument(skip(self), fields(url = self.url))]
+    pub async fn get_bytes(&mut self) -> anyhow::Result<&bytes::Bytes> {
+        if let Some(ref bytes) = self.bytes {
+            tracing::trace!("Already downloaded file");
+            return Ok(bytes);
+        }
+
+        let mut data = self.client.get(self.url).send().await?;
+
+        let mut buf = bytes::BytesMut::new();
+
+        while let Some(chunk) = data.chunk().await? {
+            buf.extend(chunk);
+
+            if buf.len() > self.max_download {
+                tracing::warn!(
+                    size = buf.len(),
+                    max_download = self.max_download,
+                    "Requested download is larger than max size"
+                );
+                anyhow::bail!("Body is larger than maximum permissible download");
+            }
+        }
+
+        let bytes = buf.freeze();
+
+        self.bytes = Some(bytes);
+        Ok(self.bytes.as_ref().unwrap())
+    }
+
+    /// Consume the checker and return the bytes at the URL.
+    pub async fn into_bytes(mut self) -> anyhow::Result<bytes::Bytes> {
+        match self.bytes {
+            Some(bytes) => Ok(bytes),
+            None => {
+                self.get_bytes().await?;
+                Ok(self.bytes.unwrap())
+            }
+        }
+    }
+}
+
+/// Check if an image at a provided URL is above a certain filesize. If it is,
+/// download it, failing if larger than 20MB, then convert it to a 2000x2000
+/// JPEG image. Convert the result into a type usable for sending via Telegram.
+#[tracing::instrument]
+pub async fn resize_photo(url: &str, max_size: u64) -> anyhow::Result<tgbotapi::FileType> {
+    use bytes::BufMut;
+
+    let mut check = CheckFileSize::new(&url, 20_000_000);
+    let size = check.get_size().await?;
+
+    if size <= max_size {
+        tracing::debug!("Photo was smaller than max size, returning existing data");
+
+        return if let Some(bytes) = check.bytes {
+            Ok(FileType::Bytes(format!("{}.jpg", generate_id()), bytes.to_vec()))
+        } else {
+            Ok(FileType::Url(url.to_owned()))
+        };
+    }
+
+    tracing::debug!("Photo was larger than max size, resizing");
+
+    let bytes = check.into_bytes().await?;
+
+    let im = image::load_from_memory(&bytes)?;
+    let im = im.resize(2000, 2000, image::imageops::FilterType::Lanczos3);
+    let im = image::DynamicImage::ImageRgb8(im.into_rgb8());
+
+    let mut buf = bytes::BytesMut::with_capacity(2_000_000).writer();
+    im.write_to(&mut buf, image::ImageOutputFormat::Jpeg(90))?;
+
+    let bytes = buf.into_inner().freeze().to_vec();
+    Ok(FileType::Bytes(format!("{}.jpg", generate_id()), bytes))
 }
 
 #[cfg(test)]

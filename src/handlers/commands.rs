@@ -3,12 +3,15 @@ use std::collections::HashMap;
 use tgbotapi::{requests::*, *};
 
 use super::Status::*;
-use crate::models::{GroupConfig, GroupConfigKey};
 use crate::needs_field;
 use crate::utils::{
     build_alternate_response, can_delete_in_chat, continuous_action, extract_links,
     find_best_photo, find_images, get_message, match_image, parse_known_bots, sort_results,
     source_reply,
+};
+use crate::{
+    models::{GroupConfig, GroupConfigKey},
+    utils::resize_photo,
 };
 
 // TODO: there's a lot of shared code between these commands.
@@ -83,7 +86,7 @@ impl CommandHandler {
             6,
             message.chat_id(),
             message.from.clone(),
-            ChatAction::Typing,
+            ChatAction::UploadPhoto,
         );
 
         let (reply_to_id, message) = if let Some(reply_to_message) = &message.reply_to_message {
@@ -105,7 +108,7 @@ impl CommandHandler {
 
         let mut results: Vec<crate::PostInfo> = Vec::with_capacity(links.len());
 
-        let missing = {
+        let mut missing = {
             let mut sites = handler.sites.lock().await;
             find_images(&from, links, &mut sites, &mut |info| {
                 results.extend(info.results);
@@ -128,58 +131,80 @@ impl CommandHandler {
         results.dedup_by(|a, b| a.source_link == b.source_link);
 
         if results.len() == 1 {
+            let action = continuous_action(
+                handler.bot.clone(),
+                6,
+                message.chat_id(),
+                message.from.clone(),
+                ChatAction::UploadPhoto,
+            );
+
             let result = results.get(0).unwrap();
 
             if result.file_type == "mp4" {
                 let video = SendVideo {
                     chat_id: message.chat_id(),
-                    caption: result
-                        .source_link
-                        .as_ref()
-                        .map(|source_link| source_link.to_owned()),
+                    caption: result.source_link.clone(),
                     video: FileType::Url(result.url.clone()),
                     reply_to_message_id: Some(message.message_id),
                     ..Default::default()
                 };
 
+                drop(action);
+
                 handler.make_request(&video).await?;
             } else {
-                let photo = SendPhoto {
-                    chat_id: message.chat_id(),
-                    caption: result
-                        .source_link
-                        .as_ref()
-                        .map(|source_link| source_link.to_owned()),
-                    photo: FileType::Url(result.url.clone()),
-                    reply_to_message_id: Some(message.message_id),
-                    ..Default::default()
-                };
+                if let Ok(file_type) = resize_photo(&result.url, 5_000_000).await {
+                    let photo = SendPhoto {
+                        chat_id: message.chat_id(),
+                        caption: result.source_link.clone(),
+                        photo: file_type,
+                        reply_to_message_id: Some(message.message_id),
+                        ..Default::default()
+                    };
 
-                handler.make_request(&photo).await?;
+                    drop(action);
+
+                    handler.make_request(&photo).await?;
+                } else {
+                    missing.push(result.source_link.as_deref().unwrap_or(&result.url));
+                }
             }
         } else {
             for chunk in results.chunks(10) {
-                let media = chunk
-                    .iter()
-                    .map(|result| match result.file_type.as_ref() {
+                let action = continuous_action(
+                    handler.bot.clone(),
+                    6,
+                    message.chat_id(),
+                    message.from.clone(),
+                    ChatAction::UploadPhoto,
+                );
+
+                let mut media = Vec::with_capacity(chunk.len());
+
+                for result in chunk {
+                    let input = match result.file_type.as_ref() {
                         "mp4" => InputMedia::Video(InputMediaVideo {
                             media: FileType::Url(result.url.to_owned()),
-                            caption: result
-                                .source_link
-                                .as_ref()
-                                .map(|source_link| source_link.to_owned()),
+                            caption: result.source_link.clone(),
                             ..Default::default()
                         }),
-                        _ => InputMedia::Photo(InputMediaPhoto {
-                            media: FileType::Url(result.url.to_owned()),
-                            caption: result
-                                .source_link
-                                .as_ref()
-                                .map(|source_link| source_link.to_owned()),
-                            ..Default::default()
-                        }),
-                    })
-                    .collect();
+                        _ => {
+                            if let Ok(file_type) = resize_photo(&result.url, 5_000_000).await {
+                                InputMedia::Photo(InputMediaPhoto {
+                                    media: file_type,
+                                    caption: result.source_link.clone(),
+                                    ..Default::default()
+                                })
+                            } else {
+                                missing.push(result.source_link.as_deref().unwrap_or(&result.url));
+                                continue;
+                            }
+                        }
+                    };
+
+                    media.push(input);
+                }
 
                 let media_group = SendMediaGroup {
                     chat_id: message.chat_id(),
@@ -189,6 +214,8 @@ impl CommandHandler {
                 };
 
                 handler.make_request(&media_group).await?;
+
+                drop(action);
             }
         }
 
