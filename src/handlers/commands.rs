@@ -6,8 +6,9 @@ use super::Status::*;
 use crate::models::{GroupConfig, GroupConfigKey};
 use crate::needs_field;
 use crate::utils::{
-    build_alternate_response, can_delete_in_chat, continuous_action, find_best_photo, find_images,
-    get_message, match_image, parse_known_bots, sort_results, source_reply,
+    build_alternate_response, can_delete_in_chat, continuous_action, extract_links,
+    find_best_photo, find_images, get_message, match_image, parse_known_bots, sort_results,
+    source_reply,
 };
 
 // TODO: there's a lot of shared code between these commands.
@@ -91,11 +92,7 @@ impl CommandHandler {
             (message.message_id, message)
         };
 
-        let links: Vec<_> = if let Some(text) = &message.text {
-            handler.finder.links(&text).collect()
-        } else {
-            vec![]
-        };
+        let links = extract_links(&message);
 
         if links.is_empty() {
             drop(action);
@@ -110,7 +107,6 @@ impl CommandHandler {
 
         let missing = {
             let mut sites = handler.sites.lock().await;
-            let links = links.iter().map(|link| link.as_str()).collect();
             find_images(&from, links, &mut sites, &mut |info| {
                 results.extend(info.results);
             })
@@ -125,6 +121,11 @@ impl CommandHandler {
                 .await?;
             return Ok(());
         }
+
+        // This will only remove duplicate items if they are sequential. This
+        // will likely fix the most common issue of having a direct and source
+        // link next to each other.
+        results.dedup_by(|a, b| a.source_link == b.source_link);
 
         if results.len() == 1 {
             let result = results.get(0).unwrap();
