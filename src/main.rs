@@ -94,12 +94,13 @@ pub struct Config {
     pub fautil_apitoken: String,
 
     // Video storage
-    pub b2_account_id: String,
-    pub b2_app_key: String,
-    pub b2_bucket_id: String,
+    b2_account_id: String,
+    b2_app_key: String,
+    b2_bucket_id: String,
 
-    pub coconut_apitoken: String,
-    pub coconut_webhook: String,
+    coconut_apitoken: String,
+    coconut_webhook: String,
+    coconut_secret: String,
 
     pub size_images: Option<bool>,
     pub cache_images: Option<bool>,
@@ -476,6 +477,7 @@ async fn handle_request(
     update_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
     inline_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
     secret: &str,
+    video_secret: &str,
     templates: Arc<handlebars::Handlebars<'_>>,
 ) -> hyper::Result<hyper::Response<hyper::Body>> {
     use hyper::{Body, Response, StatusCode};
@@ -514,7 +516,7 @@ async fn handle_request(
             Ok(Response::new(Body::from("✓")))
         }
         (&hyper::Method::GET, "/health") => Ok(Response::new(Body::from("✓"))),
-        (&hyper::Method::POST, "/video") => {
+        (&hyper::Method::POST, path) if path == video_secret => {
             let body = req.into_body();
             let bytes = hyper::body::to_bytes(body)
                 .await
@@ -676,6 +678,8 @@ async fn receive_webhook(
 
     let secret_path = format!("/{}", config.http_secret.unwrap());
     let secret_path: &'static str = Box::leak(secret_path.into_boxed_str());
+    let video_secret = format!("/{}", config.coconut_secret);
+    let video_secret: &'static str = Box::leak(video_secret.into_boxed_str());
 
     let mut hbs = handlebars::Handlebars::new();
     hbs.set_strict_mode(true);
@@ -695,6 +699,7 @@ async fn receive_webhook(
                     update_tx.clone(),
                     inline_tx.clone(),
                     secret_path,
+                    video_secret,
                     templates.clone(),
                 )
             }))
