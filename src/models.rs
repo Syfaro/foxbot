@@ -378,22 +378,6 @@ pub struct Video {
 }
 
 impl Video {
-    /// Lookup a Video by an internal ID.
-    pub async fn lookup_internal_id(
-        conn: &sqlx::Pool<sqlx::Postgres>,
-        id: i32,
-    ) -> anyhow::Result<Option<Video>> {
-        let video = sqlx::query_as!(
-            Video,
-            "SELECT id, processed, source, url, mp4_url, thumb_url, display_url, display_name, job_id FROM videos WHERE id = $1",
-            id
-        )
-        .fetch_optional(conn)
-        .await?;
-
-        Ok(video)
-    }
-
     /// Lookup a video by the display name.
     pub async fn lookup_display_name(
         conn: &sqlx::Pool<sqlx::Postgres>,
@@ -410,7 +394,7 @@ impl Video {
         Ok(video)
     }
 
-    /// Lookup a Video by URL ID.
+    /// Lookup a video by the URL ID.
     pub async fn lookup_url_id(
         conn: &sqlx::Pool<sqlx::Postgres>,
         url_id: &str,

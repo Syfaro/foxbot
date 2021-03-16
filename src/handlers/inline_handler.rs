@@ -26,16 +26,12 @@ impl InlineHandler {
         message: &Message,
     ) -> anyhow::Result<()> {
         let text = message.text.as_ref().unwrap();
-        let id = match text.split('-').nth(1) {
+        let display_name = match text.split('-').nth(1) {
             Some(id) => id,
             None => return Ok(()),
         };
-        let id: i32 = match id.parse() {
-            Ok(id) => id,
-            Err(_err) => return Ok(()),
-        };
 
-        let video = Video::lookup_internal_id(&handler.conn, id)
+        let video = Video::lookup_display_name(&handler.conn, display_name)
             .await?
             .expect("missing video");
 
@@ -45,7 +41,7 @@ impl InlineHandler {
                 .start_video(&video.url, &video.display_name)
                 .await?;
 
-            Video::set_job_id(&handler.conn, id, job_id).await?;
+            Video::set_job_id(&handler.conn, video.id, job_id).await?;
         }
 
         let lang = message
@@ -66,7 +62,7 @@ impl InlineHandler {
         };
         let sent = handler.make_request(&send_message).await?;
 
-        Video::add_message_id(&handler.conn, id, sent.chat.id, sent.message_id).await?;
+        Video::add_message_id(&handler.conn, video.id, sent.chat.id, sent.message_id).await?;
 
         Ok(())
     }
@@ -516,18 +512,25 @@ async fn build_webm_result(
     let video = match Video::lookup_url_id(&conn, &url_id).await? {
         None => {
             let display_name = generate_id();
-            let id =
-                Video::insert_new_media(&conn, &url_id, &result.url, &display_url, &display_name)
-                    .await?;
+            Video::insert_new_media(&conn, &url_id, &result.url, &display_url, &display_name)
+                .await?;
             return Ok(vec![(
                 ResultType::VideoToBeProcessed,
-                InlineQueryResult::article(format!("process-{}", id), "".into(), "".into()),
+                InlineQueryResult::article(
+                    format!("process-{}", display_name),
+                    "".into(),
+                    "".into(),
+                ),
             )]);
         }
         Some(video) if !video.processed => {
             return Ok(vec![(
                 ResultType::VideoToBeProcessed,
-                InlineQueryResult::article(format!("process-{}", video.id), "".into(), "".into()),
+                InlineQueryResult::article(
+                    format!("process-{}", video.display_name),
+                    "".into(),
+                    "".into(),
+                ),
             )]);
         }
         Some(video) => video,

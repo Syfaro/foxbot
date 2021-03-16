@@ -1,3 +1,5 @@
+TRUNCATE TABLE videos;
+
 ALTER TABLE videos
     ADD COLUMN job_id INTEGER,
     ADD COLUMN display_name TEXT NOT NULL UNIQUE,
