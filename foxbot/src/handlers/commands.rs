@@ -392,20 +392,7 @@ impl CommandHandler {
                 .await?
             }
             None => {
-                let mut links = vec![];
-
-                if let Some(bot_links) = parse_known_bots(&message) {
-                    tracing::trace!("is known bot, adding links");
-                    links.extend(bot_links);
-                } else if let Some(text) = &message.text {
-                    tracing::trace!("message had text, looking at links");
-                    links.extend(
-                        handler
-                            .finder
-                            .links(&text)
-                            .map(|link| link.as_str().to_string()),
-                    );
-                }
+                let links = extract_links(&message);
 
                 if links.is_empty() {
                     drop(action);
@@ -424,7 +411,6 @@ impl CommandHandler {
                 }
 
                 let mut sites = handler.sites.lock().await;
-                let links = links.iter().map(|link| link.as_str()).collect();
                 let mut link = None;
                 find_images(
                     &message.from.as_ref().unwrap(),

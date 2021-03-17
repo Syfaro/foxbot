@@ -8,14 +8,17 @@ use thiserror::Error;
 
 use foxbot_models::Twitter as TwitterModel;
 
+/// User agent used with all HTTP requests to sites.
 const USER_AGENT: &str = concat!(
-    "t.me/FoxBot version ",
+    "t.me/FoxBot Site Loader Version ",
     env!("CARGO_PKG_VERSION"),
     " developed by @Syfaro"
 );
 
+/// A thread-safe and boxed Site.
 pub type BoxedSite = Box<dyn Site + Send + Sync>;
 
+/// A collection of information about a post obtained from a given URL.
 #[derive(Clone, Debug, Default)]
 pub struct PostInfo {
     /// File type, as a standard file extension (png, jpg, etc.)
@@ -40,6 +43,8 @@ pub struct PostInfo {
     pub image_size: Option<usize>,
 }
 
+/// A basic attempt to get the extension from a given URL. It assumes the URL
+/// ends in a filename with an extension.
 fn get_file_ext(name: &str) -> Option<&str> {
     name.split('.')
         .last()
@@ -47,11 +52,18 @@ fn get_file_ext(name: &str) -> Option<&str> {
         .flatten()
 }
 
+/// A site that we can potentially load image data from.
 #[async_trait]
 pub trait Site {
+    /// The name of the site, as might be displayed to a user.
     fn name(&self) -> &'static str;
+    /// A unique ID deterministically generated from the URL.
     fn url_id(&self, url: &str) -> Option<String>;
+
+    /// Check if the URL might be supported by this site.
     async fn url_supported(&mut self, url: &str) -> bool;
+    /// Attempt to load images from the given URL, with the Telegram user ID
+    /// in case credentials are needed.
     async fn get_images(
         &mut self,
         user_id: i64,
@@ -77,24 +89,38 @@ impl<U> OptionExt for Option<U> {
     }
 }
 
+/// A loader for any direct image URL.
+///
+/// It attempts to check the image against FuzzySearch to determine if there is
+/// a known source.
+///
+/// This should always be checked last as it will accept any URL with an image
+/// extension, potentially blocking loaders that are more specific.
 pub struct Direct {
     client: reqwest::Client,
     fautil: std::sync::Arc<fuzzysearch::FuzzySearch>,
 }
 
 impl Direct {
+    /// URL extensions we should load to test content.
     const EXTENSIONS: &'static [&'static str] = &["png", "jpg", "jpeg", "gif"];
+    /// Mime types we should consider valid images.
     const TYPES: &'static [&'static str] = &["image/png", "image/jpeg", "image/gif"];
 
     pub fn new(fautil: std::sync::Arc<fuzzysearch::FuzzySearch>) -> Self {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(2))
+            .user_agent(USER_AGENT)
             .build()
             .expect("Unable to create client");
 
         Self { client, fautil }
     }
 
+    /// Attempt to download the image from the given URL and search the contents
+    /// against FuzzySearch. It uses a small distance to ensure it's a valid
+    /// source and keep the request fast, but a timeout should be applied for
+    /// use in inline queries in case FuzzySearch is running behind.
     async fn reverse_search(&self, url: &str) -> Option<fuzzysearch::File> {
         let image = self.client.get(url).send().await;
 
@@ -141,13 +167,7 @@ impl Site for Direct {
         }
 
         // Make a HTTP HEAD request to determine the Content-Type.
-        let resp = match self
-            .client
-            .head(url)
-            .header(header::USER_AGENT, USER_AGENT)
-            .send()
-            .await
-        {
+        let resp = match self.client.head(url).send().await {
             Ok(resp) => resp,
             Err(_) => return false,
         };
@@ -199,6 +219,10 @@ impl Site for Direct {
     }
 }
 
+/// A loader for e621 posts and pools.
+///
+/// It can convert direct image links back into post URLs. It will only load the
+/// 10 most recent posts when given a pool link.
 pub struct E621 {
     show: regex::Regex,
     data: regex::Regex,
@@ -244,10 +268,11 @@ impl E621 {
             data: regex::Regex::new(r"(?:https?://)?(?P<host>static\d+\.e(?:621|926)\.net)/data/(?:(?P<modifier>sample|preview)/)?[0-9a-f]{2}/[0-9a-f]{2}/(?P<md5>[0-9a-f]{32})\.(?P<ext>.+)").unwrap(),
             pool: regex::Regex::new(r"(?:https?://)?(?P<host>e(?:621|926)\.net)/pools/(?P<id>\d+)(?:/(?P<tags>.+))?").unwrap(),
 
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder().user_agent(USER_AGENT).build().unwrap(),
         }
     }
 
+    /// Load the 10 most recent posts from a pool at a given URL.
     async fn get_pool(&mut self, url: &str) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let captures = self.pool.captures(url).unwrap();
         let id = &captures["id"];
@@ -284,6 +309,7 @@ impl E621 {
         }
     }
 
+    /// Load arbitrary JSON data from a given URL.
     async fn load<T>(&self, url: &str) -> anyhow::Result<T>
     where
         T: serde::de::DeserializeOwned,
@@ -291,7 +317,6 @@ impl E621 {
         let resp = self
             .client
             .get(url)
-            .header(header::USER_AGENT, USER_AGENT)
             .send()
             .await
             .context("unable to request e621 api")?
@@ -356,6 +381,9 @@ impl Site for E621 {
     }
 }
 
+/// A loader for Tweets.
+///
+/// It can use user credentials to get Tweets from locked accounts.
 pub struct Twitter {
     matcher: regex::Regex,
     consumer: egg_mode::KeyPair,
@@ -476,6 +504,7 @@ impl Site for Twitter {
     }
 }
 
+/// Find the video in a Tweet with the highest bitrate.
 fn get_best_video(media: &egg_mode::entities::MediaEntity) -> Option<&str> {
     let video_info = match &media.video_info {
         Some(video_info) => video_info,
@@ -491,6 +520,9 @@ fn get_best_video(media: &egg_mode::entities::MediaEntity) -> Option<&str> {
     Some(&highest_bitrate.url)
 }
 
+/// A loader for FurAffinity.
+///
+/// It converts direct image URLs back into submission URLs using FuzzySearch.
 pub struct FurAffinity {
     cookies: std::collections::HashMap<String, String>,
     fapi: fuzzysearch::FuzzySearch,
@@ -510,7 +542,10 @@ impl FurAffinity {
             cookies: c,
             fapi: fuzzysearch::FuzzySearch::new(util_api),
             submission: scraper::Selector::parse("#submissionImg").unwrap(),
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .user_agent(USER_AGENT)
+                .build()
+                .unwrap(),
             matcher: regex::Regex::new(
                 r#"(?:https?://)?(?:www\.)?furaffinity\.net/(?:view|full)/(?P<id>\d+)/?"#,
             )
@@ -518,6 +553,8 @@ impl FurAffinity {
         }
     }
 
+    /// Attempt to resolve a direct image URL into a submission using
+    /// FuzzySearch.
     async fn load_direct_url(&self, url: &str) -> anyhow::Result<Option<PostInfo>> {
         let url = if url.starts_with("http://") {
             url.replace("http://", "https://")
@@ -546,6 +583,8 @@ impl FurAffinity {
         }))
     }
 
+    /// Convert provided cookies into a string suitable for sending with a
+    /// HTTP request.
     fn stringify_cookies(&self) -> String {
         let mut cookies = vec![];
         for (name, value) in &self.cookies {
@@ -554,12 +593,12 @@ impl FurAffinity {
         cookies.join("; ")
     }
 
+    /// Load a submission from the given URL.
     async fn load_submission(&mut self, url: &str) -> anyhow::Result<Option<PostInfo>> {
         let resp = self
             .client
             .get(url)
             .header(header::COOKIE, self.stringify_cookies())
-            .header(header::USER_AGENT, USER_AGENT)
             .send()
             .await
             .context("unable to request furaffinity submission")?
@@ -632,9 +671,13 @@ impl Site for FurAffinity {
     }
 }
 
+/// A loader for Mastodon instances.
+///
+/// It holds an in-memory cache of if a URL is a Mastodon instance.
 pub struct Mastodon {
     instance_cache: HashMap<String, bool>,
     matcher: regex::Regex,
+    client: reqwest::Client,
 }
 
 #[derive(Deserialize)]
@@ -657,6 +700,10 @@ impl Mastodon {
                 r#"(?P<host>https?://(?:\S+))/(?:notice|users/\w+/statuses|@\w+)/(?P<id>\d+)"#,
             )
             .unwrap(),
+            client: reqwest::Client::builder()
+                .user_agent(USER_AGENT)
+                .build()
+                .unwrap(),
         }
     }
 }
@@ -692,9 +739,9 @@ impl Site for Mastodon {
             }
         }
 
-        let resp = match reqwest::Client::new()
+        let resp = match self
+            .client
             .head(&format!("{}/api/v1/instance", base))
-            .header(header::USER_AGENT, USER_AGENT)
             .send()
             .await
         {
@@ -723,9 +770,9 @@ impl Site for Mastodon {
         let base = captures["host"].to_owned();
         let status_id = captures["id"].to_owned();
 
-        let json: MastodonStatus = reqwest::Client::new()
+        let json: MastodonStatus = self
+            .client
             .get(&format!("{}/api/v1/statuses/{}", base, status_id))
-            .header(header::USER_AGENT, USER_AGENT)
             .send()
             .await
             .context("unable to request mastodon api")?
@@ -753,9 +800,11 @@ impl Site for Mastodon {
     }
 }
 
+/// A loader for Weasyl.
 pub struct Weasyl {
     api_key: String,
     matcher: regex::Regex,
+    client: reqwest::Client,
 }
 
 impl Weasyl {
@@ -763,6 +812,7 @@ impl Weasyl {
         Self {
             api_key,
             matcher: regex::Regex::new(r#"https?://www\.weasyl\.com/(?:(?:~|%7)(?:\w+)/submissions|submission)/(?P<id>\d+)(?:/\S+)"#).unwrap(),
+            client: reqwest::Client::builder().user_agent(USER_AGENT).build().unwrap(),
         }
     }
 }
@@ -799,13 +849,13 @@ impl Site for Weasyl {
         let captures = self.matcher.captures(url).unwrap();
         let sub_id = captures["id"].to_owned();
 
-        let resp: serde_json::Value = reqwest::Client::new()
+        let resp: serde_json::Value = self
+            .client
             .get(&format!(
                 "https://www.weasyl.com/api/submissions/{}/view",
                 sub_id
             ))
             .header("X-Weasyl-API-Key", self.api_key.as_bytes())
-            .header(header::USER_AGENT, USER_AGENT)
             .send()
             .await
             .context("unable to request weasyl api")?
@@ -863,6 +913,7 @@ impl Site for Weasyl {
     }
 }
 
+/// A loader for Inkbunny.
 pub struct Inkbunny {
     client: reqwest::Client,
     matcher: regex::Regex,
@@ -908,9 +959,12 @@ pub enum InkbunnyResponse<T> {
 }
 
 impl Inkbunny {
+    /// API endpoint for logging into the site.
     const API_LOGIN: &'static str = "https://inkbunny.net/api_login.php";
+    /// API endpoint for loading a submission.
     const API_SUBMISSIONS: &'static str = "https://inkbunny.net/api_submissions.php";
 
+    /// Log into Inkbunny, getting a session ID for future requests.
     pub async fn get_sid(&mut self) -> anyhow::Result<String> {
         if let Some(sid) = &self.sid {
             return Ok(sid.clone());
@@ -944,6 +998,7 @@ impl Inkbunny {
         Ok(login.sid)
     }
 
+    /// Load submissions from provided IDs.
     pub async fn get_submissions(&mut self, ids: &[i32]) -> anyhow::Result<InkbunnySubmissions> {
         let ids: String = ids
             .iter()
@@ -979,7 +1034,10 @@ impl Inkbunny {
     }
 
     pub fn new(username: String, password: String) -> Self {
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .user_agent(USER_AGENT)
+            .build()
+            .unwrap();
 
         Self {
             client,
@@ -1046,6 +1104,7 @@ impl Site for Inkbunny {
     }
 }
 
+/// A loader for DeviantArt.
 pub struct DeviantArt {
     client: reqwest::Client,
     matcher: regex::Regex,
@@ -1103,12 +1162,13 @@ struct DeviantArtOEmbed {
 impl DeviantArt {
     pub fn default() -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder().user_agent(USER_AGENT).build().unwrap(),
             matcher: regex::Regex::new(r#"(?:(?:deviantart\.com/(?:.+/)?art/.+-|fav\.me/)(?P<id>\d+)|sta\.sh/(?P<code>\w+))"#)
                 .unwrap(),
         }
     }
 
+    /// Attempt to get an ID from our matcher's captures.
     fn get_id(&self, captures: &regex::Captures) -> Option<String> {
         if let Some(id) = captures.name("id") {
             return Some(id.as_str().to_string());
