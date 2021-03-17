@@ -1,8 +1,13 @@
-use super::Status::*;
-use crate::needs_field;
 use anyhow::Context;
 use async_trait::async_trait;
 use tgbotapi::*;
+
+use super::{
+    Handler,
+    Status::{self, *},
+};
+use crate::MessageHandler;
+use foxbot_utils::*;
 
 pub struct ErrorReplyHandler {
     client: reqwest::Client,
@@ -17,17 +22,17 @@ impl ErrorReplyHandler {
 }
 
 #[async_trait]
-impl super::Handler for ErrorReplyHandler {
+impl Handler for ErrorReplyHandler {
     fn name(&self) -> &'static str {
         "error_reply"
     }
 
     async fn handle(
         &self,
-        handler: &crate::MessageHandler,
+        handler: &MessageHandler,
         update: &Update,
         _command: Option<&Command>,
-    ) -> anyhow::Result<super::Status> {
+    ) -> anyhow::Result<Status> {
         let message = needs_field!(update, message);
         let text = needs_field!(message, text);
         let reply_message = needs_field!(message, reply_to_message);

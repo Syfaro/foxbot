@@ -1,0 +1,28 @@
+[package]
+name = "foxbot-sites"
+version = "0.1.0"
+authors = ["Syfaro <syfaro@huefox.com>"]
+edition = "2018"
+
+[dependencies]
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+
+tokio = { version = "1", features = ["time"] }
+async-trait = "0.1"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = "0.11"
+regex = "1"
+url = "2"
+
+sqlx = { version = "0.5", default-features = false, features = ["runtime-tokio-rustls", "macros", "postgres", "json"] }
+
+egg-mode = { git = "https://github.com/egg-mode-rs/egg-mode" }
+scraper = "0.12"
+
+fuzzysearch = { git = "https://github.com/Syfaro/fuzzysearch-rs", features = ["trace", "local_hash"] }
+
+foxbot-models = { path = "../foxbot-models" }

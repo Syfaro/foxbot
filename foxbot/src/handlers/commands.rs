@@ -2,17 +2,14 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use tgbotapi::{requests::*, *};
 
-use super::Status::*;
-use crate::needs_field;
-use crate::utils::{
-    build_alternate_response, can_delete_in_chat, continuous_action, extract_links,
-    find_best_photo, find_images, get_message, match_image, parse_known_bots, sort_results,
-    source_reply,
+use super::{
+    Handler,
+    Status::{self, *},
 };
-use crate::{
-    models::{GroupConfig, GroupConfigKey},
-    utils::resize_photo,
-};
+use crate::MessageHandler;
+use foxbot_models::{GroupConfig, GroupConfigKey};
+use foxbot_sites::PostInfo;
+use foxbot_utils::*;
 
 // TODO: there's a lot of shared code between these commands.
 
@@ -23,17 +20,17 @@ lazy_static::lazy_static! {
 pub struct CommandHandler;
 
 #[async_trait]
-impl super::Handler for CommandHandler {
+impl Handler for CommandHandler {
     fn name(&self) -> &'static str {
         "command"
     }
 
     async fn handle(
         &self,
-        handler: &crate::MessageHandler,
+        handler: &MessageHandler,
         update: &Update,
         _command: Option<&Command>,
-    ) -> anyhow::Result<super::Status> {
+    ) -> anyhow::Result<Status> {
         let message = needs_field!(update, message);
 
         let command = match message.get_command() {
@@ -76,7 +73,7 @@ impl super::Handler for CommandHandler {
 impl CommandHandler {
     async fn handle_mirror(
         &self,
-        handler: &crate::MessageHandler,
+        handler: &MessageHandler,
         message: &Message,
     ) -> anyhow::Result<()> {
         let from = message.from.as_ref().unwrap();
@@ -106,7 +103,7 @@ impl CommandHandler {
             return Ok(());
         }
 
-        let mut results: Vec<crate::PostInfo> = Vec::with_capacity(links.len());
+        let mut results: Vec<PostInfo> = Vec::with_capacity(links.len());
 
         let mut missing = {
             let mut sites = handler.sites.lock().await;
@@ -153,22 +150,20 @@ impl CommandHandler {
                 drop(action);
 
                 handler.make_request(&video).await?;
+            } else if let Ok(file_type) = resize_photo(&result.url, 5_000_000).await {
+                let photo = SendPhoto {
+                    chat_id: message.chat_id(),
+                    caption: result.source_link.clone(),
+                    photo: file_type,
+                    reply_to_message_id: Some(message.message_id),
+                    ..Default::default()
+                };
+
+                drop(action);
+
+                handler.make_request(&photo).await?;
             } else {
-                if let Ok(file_type) = resize_photo(&result.url, 5_000_000).await {
-                    let photo = SendPhoto {
-                        chat_id: message.chat_id(),
-                        caption: result.source_link.clone(),
-                        photo: file_type,
-                        reply_to_message_id: Some(message.message_id),
-                        ..Default::default()
-                    };
-
-                    drop(action);
-
-                    handler.make_request(&photo).await?;
-                } else {
-                    missing.push(result.source_link.as_deref().unwrap_or(&result.url));
-                }
+                missing.push(result.source_link.as_deref().unwrap_or(&result.url));
             }
         } else {
             for chunk in results.chunks(10) {
@@ -246,7 +241,7 @@ impl CommandHandler {
 
     async fn handle_source(
         &self,
-        handler: &crate::MessageHandler,
+        handler: &MessageHandler,
         message: &Message,
     ) -> anyhow::Result<()> {
         let action = continuous_action(
@@ -368,11 +363,7 @@ impl CommandHandler {
             .map_err(Into::into)
     }
 
-    async fn handle_alts(
-        &self,
-        handler: &crate::MessageHandler,
-        message: &Message,
-    ) -> anyhow::Result<()> {
+    async fn handle_alts(&self, handler: &MessageHandler, message: &Message) -> anyhow::Result<()> {
         let action = continuous_action(
             handler.bot.clone(),
             12,
@@ -589,7 +580,7 @@ impl CommandHandler {
 
     async fn is_valid_admin_group(
         &self,
-        handler: &crate::MessageHandler,
+        handler: &MessageHandler,
         message: &Message,
         bot_needs_admin: bool,
     ) -> anyhow::Result<bool> {
@@ -647,7 +638,7 @@ impl CommandHandler {
 
     async fn enable_group_source(
         &self,
-        handler: &crate::MessageHandler,
+        handler: &MessageHandler,
         message: &Message,
     ) -> anyhow::Result<()> {
         if !self.is_valid_admin_group(&handler, &message, true).await? {
@@ -679,7 +670,7 @@ impl CommandHandler {
 
     async fn group_nopreviews(
         &self,
-        handler: &crate::MessageHandler,
+        handler: &MessageHandler,
         message: &Message,
     ) -> anyhow::Result<()> {
         if !self.is_valid_admin_group(&handler, &message, false).await? {

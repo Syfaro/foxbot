@@ -1,23 +1,28 @@
-use super::Status::*;
-use crate::needs_field;
 use anyhow::Context;
 use async_trait::async_trait;
 use tgbotapi::*;
 
+use super::{
+    Handler,
+    Status::{self, *},
+};
+use crate::MessageHandler;
+use foxbot_utils::*;
+
 pub struct GroupAddHandler;
 
 #[async_trait]
-impl super::Handler for GroupAddHandler {
+impl Handler for GroupAddHandler {
     fn name(&self) -> &'static str {
         "group"
     }
 
     async fn handle(
         &self,
-        handler: &crate::MessageHandler,
+        handler: &MessageHandler,
         update: &Update,
         _command: Option<&Command>,
-    ) -> anyhow::Result<super::Status> {
+    ) -> anyhow::Result<Status> {
         let message = needs_field!(update, message);
 
         let new_members = match &message.new_chat_members {

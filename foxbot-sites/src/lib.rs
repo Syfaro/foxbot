@@ -6,13 +6,15 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use thiserror::Error;
 
-use crate::models::Twitter as TwitterModel;
+use foxbot_models::Twitter as TwitterModel;
 
 const USER_AGENT: &str = concat!(
     "t.me/FoxBot version ",
     env!("CARGO_PKG_VERSION"),
     " developed by @Syfaro"
 );
+
+pub type BoxedSite = Box<dyn Site + Send + Sync>;
 
 #[derive(Clone, Debug, Default)]
 pub struct PostInfo {
@@ -236,7 +238,7 @@ struct E621Pool {
 }
 
 impl E621 {
-    pub fn new() -> Self {
+    pub fn default() -> Self {
         Self {
             show: regex::Regex::new(r"(?:https?://)?(?P<host>e(?:621|926)\.net)/(?:post/show/|posts/)(?P<id>\d+)(?:/(?P<tags>.+))?").unwrap(),
             data: regex::Regex::new(r"(?:https?://)?(?P<host>static\d+\.e(?:621|926)\.net)/data/(?:(?P<modifier>sample|preview)/)?[0-9a-f]{2}/[0-9a-f]{2}/(?P<md5>[0-9a-f]{32})\.(?P<ext>.+)").unwrap(),
@@ -560,37 +562,10 @@ impl FurAffinity {
             .header(header::USER_AGENT, USER_AGENT)
             .send()
             .await
-            .context("unable to request furaffinity submission")?;
-
-        let resp = if resp.status() == 429 || resp.status() == 503 {
-            let cfscrape::CfscrapeData { cookies, .. } =
-                cfscrape::get_cookie_string(url, Some(USER_AGENT))
-                    .map_err(|err| anyhow::format_err!("python error: {}", err))
-                    .context("unable to use cfscrape")?;
-            let cookies = cookies.split("; ");
-            for cookie in cookies {
-                let mut parts = cookie.split('=');
-                let name = parts.next().unwrap_fail().context("missing cookie data")?;
-                let value = parts.next().unwrap_fail().context("missing cookie data")?;
-
-                self.cookies.insert(name.into(), value.into());
-            }
-
-            self.client
-                .get(url)
-                .header(header::COOKIE, self.stringify_cookies())
-                .header(header::USER_AGENT, USER_AGENT)
-                .send()
-                .await
-                .context("unable to send furaffinity request with cfscrape cookies")?
-                .text()
-                .await
-                .context("unable to get text from furaffinity with cfscrape cookies")?
-        } else {
-            resp.text()
-                .await
-                .context("unable to get text from furaffinity submission")?
-        };
+            .context("unable to request furaffinity submission")?
+            .text()
+            .await
+            .context("unable to get text from furaffinity submission")?;
 
         let body = scraper::Html::parse_document(&resp);
         let img = match body.select(&self.submission).next() {
@@ -675,7 +650,7 @@ struct MastodonMediaAttachments {
 }
 
 impl Mastodon {
-    pub fn new() -> Self {
+    pub fn default() -> Self {
         Self {
             instance_cache: HashMap::new(),
             matcher: regex::Regex::new(
@@ -1126,7 +1101,7 @@ struct DeviantArtOEmbed {
 }
 
 impl DeviantArt {
-    pub fn new() -> Self {
+    pub fn default() -> Self {
         Self {
             client: reqwest::Client::new(),
             matcher: regex::Regex::new(r#"(?:(?:deviantart\.com/(?:.+/)?art/.+-|fav\.me/)(?P<id>\d+)|sta\.sh/(?P<code>\w+))"#)

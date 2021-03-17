@@ -4,16 +4,49 @@ use std::time::Instant;
 use tgbotapi::FileType;
 use tracing_futures::Instrument;
 
-use crate::models::{CachedPost, FileCache, Sites, UserConfig, UserConfigKey};
-use crate::{generate_id, BoxedSite};
+use foxbot_models::{CachedPost, FileCache, Sites, UserConfig, UserConfigKey};
+use foxbot_sites::{BoxedSite, PostInfo};
+
+/// Generates a random 24 character alphanumeric string.
+///
+/// Not cryptographically secure but unique enough for Telegram's unique IDs.
+pub fn generate_id() -> String {
+    use rand::Rng;
+    let rng = rand::thread_rng();
+
+    rng.sample_iter(&rand::distributions::Alphanumeric)
+        .take(24)
+        .collect()
+}
 
 type Bundle<'a> = &'a fluent::concurrent::FluentBundle<fluent::FluentResource>;
+
+#[macro_export]
+macro_rules! needs_field {
+    ($message:expr, $field:tt) => {
+        match $message.$field {
+            Some(ref field) => field,
+            _ => return Ok(crate::handlers::Status::Ignored),
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! potential_return {
+    ($v:expr) => {
+        match $v {
+            Err(e) => return Err(e),
+            Ok(Some(ret)) => return Ok(ret),
+            _ => (),
+        }
+    };
+}
 
 pub struct SiteCallback<'a> {
     pub site: &'a BoxedSite,
     pub link: &'a str,
     pub duration: i64,
-    pub results: Vec<crate::PostInfo>,
+    pub results: Vec<PostInfo>,
 }
 
 #[tracing::instrument(err, skip(user, sites, callback))]
@@ -196,10 +229,7 @@ pub async fn download_image(url: &str) -> anyhow::Result<bytes::Bytes> {
 
 /// Calculate image dimensions from provided data, returning a new PostInfo.
 #[tracing::instrument(skip(data))]
-pub async fn size_post(
-    post: &crate::PostInfo,
-    data: &bytes::Bytes,
-) -> anyhow::Result<crate::PostInfo> {
+pub async fn size_post(post: &PostInfo, data: &bytes::Bytes) -> anyhow::Result<PostInfo> {
     use image::GenericImageView;
 
     // If we already have image dimensions, assume they're valid and reuse.
@@ -210,7 +240,7 @@ pub async fn size_post(
     let im = image::load_from_memory(&data)?;
     let dimensions = im.dimensions();
 
-    Ok(crate::PostInfo {
+    Ok(PostInfo {
         image_dimensions: Some(dimensions),
         image_size: Some(data.len()),
         ..post.to_owned()
@@ -226,9 +256,9 @@ pub async fn cache_post(
     s3: &rusoto_s3::S3Client,
     s3_bucket: &str,
     s3_url: &str,
-    post: &crate::PostInfo,
+    post: &PostInfo,
     data: &bytes::Bytes,
-) -> anyhow::Result<crate::PostInfo> {
+) -> anyhow::Result<PostInfo> {
     let image = upload_image(&conn, &s3, &s3_bucket, &s3_url, &post.url, false, &data).await?;
 
     let thumb = if let Some(thumb) = &post.thumb {
@@ -243,7 +273,7 @@ pub async fn cache_post(
 
     let (url, dims) = (image.url, image.dimensions);
 
-    Ok(crate::PostInfo {
+    Ok(PostInfo {
         url,
         image_dimensions: Some(dims),
         thumb,
@@ -661,7 +691,7 @@ fn get_entity_text<'a>(text: &'a str, entity: &tgbotapi::MessageEntity) -> &'a s
 
 /// Check if a link was contained within a linkify Link.
 pub fn link_was_seen(
-    sites: &tokio::sync::MutexGuard<Vec<crate::BoxedSite>>,
+    sites: &tokio::sync::MutexGuard<Vec<BoxedSite>>,
     links: &[&str],
     source: &str,
 ) -> bool {
@@ -756,7 +786,7 @@ pub async fn can_delete_in_chat(
     user_id: i64,
     ignore_cache: bool,
 ) -> anyhow::Result<bool> {
-    use crate::models::{GroupConfig, GroupConfigKey};
+    use foxbot_models::{GroupConfig, GroupConfigKey};
 
     // If we're not ignoring cache, start by checking if we already have a value
     // in the database.
@@ -895,7 +925,7 @@ impl<'a> CheckFileSize<'a> {
 
                 self.size = Some(content_length);
                 tracing::trace!(size = content_length, "Got content-length");
-                return Ok(content_length);
+                Ok(content_length)
             }
             _ => {
                 tracing::debug!("HEAD request returned no content-length, downloading image");
@@ -1112,9 +1142,9 @@ mod tests {
         links.extend(found_links);
         let links: Vec<&str> = links.into_iter().map(|link| link.as_str()).collect();
 
-        let sites: Vec<crate::BoxedSite> = vec![
-            Box::new(crate::sites::E621::new()),
-            Box::new(crate::sites::Mastodon::new()),
+        let sites: Vec<foxbot_sites::BoxedSite> = vec![
+            Box::new(foxbot_sites::E621::default()),
+            Box::new(foxbot_sites::Mastodon::default()),
         ];
 
         let sites = tokio::sync::Mutex::new(sites);

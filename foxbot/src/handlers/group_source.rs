@@ -1,13 +1,14 @@
-use super::Status::*;
-use crate::models::{GroupConfig, GroupConfigKey};
-use crate::needs_field;
-use crate::utils::{
-    continuous_action, extract_links, find_best_photo, get_message, get_rating_bundle_name,
-    link_was_seen, match_image, sort_results,
-};
 use anyhow::Context;
 use async_trait::async_trait;
 use tgbotapi::{requests::*, *};
+
+use super::{
+    Handler,
+    Status::{self, *},
+};
+use crate::MessageHandler;
+use foxbot_models::{GroupConfig, GroupConfigKey};
+use foxbot_utils::*;
 
 const MAX_SOURCE_DISTANCE: u64 = 3;
 const NOISY_SOURCE_COUNT: usize = 4;
@@ -15,17 +16,17 @@ const NOISY_SOURCE_COUNT: usize = 4;
 pub struct GroupSourceHandler;
 
 #[async_trait]
-impl super::Handler for GroupSourceHandler {
+impl Handler for GroupSourceHandler {
     fn name(&self) -> &'static str {
         "group"
     }
 
     async fn handle(
         &self,
-        handler: &crate::MessageHandler,
+        handler: &MessageHandler,
         update: &Update,
         _command: Option<&Command>,
-    ) -> anyhow::Result<super::Status> {
+    ) -> anyhow::Result<Status> {
         let message = needs_field!(update, message);
         let photo_sizes = needs_field!(message, photo);
 

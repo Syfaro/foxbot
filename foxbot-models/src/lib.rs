@@ -1,6 +1,3 @@
-#![allow(clippy::suspicious_else_formatting)] // SQLx queries seem to generate these warnings...
-#![allow(clippy::toplevel_ref_arg)] // SQLx also generates these, should be fixed in next release
-
 use anyhow::Context;
 
 lazy_static::lazy_static! {
@@ -416,13 +413,14 @@ impl Video {
         url_id: &str,
         media_url: &str,
         display_url: &str,
+        display_name: &str,
     ) -> anyhow::Result<String> {
         let row = sqlx::query!(
             "INSERT INTO videos (source, url, display_url, display_name) VALUES ($1, $2, $3, $4) ON CONFLICT ON CONSTRAINT unique_source DO UPDATE SET source = EXCLUDED.source RETURNING display_name",
             url_id,
             media_url,
             display_url,
-            crate::generate_id()
+            display_name
         )
         .fetch_one(conn)
         .await?;
@@ -538,5 +536,26 @@ impl CachedPost {
         let row = sqlx::query!("INSERT INTO cached_post (post_url, thumb, cdn_url, width, height) VALUES ($1, $2, $3, $4, $5) RETURNING id", post_url, thumb, cdn_url, dimensions.0 as i64, dimensions.1 as i64).fetch_one(conn).await?;
 
         Ok(row.id)
+    }
+}
+
+pub struct Permissions;
+
+impl Permissions {
+    pub async fn add_change(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        my_chat_member: &tgbotapi::ChatMemberUpdated,
+    ) -> anyhow::Result<()> {
+        let data = serde_json::to_value(&my_chat_member.new_chat_member).unwrap();
+
+        sqlx::query!(
+            "INSERT INTO permission (chat_id, updated_at, permissions) VALUES ($1, to_timestamp($2::int), $3)",
+            my_chat_member.chat.id,
+            my_chat_member.date,
+            data
+        )
+        .execute(conn).await?;
+
+        Ok(())
     }
 }

@@ -1,20 +1,24 @@
-use super::Status::{self, *};
-use crate::models::{Twitter, TwitterAccount};
-use crate::utils::get_message;
-use crate::{needs_field, MessageHandler};
 use async_trait::async_trait;
+
+use super::{
+    Handler,
+    Status::{self, *},
+};
+use crate::{Config, MessageHandler};
+use foxbot_models::{Twitter, TwitterAccount};
+use foxbot_utils::*;
 
 pub struct TwitterHandler;
 
 #[async_trait]
-impl super::Handler for TwitterHandler {
+impl Handler for TwitterHandler {
     fn name(&self) -> &'static str {
         "twitter"
     }
 
     async fn handle(
         &self,
-        handler: &crate::MessageHandler,
+        handler: &MessageHandler,
         update: &tgbotapi::Update,
         command: Option<&tgbotapi::Command>,
     ) -> anyhow::Result<Status> {
@@ -169,7 +173,7 @@ async fn verify_account(
     Twitter::set_account(
         &handler.conn,
         row.user_id,
-        crate::models::TwitterAccount {
+        TwitterAccount {
             consumer_key: access.key.to_string(),
             consumer_secret: access.secret.to_string(),
         },
@@ -290,14 +294,14 @@ async fn prepare_authorization_link(
     Ok(text)
 }
 
-fn get_keypair(config: &crate::Config) -> egg_mode::KeyPair {
+fn get_keypair(config: &Config) -> egg_mode::KeyPair {
     egg_mode::KeyPair::new(
         config.twitter_consumer_key.clone(),
         config.twitter_consumer_secret.clone(),
     )
 }
 
-fn get_access(config: &crate::Config, account: TwitterAccount) -> egg_mode::Token {
+fn get_access(config: &Config, account: TwitterAccount) -> egg_mode::Token {
     egg_mode::Token::Access {
         consumer: get_keypair(&config),
         access: egg_mode::KeyPair::new(account.consumer_key, account.consumer_secret),

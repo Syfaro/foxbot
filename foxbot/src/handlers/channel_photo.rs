@@ -3,24 +3,27 @@ use async_trait::async_trait;
 use redis::AsyncCommands;
 use tgbotapi::{requests::*, *};
 
-use super::Status::{self, *};
-use crate::utils::{extract_links, find_best_photo, get_message, link_was_seen, match_image};
-use crate::{needs_field, potential_return};
+use super::{
+    Handler,
+    Status::{self, *},
+};
+use crate::MessageHandler;
+use foxbot_utils::*;
 
 pub struct ChannelPhotoHandler;
 
 #[async_trait]
-impl super::Handler for ChannelPhotoHandler {
+impl Handler for ChannelPhotoHandler {
     fn name(&self) -> &'static str {
         "channel"
     }
 
     async fn handle(
         &self,
-        handler: &crate::MessageHandler,
+        handler: &MessageHandler,
         update: &Update,
         _command: Option<&Command>,
-    ) -> anyhow::Result<super::Status> {
+    ) -> anyhow::Result<Status> {
         // Ensure we have a channel_post Message and a photo within.
         let message = needs_field!(update, channel_post);
         let sizes = needs_field!(&message, photo);
