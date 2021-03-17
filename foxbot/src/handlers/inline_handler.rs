@@ -1,12 +1,15 @@
-use super::Status::*;
-use crate::generate_id;
-use crate::models::Video;
-use crate::needs_field;
-use crate::sites::PostInfo;
-use crate::utils::*;
 use anyhow::Context;
 use async_trait::async_trait;
 use tgbotapi::{requests::*, *};
+
+use super::{
+    Handler,
+    Status::{self, *},
+};
+use crate::MessageHandler;
+use foxbot_models::Video;
+use foxbot_sites::PostInfo;
+use foxbot_utils::*;
 
 /// Telegram allows inline results up to 5MB.
 static MAX_IMAGE_SIZE: usize = 5_000_000;
@@ -22,7 +25,7 @@ pub enum ResultType {
 impl InlineHandler {
     async fn process_video(
         &self,
-        handler: &crate::MessageHandler,
+        handler: &MessageHandler,
         message: &Message,
     ) -> anyhow::Result<()> {
         let text = message.text.as_ref().unwrap();
@@ -70,9 +73,9 @@ impl InlineHandler {
     #[tracing::instrument(skip(self, handler, message), fields(video_id, progress))]
     async fn video_progress(
         &self,
-        handler: &crate::MessageHandler,
+        handler: &MessageHandler,
         message: &Message,
-    ) -> anyhow::Result<super::Status> {
+    ) -> anyhow::Result<Status> {
         tracing::info!("Got video progress: {:?}", message.text);
 
         let text = message.text.clone().context("Progress was missing text")?;
@@ -83,11 +86,11 @@ impl InlineHandler {
             .context("Progress was missing progress percentage")?;
         tracing::Span::current().record("progress", &progress);
 
-        let video = crate::models::Video::lookup_display_name(&handler.conn, &display_name)
+        let video = Video::lookup_display_name(&handler.conn, &display_name)
             .await?
             .context("Video was missing")?;
         tracing::Span::current().record("video_id", &video.id);
-        let messages = crate::models::Video::associated_messages(&handler.conn, video.id).await?;
+        let messages = Video::associated_messages(&handler.conn, video.id).await?;
 
         let msg = handler
             .get_fluent_bundle(
@@ -119,24 +122,22 @@ impl InlineHandler {
     #[tracing::instrument(skip(self, handler, message), fields(video_id))]
     async fn video_complete(
         &self,
-        handler: &crate::MessageHandler,
+        handler: &MessageHandler,
         message: &Message,
-    ) -> anyhow::Result<super::Status> {
+    ) -> anyhow::Result<Status> {
         let text = message.text.clone().unwrap_or_default();
         let args: Vec<_> = text.split(' ').collect();
         let display_name = args.get(1).context("Progress was missing ID")?;
         let mp4_url = *args.get(2).context("Complete was missing MP4 URL")?;
         let thumb_url = args.get(3).context("Complete was missing thumb URL")?;
 
-        let video = crate::models::Video::lookup_display_name(&handler.conn, &display_name)
+        let video = Video::lookup_display_name(&handler.conn, &display_name)
             .await?
             .context("Video was missing")?;
         tracing::Span::current().record("video_id", &video.id);
-        crate::models::Video::set_processed_url(&handler.conn, video.id, &mp4_url, &thumb_url)
-            .await?;
+        Video::set_processed_url(&handler.conn, video.id, &mp4_url, &thumb_url).await?;
 
-        let mut messages =
-            crate::models::Video::associated_messages(&handler.conn, video.id).await?;
+        let mut messages = Video::associated_messages(&handler.conn, video.id).await?;
 
         tracing::debug!(count = messages.len(), "Found messages associated with job");
 
@@ -147,7 +148,7 @@ impl InlineHandler {
 
         let video_return_button = handler
             .get_fluent_bundle(None, |bundle| {
-                crate::utils::get_message(&bundle, "video-return-button", None).unwrap()
+                get_message(&bundle, "video-return-button", None).unwrap()
             })
             .await;
 
@@ -217,17 +218,17 @@ impl InlineHandler {
 }
 
 #[async_trait]
-impl super::Handler for InlineHandler {
+impl Handler for InlineHandler {
     fn name(&self) -> &'static str {
         "inline"
     }
 
     async fn handle(
         &self,
-        handler: &crate::MessageHandler,
+        handler: &MessageHandler,
         update: &Update,
         _command: Option<&Command>,
-    ) -> anyhow::Result<super::Status> {
+    ) -> anyhow::Result<Status> {
         if let Some(message) = &update.message {
             match message.get_command() {
                 Some(cmd) if cmd.name == "/start" => {
@@ -357,7 +358,7 @@ impl super::Handler for InlineHandler {
 ///
 /// It adds an inline keyboard for the direct link and source if available.
 async fn process_result(
-    handler: &crate::MessageHandler,
+    handler: &MessageHandler,
     result: &PostInfo,
     from: &User,
 ) -> anyhow::Result<Option<Vec<(ResultType, InlineQueryResult)>>> {
@@ -432,8 +433,8 @@ async fn process_result(
 }
 
 async fn build_image_result(
-    handler: &crate::MessageHandler,
-    result: &crate::sites::PostInfo,
+    handler: &MessageHandler,
+    result: &PostInfo,
     thumb_url: String,
     keyboard: &InlineKeyboardMarkup,
 ) -> anyhow::Result<Vec<(ResultType, InlineQueryResult)>> {
@@ -515,7 +516,7 @@ async fn build_image_result(
 
 async fn build_webm_result(
     conn: &sqlx::Pool<sqlx::Postgres>,
-    result: &crate::sites::PostInfo,
+    result: &PostInfo,
     thumb_url: String,
     keyboard: &InlineKeyboardMarkup,
     url_id: String,
@@ -524,7 +525,8 @@ async fn build_webm_result(
     let video = match Video::lookup_url_id(&conn, &url_id).await? {
         None => {
             let display_name =
-                Video::insert_new_media(&conn, &url_id, &result.url, &display_url).await?;
+                Video::insert_new_media(&conn, &url_id, &result.url, &display_url, &generate_id())
+                    .await?;
 
             return Ok(vec![(
                 ResultType::VideoToBeProcessed,
@@ -582,7 +584,7 @@ async fn build_webm_result(
 }
 
 fn build_mp4_result(
-    result: &crate::sites::PostInfo,
+    result: &PostInfo,
     thumb_url: String,
     keyboard: &InlineKeyboardMarkup,
 ) -> Vec<(ResultType, InlineQueryResult)> {
@@ -610,7 +612,7 @@ fn build_mp4_result(
 }
 
 fn build_gif_result(
-    result: &crate::sites::PostInfo,
+    result: &PostInfo,
     thumb_url: String,
     keyboard: &InlineKeyboardMarkup,
 ) -> Vec<(ResultType, InlineQueryResult)> {

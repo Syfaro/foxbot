@@ -1,23 +1,28 @@
-use super::Status::*;
-use crate::needs_field;
 use anyhow::Context;
 use async_trait::async_trait;
 use tgbotapi::*;
 
+use super::{
+    Handler,
+    Status::{self, *},
+};
+use crate::MessageHandler;
+use foxbot_utils::*;
+
 pub struct ErrorCleanup;
 
 #[async_trait]
-impl super::Handler for ErrorCleanup {
+impl Handler for ErrorCleanup {
     fn name(&self) -> &'static str {
         "error_cleanup"
     }
 
     async fn handle(
         &self,
-        handler: &crate::MessageHandler,
+        handler: &MessageHandler,
         update: &Update,
         _command: Option<&Command>,
-    ) -> anyhow::Result<super::Status> {
+    ) -> anyhow::Result<Status> {
         let callback_query = needs_field!(update, callback_query);
         let data = needs_field!(callback_query, data);
 
@@ -31,7 +36,7 @@ impl super::Handler for ErrorCleanup {
                 let lang = callback_query.from.language_code.as_deref();
                 let message = handler
                     .get_fluent_bundle(lang, |bundle| {
-                        crate::utils::get_message(&bundle, "error-delete-callback", None).unwrap()
+                        get_message(&bundle, "error-delete-callback", None).unwrap()
                     })
                     .await;
 
@@ -70,7 +75,7 @@ impl super::Handler for ErrorCleanup {
                 let lang = callback_query.from.language_code.as_deref();
                 handler
                     .get_fluent_bundle(lang, |bundle| {
-                        crate::utils::get_message(&bundle, "error-deleted", None).unwrap()
+                        get_message(&bundle, "error-deleted", None).unwrap()
                     })
                     .await
             }

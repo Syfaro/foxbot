@@ -2,25 +2,28 @@ use anyhow::Context;
 use async_trait::async_trait;
 use tgbotapi::{requests::*, *};
 
-use super::Status::*;
-use crate::models::{Sites, UserConfig, UserConfigKey};
-use crate::needs_field;
-use crate::utils::get_message;
+use super::{
+    Handler,
+    Status::{self, *},
+};
+use crate::MessageHandler;
+use foxbot_models::{Sites, UserConfig, UserConfigKey};
+use foxbot_utils::*;
 
 pub struct SettingsHandler;
 
 #[async_trait]
-impl super::Handler for SettingsHandler {
+impl Handler for SettingsHandler {
     fn name(&self) -> &'static str {
         "settings"
     }
 
     async fn handle(
         &self,
-        handler: &crate::MessageHandler,
+        handler: &MessageHandler,
         update: &Update,
         command: Option<&Command>,
-    ) -> anyhow::Result<super::Status> {
+    ) -> anyhow::Result<Status> {
         if let Some(command) = command {
             if command.name == "/settings" {
                 send_settings_message(&handler, &update.message.as_ref().unwrap())
@@ -50,10 +53,10 @@ impl super::Handler for SettingsHandler {
 }
 
 async fn name(
-    handler: &crate::MessageHandler,
+    handler: &MessageHandler,
     callback_query: &CallbackQuery,
     data: &str,
-) -> anyhow::Result<super::Status> {
+) -> anyhow::Result<Status> {
     let reply_message = needs_field!(callback_query, message);
     let from = reply_message
         .from
@@ -136,7 +139,7 @@ async fn name(
 }
 
 async fn name_keyboard(
-    handler: &crate::MessageHandler,
+    handler: &MessageHandler,
     from: &User,
 ) -> anyhow::Result<InlineKeyboardMarkup> {
     let enabled = UserConfig::get(&handler.conn, UserConfigKey::SourceName, from.id)
@@ -168,10 +171,10 @@ async fn name_keyboard(
 }
 
 async fn order(
-    handler: &crate::MessageHandler,
+    handler: &MessageHandler,
     callback_query: &CallbackQuery,
     data: &str,
-) -> anyhow::Result<super::Status> {
+) -> anyhow::Result<Status> {
     if data.ends_with(":e") {
         let text = handler
             .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
@@ -328,7 +331,7 @@ async fn order(
 }
 
 async fn send_settings_message(
-    handler: &crate::MessageHandler,
+    handler: &MessageHandler,
     message: &Message,
 ) -> anyhow::Result<Message> {
     let from = message

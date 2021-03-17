@@ -1,18 +1,14 @@
 use sentry::integrations::anyhow::capture_anyhow;
-use sites::{PostInfo, Site};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tgbotapi::{requests::*, *};
 use tokio::sync::{Mutex, RwLock};
 use unic_langid::LanguageIdentifier;
 
+use foxbot_utils::*;
+
 mod coconut;
 mod handlers;
-pub mod models;
-mod sites;
-mod utils;
-
-// MARK: Monitoring configuration
 
 lazy_static::lazy_static! {
     static ref REQUEST_DURATION: prometheus::Histogram = prometheus::register_histogram!("foxbot_request_duration_seconds", "Time to start processing request").unwrap();
@@ -22,25 +18,10 @@ lazy_static::lazy_static! {
     static ref TELEGRAM_ERROR: prometheus::Counter = prometheus::register_counter!("foxbot_telegram_error_total", "Number of errors returned by Telegram").unwrap();
 }
 
-// MARK: Statics and types
-
-type BoxedSite = Box<dyn Site + Send + Sync>;
 type BoxedHandler = Box<dyn handlers::Handler + Send + Sync>;
 
 static CONCURRENT_HANDLERS: usize = 2;
 static INLINE_HANDLERS: usize = 10;
-
-/// Generates a random 24 character alphanumeric string.
-///
-/// Not cryptographically secure but unique enough for Telegram's unique IDs.
-fn generate_id() -> String {
-    use rand::Rng;
-    let rng = rand::thread_rng();
-
-    rng.sample_iter(&rand::distributions::Alphanumeric)
-        .take(24)
-        .collect()
-}
 
 /// Artwork used for examples throughout the bot.
 static STARTING_ARTWORK: &[&str] = &[
@@ -116,8 +97,6 @@ pub struct Config {
     db_pass: String,
     db_name: String,
 }
-
-// MARK: Initialization
 
 /// Configure tracing with Jaeger.
 fn configure_tracing(collector: String) {
@@ -240,7 +219,7 @@ async fn main() {
         .await
         .expect("unable to create database pool");
 
-    sqlx::migrate!()
+    sqlx::migrate!("../migrations")
         .run(&pool)
         .await
         .expect("unable to run database migrations");
@@ -249,28 +228,30 @@ async fn main() {
         config.fautil_apitoken.clone(),
     ));
 
+    use foxbot_sites::*;
+
     let sites: Vec<BoxedSite> = vec![
-        Box::new(sites::E621::new()),
-        Box::new(sites::FurAffinity::new(
+        Box::new(E621::default()),
+        Box::new(FurAffinity::new(
             (config.fa_a.clone(), config.fa_b.clone()),
             config.fautil_apitoken.clone(),
         )),
-        Box::new(sites::Weasyl::new(config.weasyl_apitoken.clone())),
+        Box::new(Weasyl::new(config.weasyl_apitoken.clone())),
         Box::new(
-            sites::Twitter::new(
+            Twitter::new(
                 config.twitter_consumer_key.clone(),
                 config.twitter_consumer_secret.clone(),
                 pool.clone(),
             )
             .await,
         ),
-        Box::new(sites::Inkbunny::new(
+        Box::new(Inkbunny::new(
             config.inkbunny_username.clone(),
             config.inkbunny_password.clone(),
         )),
-        Box::new(sites::Mastodon::new()),
-        Box::new(sites::DeviantArt::new()),
-        Box::new(sites::Direct::new(fapi.clone())),
+        Box::new(Mastodon::default()),
+        Box::new(DeviantArt::default()),
+        Box::new(Direct::new(fapi.clone())),
     ];
 
     let bot = Arc::new(Telegram::new(config.telegram_apitoken.clone()));
@@ -466,8 +447,6 @@ async fn main() {
         })
         .await;
 }
-
-// MARK: Get Bot API updates
 
 /// Handle an incoming HTTP POST request to /{token}.
 ///
@@ -811,8 +790,6 @@ async fn poll_updates(
     });
 }
 
-// MARK: Handling updates
-
 pub struct MessageHandler {
     // State
     pub bot_user: User,
@@ -828,7 +805,7 @@ pub struct MessageHandler {
     pub coconut: coconut::Coconut,
 
     // Configuration
-    pub sites: Mutex<Vec<BoxedSite>>, // We always need mutable access, no reason to use a RwLock
+    pub sites: Mutex<Vec<foxbot_sites::BoxedSite>>, // We always need mutable access, no reason to use a RwLock
     pub config: Config,
 
     // Storage
@@ -913,7 +890,7 @@ impl MessageHandler {
     ) where
         C: FnOnce() -> uuid::Uuid,
     {
-        let u = utils::with_user_scope(message.from.as_ref(), tags, callback);
+        let u = with_user_scope(message.from.as_ref(), tags, callback);
 
         let lang_code = message
             .from
@@ -949,9 +926,9 @@ impl MessageHandler {
 
                 if u.is_nil() {
                     if recent_error_count > 0 {
-                        utils::get_message(&bundle, "error-generic-count", Some(args))
+                        get_message(&bundle, "error-generic-count", Some(args))
                     } else {
-                        utils::get_message(&bundle, "error-generic", None)
+                        get_message(&bundle, "error-generic", None)
                     }
                 } else {
                     let f = format!("`{}`", u.to_string());
@@ -963,7 +940,7 @@ impl MessageHandler {
                         "error-uuid"
                     };
 
-                    utils::get_message(&bundle, name, Some(args))
+                    get_message(&bundle, name, Some(args))
                 }
             })
             .await
@@ -982,7 +959,7 @@ impl MessageHandler {
                 Ok(id) => id,
                 Err(e) => {
                     tracing::error!("unable to get error message-id to edit: {:?}", e);
-                    utils::with_user_scope(message.from.as_ref(), None, || {
+                    with_user_scope(message.from.as_ref(), None, || {
                         sentry::capture_error(&e);
                     });
 
@@ -1001,7 +978,7 @@ impl MessageHandler {
 
             if let Err(e) = self.make_request(&edit_message).await {
                 tracing::error!("unable to edit error message to user: {:?}", e);
-                utils::with_user_scope(message.from.as_ref(), None, || {
+                with_user_scope(message.from.as_ref(), None, || {
                     sentry::capture_error(&e);
                 });
 
@@ -1030,7 +1007,7 @@ impl MessageHandler {
                 }
                 Err(e) => {
                     tracing::error!("unable to send error message to user: {:?}", e);
-                    utils::with_user_scope(message.from.as_ref(), None, || {
+                    with_user_scope(message.from.as_ref(), None, || {
                         sentry::capture_error(&e);
                     });
                 }
@@ -1048,7 +1025,7 @@ impl MessageHandler {
 
         let try_me = self
             .get_fluent_bundle(from.language_code.as_deref(), |bundle| {
-                utils::get_message(&bundle, "welcome-try-me", None).unwrap()
+                get_message(&bundle, "welcome-try-me", None).unwrap()
             })
             .await;
 
@@ -1068,7 +1045,7 @@ impl MessageHandler {
 
         let welcome = self
             .get_fluent_bundle(from.language_code.as_deref(), |bundle| {
-                utils::get_message(&bundle, &name, None).unwrap()
+                get_message(&bundle, &name, None).unwrap()
             })
             .await;
 
@@ -1094,7 +1071,7 @@ impl MessageHandler {
 
         let text = self
             .get_fluent_bundle(language_code, |bundle| {
-                utils::get_message(&bundle, name, None).unwrap()
+                get_message(&bundle, name, None).unwrap()
             })
             .await;
 
@@ -1115,11 +1092,11 @@ impl MessageHandler {
         tracing::trace!(?update, "handling update");
 
         sentry::configure_scope(|mut scope| {
-            utils::add_sentry_tracing(&mut scope);
+            add_sentry_tracing(&mut scope);
         });
 
-        let user = utils::user_from_update(&update);
-        let chat = utils::chat_from_update(&update);
+        let user = user_from_update(&update);
+        let chat = chat_from_update(&update);
 
         if let Some(user) = user {
             tracing::Span::current().record("user_id", &user.id);

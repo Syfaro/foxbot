@@ -1,0 +1,42 @@
+[package]
+name = "foxbot-utils"
+version = "0.1.0"
+authors = ["Syfaro <syfaro@huefox.com>"]
+edition = "2018"
+
+[dependencies]
+anyhow = "1"
+tracing = "0.1"
+tracing-futures = "0.2"
+
+opentelemetry = "0.6"
+tracing-opentelemetry = "0.5"
+
+sentry = "0.22"
+
+futures = "0.3"
+tokio = { version = "1", features = ["sync"] }
+tokio-stream = "0.1"
+
+rand = "0.7"
+fluent = "0.12"
+
+sha2 = "0.9"
+image = "0.23"
+bytes = "1"
+hex = "0.4"
+hamming = "0.1"
+
+sqlx = { version = "0.5", default-features = false, features = ["runtime-tokio-rustls", "macros", "postgres", "json"] }
+
+reqwest = { version = "0.11", features = ["json"] }
+rusoto_s3 = "0.46"
+
+tgbotapi = { git = "https://github.com/Syfaro/tgbotapi-rs" }
+fuzzysearch = { git = "https://github.com/Syfaro/fuzzysearch-rs", features = ["trace", "local_hash"] }
+
+foxbot-sites = { path = "../foxbot-sites" }
+foxbot-models = { path = "../foxbot-models" }
+
+[dev-dependencies]
+linkify = "0.5"

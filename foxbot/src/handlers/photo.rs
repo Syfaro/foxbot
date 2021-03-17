@@ -2,25 +2,28 @@ use anyhow::Context;
 use async_trait::async_trait;
 use tgbotapi::{requests::*, *};
 
-use super::Status::*;
-use crate::models::{GroupConfig, GroupConfigKey};
-use crate::needs_field;
-use crate::utils::{continuous_action, find_best_photo, match_image, sort_results, source_reply};
+use super::{
+    Handler,
+    Status::{self, *},
+};
+use crate::MessageHandler;
+use foxbot_models::{GroupConfig, GroupConfigKey};
+use foxbot_utils::*;
 
 pub struct PhotoHandler;
 
 #[async_trait]
-impl super::Handler for PhotoHandler {
+impl Handler for PhotoHandler {
     fn name(&self) -> &'static str {
         "photo"
     }
 
     async fn handle(
         &self,
-        handler: &crate::MessageHandler,
+        handler: &MessageHandler,
         update: &Update,
         _command: Option<&Command>,
-    ) -> anyhow::Result<super::Status> {
+    ) -> anyhow::Result<Status> {
         let message = needs_field!(update, message);
         let photos = needs_field!(message, photo);
 

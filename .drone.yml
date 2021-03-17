@@ -83,7 +83,7 @@ steps:
   - export RUSTC_WRAPPER=$(pwd)/sccache-0.2.14-x86_64-unknown-linux-musl/sccache
   - pip3 install cfscrape
   - export RELEASE=${DRONE_COMMIT_SHA}
-  - RUSTFLAGS=-g cargo build --release
+  - RUSTFLAGS=-g cargo build --bin foxbot --release
   - $(pwd)/sccache-0.2.14-x86_64-unknown-linux-musl/sccache --show-stats
   - cp ./target/release/foxbot ./foxbot
   environment:
@@ -224,6 +224,6 @@ trigger:
 
 ---
 kind: signature
-hmac: a046001f57b235b17324729fe497f5e3a2dd73910ca9dbe04ef8e9a1b8519c70
+hmac: 1012b205da589eab0d3733e44e510d76e601b64860a0a1982e9f429bd188fb73
 
 ...

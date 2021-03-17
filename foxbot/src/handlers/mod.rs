@@ -13,6 +13,7 @@ mod photo;
 pub mod settings;
 mod twitter;
 
+use crate::MessageHandler;
 pub use channel_photo::ChannelPhotoHandler;
 pub use chosen_inline_handler::ChosenInlineHandler;
 pub use commands::CommandHandler;
@@ -43,29 +44,8 @@ pub trait Handler: Send + Sync {
     /// Errors are logged to tracing::error and reported to Sentry, if enabled.
     async fn handle(
         &self,
-        handler: &super::MessageHandler,
+        handler: &MessageHandler,
         update: &tgbotapi::Update,
         command: Option<&tgbotapi::Command>,
     ) -> anyhow::Result<Status>;
-}
-
-#[macro_export]
-macro_rules! needs_field {
-    ($message:expr, $field:tt) => {
-        match $message.$field {
-            Some(ref field) => field,
-            _ => return Ok(crate::handlers::Status::Ignored),
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! potential_return {
-    ($v:expr) => {
-        match $v {
-            Err(e) => return Err(e),
-            Ok(Some(ret)) => return Ok(ret),
-            _ => (),
-        }
-    };
 }

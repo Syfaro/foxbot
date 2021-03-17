@@ -4,18 +4,70 @@ use std::time::Instant;
 use tgbotapi::FileType;
 use tracing_futures::Instrument;
 
-use crate::models::{CachedPost, FileCache, Sites, UserConfig, UserConfigKey};
-use crate::{generate_id, BoxedSite};
+use foxbot_models::{CachedPost, FileCache, Sites, UserConfig, UserConfigKey};
+use foxbot_sites::{BoxedSite, PostInfo};
 
-type Bundle<'a> = &'a fluent::concurrent::FluentBundle<fluent::FluentResource>;
+/// Generates a random 24 character alphanumeric string.
+///
+/// Not cryptographically secure but unique enough for Telegram's unique IDs.
+pub fn generate_id() -> String {
+    use rand::Rng;
+    let rng = rand::thread_rng();
 
-pub struct SiteCallback<'a> {
-    pub site: &'a BoxedSite,
-    pub link: &'a str,
-    pub duration: i64,
-    pub results: Vec<crate::PostInfo>,
+    rng.sample_iter(&rand::distributions::Alphanumeric)
+        .take(24)
+        .collect()
 }
 
+/// A localization bundle.
+type Bundle<'a> = &'a fluent::concurrent::FluentBundle<fluent::FluentResource>;
+
+/// A convenience macro for handlers to ignore updates that don't contain a
+/// required field.
+#[macro_export]
+macro_rules! needs_field {
+    ($message:expr, $field:tt) => {
+        match $message.$field {
+            Some(ref field) => field,
+            _ => return Ok(crate::handlers::Status::Ignored),
+        }
+    };
+}
+
+/// Return early if something was an error or contained data.
+#[macro_export]
+macro_rules! potential_return {
+    ($v:expr) => {
+        match $v {
+            Err(e) => return Err(e),
+            Ok(Some(ret)) => return Ok(ret),
+            _ => (),
+        }
+    };
+}
+
+/// Data obtained from a site loader on a given URL.
+pub struct SiteCallback<'a> {
+    /// The site loader that was used to check for images.
+    pub site: &'a BoxedSite,
+    /// The link that was loaded.
+    pub link: &'a str,
+    /// The amount of time it took for the site to load data from the URL.
+    pub duration: i64,
+    /// The results obtained by the loader.
+    pub results: Vec<PostInfo>,
+}
+
+/// Find images from the given URLs using the site loaders with authentication
+/// from the given user.
+///
+/// It goes through each URL with each site, in the provided order. When a site
+/// specifies that it supports a URL, the images are attempted to be loaded. If
+/// it was possible to get images, the callback is called with the data.
+/// Otherwise, the URL is added to a list of URLs where no images were found.
+/// After a site reports it supports a URL, no other sites are attempted for
+/// that URL. When complete, it returns the URLs that appeared to contain no
+/// content.
 #[tracing::instrument(err, skip(user, sites, callback))]
 pub async fn find_images<'a, C>(
     user: &tgbotapi::User,
@@ -49,14 +101,14 @@ where
                             duration: start.elapsed().as_millis() as i64,
                             results,
                         });
-                        continue 'link;
                     }
                     _ => {
                         tracing::debug!(site = site.name(), "no images found");
                         missing.push(link);
-                        continue 'link;
                     }
                 }
+
+                continue 'link;
             }
         }
     }
@@ -64,8 +116,11 @@ where
     Ok(missing)
 }
 
+/// Information about an image uploaded to the bot's cache.
 pub struct ImageInfo {
+    /// URL to the bot's image
     url: String,
+    /// Dimensions of the image
     dimensions: (u32, u32),
 }
 
@@ -172,34 +227,13 @@ async fn upload_image(
 /// Will fail if the download is larger than 50MB.
 #[tracing::instrument]
 pub async fn download_image(url: &str) -> anyhow::Result<bytes::Bytes> {
-    use bytes::BufMut;
-
-    let mut resp = reqwest::get(url).await?;
-    let content_length = resp.content_length().unwrap_or(2_000_000);
-    if resp.content_length().unwrap_or_default() > 50_000_000 {
-        return Err(anyhow::anyhow!("content length is too large"));
-    }
-
-    let mut data = bytes::BytesMut::with_capacity(content_length as usize);
-    let mut size = 0;
-
-    while let Some(chunk) = resp.chunk().await? {
-        size += chunk.len();
-        if size > 50_000_000 {
-            return Err(anyhow::anyhow!("body was too long"));
-        }
-        data.put(chunk);
-    }
-
-    Ok(data.freeze())
+    let size_check = CheckFileSize::new(&url, 50_000_000);
+    size_check.into_bytes().await
 }
 
 /// Calculate image dimensions from provided data, returning a new PostInfo.
 #[tracing::instrument(skip(data))]
-pub async fn size_post(
-    post: &crate::PostInfo,
-    data: &bytes::Bytes,
-) -> anyhow::Result<crate::PostInfo> {
+pub async fn size_post(post: &PostInfo, data: &bytes::Bytes) -> anyhow::Result<PostInfo> {
     use image::GenericImageView;
 
     // If we already have image dimensions, assume they're valid and reuse.
@@ -210,7 +244,7 @@ pub async fn size_post(
     let im = image::load_from_memory(&data)?;
     let dimensions = im.dimensions();
 
-    Ok(crate::PostInfo {
+    Ok(PostInfo {
         image_dimensions: Some(dimensions),
         image_size: Some(data.len()),
         ..post.to_owned()
@@ -226,9 +260,9 @@ pub async fn cache_post(
     s3: &rusoto_s3::S3Client,
     s3_bucket: &str,
     s3_url: &str,
-    post: &crate::PostInfo,
+    post: &PostInfo,
     data: &bytes::Bytes,
-) -> anyhow::Result<crate::PostInfo> {
+) -> anyhow::Result<PostInfo> {
     let image = upload_image(&conn, &s3, &s3_bucket, &s3_url, &post.url, false, &data).await?;
 
     let thumb = if let Some(thumb) = &post.thumb {
@@ -243,7 +277,7 @@ pub async fn cache_post(
 
     let (url, dims) = (image.url, image.dimensions);
 
-    Ok(crate::PostInfo {
+    Ok(PostInfo {
         url,
         image_dimensions: Some(dims),
         thumb,
@@ -251,10 +285,12 @@ pub async fn cache_post(
     })
 }
 
+/// Find the photo with the largest number of pixels.
 pub fn find_best_photo(sizes: &[tgbotapi::PhotoSize]) -> Option<&tgbotapi::PhotoSize> {
     sizes.iter().max_by_key(|size| size.height * size.width)
 }
 
+/// Get a message from the bundle with a language code, if provided.
 pub fn get_message(
     bundle: Bundle,
     name: &str,
@@ -271,6 +307,7 @@ pub fn get_message(
     }
 }
 
+/// Add current opentelemetry span to a Sentry scope.
 pub fn add_sentry_tracing(scope: &mut sentry::Scope) {
     use opentelemetry::api::HttpTextFormat;
     use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -285,8 +322,10 @@ pub fn add_sentry_tracing(scope: &mut sentry::Scope) {
     scope.set_extra("x-b3", data.to_owned().into());
 }
 
+/// Tags to add to a sentry event.
 type SentryTags<'a> = Option<Vec<(&'a str, String)>>;
 
+/// Run a callback within a Sentry scope with a given user and tags.
 pub fn with_user_scope<C, R>(from: Option<&tgbotapi::User>, tags: SentryTags, callback: C) -> R
 where
     C: FnOnce() -> R,
@@ -315,8 +354,13 @@ where
     )
 }
 
+/// Possible alternate items.
 type AlternateItems<'a> = Vec<(&'a Vec<String>, &'a Vec<fuzzysearch::File>)>;
 
+/// Determine which matches are potential alternate versions of an image.
+///
+/// It remembers which hashes were associated with used items and returns them
+/// in addition to the formatted message.
 pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (String, Vec<i64>) {
     let mut used_hashes = vec![];
 
@@ -371,42 +415,16 @@ pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (S
     (s, used_hashes)
 }
 
-pub fn parse_known_bots(message: &tgbotapi::Message) -> Option<Vec<String>> {
-    let from = if let Some(ref forward_from) = message.forward_from {
-        Some(forward_from)
-    } else {
-        message.from.as_ref()
-    };
-
-    let from = match &from {
-        Some(from) => from,
-        None => return None,
-    };
-
-    tracing::trace!(from_id = from.id, "evaluating if known bot");
-
-    match from.id {
-        // FAwatchbot
-        190_600_517 => {
-            let urls = match message.entities {
-                Some(ref entities) => entities.iter().filter_map(|entity| {
-                    { entity.url.as_ref().map(|url| url.to_string()) }
-                        .filter(|url| url.contains("furaffinity.net/view/"))
-                }),
-                None => return None,
-            };
-
-            Some(urls.collect())
-        }
-        _ => None,
-    }
-}
-
+/// An action that is repeatedly sent to Telegram until a maximum number has
+/// been reached or it has been dropped.
 pub struct ContinuousAction {
     tx: Option<tokio::sync::oneshot::Sender<bool>>,
 }
 
+/// Send an action into a chat until the returned value is dropped or the max
+/// has been reached.
 #[tracing::instrument(skip(bot, user))]
+#[must_use]
 pub fn continuous_action(
     bot: Arc<tgbotapi::Telegram>,
     max: usize,
@@ -426,6 +444,8 @@ pub fn continuous_action(
 
             let mut count: usize = 0;
 
+            // Take a new value every 5 seconds until the count has exceeded the
+            // max.
             let timer = Box::pin(
                 IntervalStream::new(tokio::time::interval(Duration::from_secs(5)))
                     .take_while(|_| {
@@ -443,6 +463,8 @@ pub fn continuous_action(
                     }),
             );
 
+            // Wait until the value has been dropped (got something on rx) or
+            // the max count has been reached.
             let was_ended = matches!(
                 futures::future::select(timer, rx).await,
                 futures::future::Either::Right(_)
@@ -456,15 +478,20 @@ pub fn continuous_action(
     ContinuousAction { tx: Some(tx) }
 }
 
+// When dropped, take oneshot and send event signaling it's done.
 impl Drop for ContinuousAction {
     fn drop(&mut self) {
-        let tx = std::mem::replace(&mut self.tx, None);
+        let tx = std::mem::take(&mut self.tx);
         if let Some(tx) = tx {
             let _ = tx.send(true);
         }
     }
 }
 
+/// Attempt to match an image against FuzzySearch by:
+/// * Checking if the file ID already exists in the cache
+/// * If not, downloading the image and hashing it
+/// * Looking up the hash with [`lookup_single_hash`]
 #[tracing::instrument(err, skip(bot, conn, fapi))]
 pub async fn match_image(
     bot: &tgbotapi::Telegram,
@@ -506,6 +533,8 @@ pub async fn match_image(
     lookup_single_hash(&fapi, hash, distance).await
 }
 
+/// Lookup a single hash from FuzzySearch, ensuring that the distance has been
+/// calculated from the provided hash.
 async fn lookup_single_hash(
     fapi: &fuzzysearch::FuzzySearch,
     hash: i64,
@@ -531,6 +560,7 @@ async fn lookup_single_hash(
     Ok(matches)
 }
 
+/// Sort match results based on a user's preferences.
 pub async fn sort_results(
     conn: &sqlx::Pool<sqlx::Postgres>,
     user_id: i64,
@@ -661,7 +691,7 @@ fn get_entity_text<'a>(text: &'a str, entity: &tgbotapi::MessageEntity) -> &'a s
 
 /// Check if a link was contained within a linkify Link.
 pub fn link_was_seen(
-    sites: &tokio::sync::MutexGuard<Vec<crate::BoxedSite>>,
+    sites: &tokio::sync::MutexGuard<Vec<BoxedSite>>,
     links: &[&str],
     source: &str,
 ) -> bool {
@@ -683,6 +713,7 @@ pub fn link_was_seen(
     )
 }
 
+/// Find the user responsible for any type of update.
 pub fn user_from_update(update: &tgbotapi::Update) -> Option<&tgbotapi::User> {
     use tgbotapi::*;
 
@@ -715,6 +746,7 @@ pub fn user_from_update(update: &tgbotapi::Update) -> Option<&tgbotapi::User> {
     }
 }
 
+/// Find the chat responsible for any type of update.
 pub fn chat_from_update(update: &tgbotapi::Update) -> Option<&tgbotapi::Chat> {
     use tgbotapi::*;
 
@@ -749,6 +781,8 @@ pub fn chat_from_update(update: &tgbotapi::Update) -> Option<&tgbotapi::Chat> {
     Some(chat)
 }
 
+/// Check if the bot has permissions to delete in a chat. Checks the cache if
+/// not being told to ignore it.
 pub async fn can_delete_in_chat(
     bot: &tgbotapi::Telegram,
     conn: &sqlx::Pool<sqlx::Postgres>,
@@ -756,7 +790,7 @@ pub async fn can_delete_in_chat(
     user_id: i64,
     ignore_cache: bool,
 ) -> anyhow::Result<bool> {
-    use crate::models::{GroupConfig, GroupConfigKey};
+    use foxbot_models::{GroupConfig, GroupConfigKey};
 
     // If we're not ignoring cache, start by checking if we already have a value
     // in the database.
@@ -792,6 +826,7 @@ pub async fn can_delete_in_chat(
     Ok(can_delete)
 }
 
+/// Get the name of the localization for a given rating, or if it's unknown.
 pub fn get_rating_bundle_name(rating: &Option<fuzzysearch::Rating>) -> &'static str {
     match rating {
         Some(fuzzysearch::Rating::General) => "rating-general",
@@ -800,6 +835,7 @@ pub fn get_rating_bundle_name(rating: &Option<fuzzysearch::Rating>) -> &'static 
     }
 }
 
+/// Write a reply for matched sources.
 pub fn source_reply(matches: &[fuzzysearch::File], bundle: Bundle<'_>) -> String {
     let first = match matches.first() {
         Some(result) => result,
@@ -895,7 +931,7 @@ impl<'a> CheckFileSize<'a> {
 
                 self.size = Some(content_length);
                 tracing::trace!(size = content_length, "Got content-length");
-                return Ok(content_length);
+                Ok(content_length)
             }
             _ => {
                 tracing::debug!("HEAD request returned no content-length, downloading image");
@@ -1112,9 +1148,9 @@ mod tests {
         links.extend(found_links);
         let links: Vec<&str> = links.into_iter().map(|link| link.as_str()).collect();
 
-        let sites: Vec<crate::BoxedSite> = vec![
-            Box::new(crate::sites::E621::new()),
-            Box::new(crate::sites::Mastodon::new()),
+        let sites: Vec<foxbot_sites::BoxedSite> = vec![
+            Box::new(foxbot_sites::E621::default()),
+            Box::new(foxbot_sites::Mastodon::default()),
         ];
 
         let sites = tokio::sync::Mutex::new(sites);
