@@ -5,7 +5,7 @@ use tgbotapi::FileType;
 use tracing_futures::Instrument;
 
 use crate::models::{CachedPost, FileCache, Sites, UserConfig, UserConfigKey};
-use crate::{BoxedSite, generate_id};
+use crate::{generate_id, BoxedSite};
 
 type Bundle<'a> = &'a fluent::concurrent::FluentBundle<fluent::FluentResource>;
 
@@ -964,7 +964,10 @@ pub async fn resize_photo(url: &str, max_size: u64) -> anyhow::Result<tgbotapi::
         tracing::debug!("Photo was smaller than max size, returning existing data");
 
         return if let Some(bytes) = check.bytes {
-            Ok(FileType::Bytes(format!("{}.jpg", generate_id()), bytes.to_vec()))
+            Ok(FileType::Bytes(
+                format!("{}.jpg", generate_id()),
+                bytes.to_vec(),
+            ))
         } else {
             Ok(FileType::Url(url.to_owned()))
         };

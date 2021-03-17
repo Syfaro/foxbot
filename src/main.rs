@@ -1207,14 +1207,29 @@ impl MessageHandler {
                             ..
                         }),
                     ..
-                }) => retry_after,
+                }) => {
+                    tracing::warn!(retry_after, "Rate limited");
+                    retry_after
+                }
+                tgbotapi::Error::Telegram(tgbotapi::TelegramError {
+                    error_code: Some(400),
+                    description: Some(desc),
+                    ..
+                }) if desc
+                    == "Bad Request: wrong file_id or the file is temporarily unavailable" =>
+                {
+                    tracing::warn!("file_id temporarily unavailable");
+                    2
+                }
+                tgbotapi::Error::Request(err) => {
+                    tracing::warn!("Telegram request network error: {:?}", err);
+                    2
+                }
                 _ => {
                     TELEGRAM_ERROR.inc();
                     return Err(err);
                 }
             };
-
-            tracing::warn!(retry_after, "rate limited");
 
             tokio::time::sleep(Duration::from_secs(retry_after as u64)).await;
 
