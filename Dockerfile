@@ -1,6 +1,6 @@
 FROM rust:1.49-slim-buster AS builder
 WORKDIR /src
-COPY ./foxbot ./foxbot
+COPY ./foxbot/foxbot ./foxbot
 RUN strip ./foxbot
 
 FROM registry.huefox.com/foxbot-base
