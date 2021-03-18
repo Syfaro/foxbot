@@ -1,5 +1,6 @@
 use anyhow::Context;
 use async_trait::async_trait;
+use futures::{stream::FuturesOrdered, StreamExt};
 use tgbotapi::{requests::*, *};
 
 use super::{
@@ -270,10 +271,14 @@ impl Handler for InlineHandler {
 
         let is_personal = results.iter().any(|result| result.personal);
 
-        let mut responses: Vec<(ResultType, InlineQueryResult)> = vec![];
+        let mut futs: FuturesOrdered<_> = results
+            .iter()
+            .map(|result| process_result(&handler, &result, &inline.from))
+            .collect();
 
-        for result in results {
-            if let Some(items) = process_result(&handler, &result, &inline.from).await? {
+        let mut responses: Vec<(ResultType, InlineQueryResult)> = vec![];
+        while let Some(item) = futs.next().await {
+            if let Ok(Some(items)) = item {
                 responses.extend(items);
             }
         }
@@ -596,7 +601,7 @@ fn build_mp4_result(
         "video/mp4".to_string(),
         thumb_url,
         result
-            .extra_caption
+            .title
             .clone()
             .unwrap_or_else(|| result.site_name.to_owned()),
     );
