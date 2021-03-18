@@ -404,12 +404,49 @@ impl Twitter {
 
         Self {
             matcher: regex::Regex::new(
-                r"https://(?:mobile\.)?twitter.com/(?:\w+)/status/(?P<id>\d+)",
+                r"https://(?:mobile\.)?twitter.com/(?P<screen_name>\w+)(?:/status/(?P<id>\d+))?",
             )
             .unwrap(),
             consumer,
             token,
             conn,
+        }
+    }
+
+    /// Get the media from a captured URL. If it is a direct link to a tweet,
+    /// attempt to load images from it. Otherwise, get the user's most recent
+    /// media.
+    async fn get_media(
+        &self,
+        token: &egg_mode::Token,
+        captures: &regex::Captures<'_>,
+    ) -> Option<(
+        Box<egg_mode::user::TwitterUser>,
+        Vec<egg_mode::entities::MediaEntity>,
+    )> {
+        if let Some(Ok(id)) = captures.name("id").map(|id| id.as_str().parse::<u64>()) {
+            let tweet = egg_mode::tweet::show(id, &token).await.ok()?.response;
+
+            let user = tweet.user?;
+            let media = tweet.extended_entities?.media;
+
+            Some((user, media))
+        } else {
+            let user = captures["screen_name"].to_owned();
+            let timeline =
+                egg_mode::tweet::user_timeline(user, false, false, &token).with_page_size(200);
+            let (_timeline, feed) = timeline.start().await.ok()?;
+
+            let user = feed.iter().next()?.user.as_ref()?.to_owned();
+
+            let media = feed
+                .into_iter()
+                .filter_map(|tweet| Some(tweet.extended_entities.as_ref()?.media.clone()))
+                .take(5) // Only take from 5 most recent media tweets
+                .flatten()
+                .collect();
+
+            Some((user, media))
         }
     }
 }
@@ -426,12 +463,13 @@ impl Site for Twitter {
             _ => return None,
         };
 
-        let sub_id: u64 = match captures["id"].to_owned().parse() {
-            Ok(id) => id,
-            _ => return None,
-        };
+        // Get the ID of the Tweet if possible, otherwise use the screen name.
+        let id = captures
+            .name("id")
+            .map(|id| id.as_str())
+            .unwrap_or(&captures["screen_name"]);
 
-        Some(format!("Twitter-{}", sub_id))
+        Some(format!("Twitter-{}", id))
     }
 
     async fn url_supported(&mut self, url: &str) -> bool {
@@ -444,7 +482,6 @@ impl Site for Twitter {
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let captures = self.matcher.captures(url).unwrap();
-        let id = captures["id"].to_owned().parse::<u64>().unwrap();
 
         tracing::trace!(user_id, "attempting to find saved credentials",);
 
@@ -460,19 +497,10 @@ impl Site for Twitter {
             _ => self.token.clone(),
         };
 
-        let tweet = match egg_mode::tweet::show(id, &token).await {
-            Ok(tweet) => tweet.response,
-            Err(e) => return Err(e.into()),
-        };
-
-        let user = tweet.user.unwrap();
-
-        let media = match tweet.extended_entities {
-            Some(entity) => entity.media,
+        let (user, media) = match self.get_media(&token, &captures).await {
             None => return Ok(None),
+            Some(data) => data,
         };
-
-        let text = tweet.text.clone();
 
         Ok(Some(
             media
@@ -485,7 +513,6 @@ impl Site for Twitter {
                         source_link: Some(item.expanded_url),
                         personal: user.protected,
                         title: Some(user.screen_name.clone()),
-                        extra_caption: Some(text.clone()),
                         site_name: self.name(),
                         ..Default::default()
                     },
