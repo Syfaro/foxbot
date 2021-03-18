@@ -1024,6 +1024,87 @@ pub async fn resize_photo(url: &str, max_size: u64) -> anyhow::Result<tgbotapi::
     Ok(FileType::Bytes(format!("{}.jpg", generate_id()), bytes))
 }
 
+/// Known resources for each language.
+pub static L10N_RESOURCES: &[&str] = &["foxbot.ftl"];
+/// Known languages.
+pub static L10N_LANGS: &[&str] = &["en-US"];
+
+/// A collection of language identifiers and their corresponding data.
+pub type Langs = std::collections::HashMap<unic_langid::LanguageIdentifier, Vec<String>>;
+/// A collection of fluent resources for a single language.
+pub type LangBundle = fluent::concurrent::FluentBundle<fluent::FluentResource>;
+
+/// Load all language data from the langs folder.
+pub fn load_langs() -> Langs {
+    let mut dir = std::env::current_dir().expect("Unable to get directory");
+    dir.push("langs");
+
+    let mut langs = std::collections::HashMap::new();
+
+    for lang in L10N_LANGS {
+        let path = dir.join(lang);
+
+        let mut lang_resources = Vec::with_capacity(L10N_RESOURCES.len());
+        let langid = lang
+            .parse::<unic_langid::LanguageIdentifier>()
+            .expect("Unable to parse language");
+
+        for resource in L10N_RESOURCES {
+            let file = path.join(resource);
+            let s = std::fs::read_to_string(file).expect("Unable to read file");
+
+            lang_resources.push(s);
+        }
+
+        langs.insert(langid, lang_resources);
+    }
+
+    langs
+}
+
+/// Get a bundle for a desired language.
+pub fn get_lang_bundle(langs: &Langs, requested: &str) -> LangBundle {
+    let requested_locale = match requested.parse::<unic_langid::LanguageIdentifier>() {
+        Ok(locale) => locale,
+        Err(err) => {
+            tracing::error!("unknown locale: {:?}", err);
+            L10N_LANGS[0]
+                .parse::<unic_langid::LanguageIdentifier>()
+                .unwrap()
+        }
+    };
+
+    let requested_locales: Vec<unic_langid::LanguageIdentifier> = vec![requested_locale];
+    let default_locale = L10N_LANGS[0]
+        .parse::<unic_langid::LanguageIdentifier>()
+        .expect("unable to parse langid");
+    let available: Vec<unic_langid::LanguageIdentifier> = langs.keys().map(Clone::clone).collect();
+    let resolved_locales = fluent_langneg::negotiate_languages(
+        &requested_locales,
+        &available,
+        Some(&&default_locale),
+        fluent_langneg::NegotiationStrategy::Filtering,
+    );
+
+    let current_locale = resolved_locales.get(0).expect("no locales were available");
+
+    let mut bundle =
+        fluent::concurrent::FluentBundle::<fluent::FluentResource>::new(resolved_locales.clone());
+    let resources = langs.get(current_locale).expect("missing known locale");
+
+    for resource in resources {
+        let resource = fluent::FluentResource::try_new(resource.to_string())
+            .expect("unable to parse FTL string");
+        bundle
+            .add_resource(resource)
+            .expect("unable to add resource");
+    }
+
+    bundle.set_use_isolating(false);
+
+    bundle
+}
+
 #[cfg(test)]
 mod tests {
     fn get_finder() -> linkify::LinkFinder {

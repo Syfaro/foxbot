@@ -35,6 +35,7 @@ egg-mode = { git = "https://github.com/egg-mode-rs/egg-mode" }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 futures = "0.3"
+faktory = "0.11"
 
 tgbotapi = { git = "https://github.com/Syfaro/tgbotapi-rs" }
 fuzzysearch = { git = "https://github.com/Syfaro/fuzzysearch-rs", features = ["trace", "local_hash"] }

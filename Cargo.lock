@@ -97,6 +97,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "atomic-option"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0db678acb667b525ac40a324fc5f7d3390e29239b31c7327bb8157f5b4fff593"
+
+[[package]]
 name = "autocfg"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -181,6 +187,12 @@ checksum = "fa79dedbb091f449f1f39e53edf88d5dbe95f895dae6135a8d7b881fb5af73f5"
 dependencies = [
  "byte-tools",
 ]
+
+[[package]]
+name = "bufstream"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "40e38929add23cdf8a366df9b0e088953150724bcbe5fc330b0d8eb3b328eec8"
 
 [[package]]
 name = "build_const"
@@ -564,10 +576,53 @@ dependencies = [
 ]
 
 [[package]]
+name = "failure"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d32e9bd16cc02eae7db7ef620b392808b89f6a5e16bb3497d159c6b92a0f4f86"
+dependencies = [
+ "backtrace",
+ "failure_derive",
+]
+
+[[package]]
+name = "failure_derive"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa4da3c766cd7a0db8242e326e9e4e081edd567072893ed320008189715366a4"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+ "synstructure",
+]
+
+[[package]]
 name = "fake-simd"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e88a8acf291dafb59c2d96e8f59828f3838bb1a70398823ade51a84de6a6deed"
+
+[[package]]
+name = "faktory"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6b9fce6dee5d69d713496c9f44de4984ddcf2a99b028113210cc94f0d441c47"
+dependencies = [
+ "atomic-option",
+ "bufstream",
+ "chrono",
+ "failure",
+ "fnv",
+ "hostname",
+ "libc",
+ "rand 0.7.3",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "sha2 0.8.2",
+ "url",
+]
 
 [[package]]
 name = "flate2"
@@ -661,6 +716,7 @@ dependencies = [
  "dotenv",
  "egg-mode",
  "envy",
+ "faktory",
  "fluent",
  "fluent-langneg",
  "foxbot-models",
@@ -695,6 +751,28 @@ dependencies = [
  "unic-langid",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "foxbot-channel-worker"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dotenv",
+ "envy",
+ "faktory",
+ "foxbot-sites",
+ "foxbot-utils",
+ "fuzzysearch",
+ "redis",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tgbotapi",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -738,6 +816,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "fluent",
+ "fluent-langneg",
  "foxbot-models",
  "foxbot-sites",
  "futures",
@@ -751,7 +830,7 @@ dependencies = [
  "reqwest",
  "rusoto_s3",
  "sentry",
- "sha2",
+ "sha2 0.9.3",
  "sqlx",
  "tgbotapi",
  "tokio",
@@ -759,6 +838,7 @@ dependencies = [
  "tracing",
  "tracing-futures",
  "tracing-opentelemetry",
+ "unic-langid",
 ]
 
 [[package]]
@@ -2311,7 +2391,7 @@ dependencies = [
  "rusoto_credential",
  "rustc_version 0.2.3",
  "serde",
- "sha2",
+ "sha2 0.9.3",
  "time 0.2.26",
  "tokio",
 ]
@@ -2699,6 +2779,18 @@ checksum = "2579985fda508104f7587689507983eadd6a6e84dd35d6d115361f530916fa0d"
 
 [[package]]
 name = "sha2"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a256f46ea78a0c0d9ff00077504903ac881a1dafdc20da66545699e7776b3e69"
+dependencies = [
+ "block-buffer 0.7.3",
+ "digest 0.8.1",
+ "fake-simd",
+ "opaque-debug 0.2.3",
+]
+
+[[package]]
+name = "sha2"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fa827a14b29ab7f44778d14a88d3cb76e949c45083f7dbfa507d0cb699dc12de"
@@ -2828,7 +2920,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha-1 0.9.4",
- "sha2",
+ "sha2 0.9.3",
  "smallvec",
  "sqlformat",
  "sqlx-rt",
@@ -2858,7 +2950,7 @@ dependencies = [
  "quote",
  "serde",
  "serde_json",
- "sha2",
+ "sha2 0.9.3",
  "sqlx-core",
  "sqlx-rt",
  "syn",
@@ -3001,6 +3093,18 @@ checksum = "3fd9d1e9976102a03c542daa2eff1b43f9d72306342f3f8b3ed5fb8908195d6f"
 dependencies = [
  "proc-macro2",
  "quote",
+ "unicode-xid",
+]
+
+[[package]]
+name = "synstructure"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b834f2d66f734cb897113e34aaff2f1ab4719ca946f9a7358dba8f8064148701"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
  "unicode-xid",
 ]
 
