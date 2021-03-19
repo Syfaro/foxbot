@@ -7,6 +7,7 @@ use tgbotapi::{
     requests::{EditMessageCaption, EditMessageReplyMarkup, ReplyMarkup},
     InlineKeyboardButton, InlineKeyboardMarkup,
 };
+use tracing::Instrument;
 
 use foxbot_sites::BoxedSite;
 use foxbot_utils::*;
@@ -243,28 +244,53 @@ impl Handler {
         .context("Unable to get matches")?;
 
         // Only keep matches with a distance of 3 or less
-        matches.retain(|m| m.distance.unwrap() <= 3);
+        matches.1.retain(|m| m.distance.unwrap() <= 3);
 
-        let first = match matches.first() {
+        let first = match matches.1.first() {
             Some(first) => first,
-            _ => return Ok(()),
+            _ => {
+                tracing::debug!("Unable to find sources for image");
+
+                return Ok(());
+            }
         };
 
-        let sites = self.sites.lock().await;
+        let links = extract_links(&message);
+
+        let mut sites = self.sites.lock().await;
 
         // If any matches contained a link we found in the message, skip adding
         // a source.
         if matches
+            .1
             .iter()
-            .any(|file| link_was_seen(&sites, &extract_links(&message), &file.url()))
+            .any(|file| link_was_seen(&sites, &links, &file.url()))
         {
             tracing::trace!("Post already contained valid source URL");
             return Ok(());
         }
 
+        if !links.is_empty() {
+            let mut results: Vec<foxbot_sites::PostInfo> = Vec::new();
+            let _ = find_images(&tgbotapi::User::default(), links, &mut sites, &mut |info| {
+                results.extend(info.results);
+            })
+            .await;
+
+            let urls: Vec<_> = results
+                .iter()
+                .map::<&str, _>(|result| &result.url)
+                .collect();
+            if has_similar_hash(matches.0, &urls).await {
+                tracing::debug!("URL in post contained similar hash");
+
+                return Ok(());
+            }
+        }
+
         drop(sites);
 
-        if already_had_source(&self.redis, &message, &matches).await? {
+        if already_had_source(&self.redis, &message, &matches.1).await? {
             tracing::trace!("Post group already contained source URL");
             return Ok(());
         }
@@ -287,6 +313,7 @@ impl Handler {
     #[tracing::instrument(skip(self, job), fields(job_id = job.id()))]
     async fn process_channel_edit(&self, job: faktory::Job) -> anyhow::Result<()> {
         let data: serde_json::Value = job.args().iter().next().unwrap().to_owned();
+
         tracing::trace!("Got enqueued edit: {:?}", data);
 
         let MessageEdit {
@@ -366,15 +393,25 @@ impl Handler {
             // an update, so ignore these errors.
             Err(tgbotapi::Error::Telegram(tgbotapi::TelegramError {
                 error_code: Some(400),
+                description,
                 ..
-            })) => Ok(()),
+            })) => {
+                tracing::warn!("Got 400 error, ignoring: {:?}", description);
+
+                Ok(())
+            }
             // If permissions have changed (bot was removed from channel, etc.)
             // we may no longer be allowed to process this update. There's
             // nothing else we can do so mark it as successful.
             Err(tgbotapi::Error::Telegram(tgbotapi::TelegramError {
                 error_code: Some(403),
+                description,
                 ..
-            })) => Ok(()),
+            })) => {
+                tracing::warn!("Got 403 error, ignoring: {:?}", description);
+
+                Ok(())
+            }
             Ok(_) => Ok(()),
             Err(e) => Err(e).context("Unable to update channel message"),
         }
@@ -429,6 +466,61 @@ async fn already_had_source(
     );
 
     Ok(source_count > added_links)
+}
+
+/// Check if any of the provided image URLs have a hash similar to the given
+/// input.
+#[tracing::instrument(skip(urls))]
+async fn has_similar_hash(to: i64, urls: &[&str]) -> bool {
+    let to = to.to_be_bytes();
+
+    for url in urls {
+        let check_size = CheckFileSize::new(url, 50_000_000);
+        let bytes = match check_size.into_bytes().await {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                tracing::warn!("Unable to download image: {:?}", err);
+
+                continue;
+            }
+        };
+
+        let hash = tokio::task::spawn_blocking(move || {
+            use std::convert::TryInto;
+
+            let hasher = fuzzysearch::get_hasher();
+
+            let im = match image::load_from_memory(&bytes) {
+                Ok(im) => im,
+                Err(err) => {
+                    tracing::warn!("Unable to load image: {:?}", err);
+
+                    return None;
+                }
+            };
+
+            let hash = hasher.hash_image(&im);
+            let bytes: [u8; 8] = hash.as_bytes().try_into().unwrap_or_default();
+
+            Some(bytes)
+        })
+        .in_current_span()
+        .await
+        .unwrap_or_default();
+
+        let hash = match hash {
+            Some(hash) => hash,
+            _ => continue,
+        };
+
+        if hamming::distance_fast(&to, &hash).unwrap() <= 3 {
+            tracing::debug!(url, hash = i64::from_be_bytes(hash), "Hashes were similar");
+
+            return true;
+        }
+    }
+
+    false
 }
 
 #[cfg(test)]

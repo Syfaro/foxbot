@@ -499,12 +499,14 @@ pub async fn match_image(
     fapi: &fuzzysearch::FuzzySearch,
     file: &tgbotapi::PhotoSize,
     distance: Option<i64>,
-) -> anyhow::Result<Vec<fuzzysearch::File>> {
+) -> anyhow::Result<(i64, Vec<fuzzysearch::File>)> {
     if let Some(hash) = FileCache::get(&conn, &file.file_unique_id)
         .await
         .context("unable to query file cache")?
     {
-        return lookup_single_hash(&fapi, hash, distance).await;
+        return lookup_single_hash(&fapi, hash, distance)
+            .await
+            .map(|files| (hash, files));
     }
 
     let get_file = tgbotapi::requests::GetFile {
@@ -530,7 +532,9 @@ pub async fn match_image(
         .await
         .context("unable to set file cache")?;
 
-    lookup_single_hash(&fapi, hash, distance).await
+    lookup_single_hash(&fapi, hash, distance)
+        .await
+        .map(|files| (hash, files))
 }
 
 /// Lookup a single hash from FuzzySearch, ensuring that the distance has been

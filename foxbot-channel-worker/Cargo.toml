@@ -24,6 +24,9 @@ chrono = "0.4"
 tokio = "1"
 redis = { version = "0.20", features = ["connection-manager", "tokio-comp"] }
 
+image = "0.23"
+hamming = "0.1"
+
 tgbotapi = { git = "https://github.com/Syfaro/tgbotapi-rs" }
 fuzzysearch = { git = "https://github.com/Syfaro/fuzzysearch-rs", features = ["trace", "local_hash"] }
 

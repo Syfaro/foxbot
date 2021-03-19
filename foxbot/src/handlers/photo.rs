@@ -47,7 +47,8 @@ impl Handler for PhotoHandler {
             &best_photo,
             Some(3),
         )
-        .await?;
+        .await?
+        .1;
         sort_results(
             &handler.conn,
             message.from.as_ref().unwrap().id,
