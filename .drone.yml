@@ -16,11 +16,10 @@ steps:
   image: rust:1.49-slim-buster
   commands:
   - apt-get update -y
-  - apt-get install pkg-config libssl-dev ca-certificates python3 python3-pip nodejs wget -y
+  - apt-get install pkg-config libssl-dev ca-certificates wget -y
   - wget -O sccache.tar.gz https://github.com/mozilla/sccache/releases/download/0.2.14/sccache-0.2.14-x86_64-unknown-linux-musl.tar.gz
   - tar zxvf sccache.tar.gz
   - export RUSTC_WRAPPER=$(pwd)/sccache-0.2.14-x86_64-unknown-linux-musl/sccache
-  - pip3 install cfscrape
   - cargo test
   - cargo test -- --ignored
   - $(pwd)/sccache-0.2.14-x86_64-unknown-linux-musl/sccache --show-stats
@@ -77,15 +76,16 @@ steps:
   image: rust:1.49-slim-buster
   commands:
   - apt-get update -y
-  - apt-get install pkg-config libssl-dev ca-certificates python3 python3-pip nodejs wget -y
+  - apt-get install pkg-config libssl-dev ca-certificates wget -y
   - wget -O sccache.tar.gz https://github.com/mozilla/sccache/releases/download/0.2.14/sccache-0.2.14-x86_64-unknown-linux-musl.tar.gz
   - tar zxvf sccache.tar.gz
   - export RUSTC_WRAPPER=$(pwd)/sccache-0.2.14-x86_64-unknown-linux-musl/sccache
-  - pip3 install cfscrape
   - export RELEASE=${DRONE_COMMIT_SHA}
   - RUSTFLAGS=-g cargo build --bin foxbot --release
+  - RUSTFLAGS=-g cargo build --bin foxbot-channel-worker --release
   - $(pwd)/sccache-0.2.14-x86_64-unknown-linux-musl/sccache --show-stats
   - cp ./target/release/foxbot ./foxbot
+  - cp ./target/release/foxbot-channel-worker ./foxbot-channel-worker
   environment:
     AWS_ACCESS_KEY_ID:
       from_secret: sccache_s3_access_key
@@ -96,7 +96,7 @@ steps:
       from_secret: sccache_s3_endpoint
     SCCACHE_S3_USE_SSL: true
 
-- name: docker
+- name: docker-bot
   pull: always
   image: plugins/docker
   settings:
@@ -104,6 +104,20 @@ steps:
       from_secret: docker_password
     registry: registry.huefox.com
     repo: registry.huefox.com/foxbot
+    tags:
+    - ${DRONE_COMMIT_SHA}
+    username:
+      from_secret: docker_username
+
+- name: docker-channel-worker
+  pull: always
+  image: plugins/docker
+  settings:
+    dockerfile: Dockerfile.channel-worker
+    password:
+      from_secret: docker_password
+    registry: registry.huefox.com
+    repo: registry.huefox.com/foxbot-channel-worker
     tags:
     - ${DRONE_COMMIT_SHA}
     username:
@@ -224,6 +238,6 @@ trigger:
 
 ---
 kind: signature
-hmac: 1012b205da589eab0d3733e44e510d76e601b64860a0a1982e9f429bd188fb73
+hmac: a07f7d1cc065c079914621e3ed28b2b5d3f2b1c225cbef5dddcb4eb197419734
 
 ...
