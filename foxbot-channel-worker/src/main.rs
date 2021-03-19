@@ -45,7 +45,7 @@ fn main() {
         .connect(&config.database_url);
     let pool = runtime
         .block_on(pool)
-        .expect("unable to create database pool");
+        .expect("Unable to create database pool");
 
     let sites = runtime.block_on(foxbot_sites::get_all_sites(
         config.fa_a,
@@ -368,8 +368,15 @@ impl Handler {
                 error_code: Some(400),
                 ..
             })) => Ok(()),
+            // If permissions have changed (bot was removed from channel, etc.)
+            // we may no longer be allowed to process this update. There's
+            // nothing else we can do so mark it as successful.
+            Err(tgbotapi::Error::Telegram(tgbotapi::TelegramError {
+                error_code: Some(403),
+                ..
+            })) => Ok(()),
             Ok(_) => Ok(()),
-            Err(e) => Err(e).context("unable to update channel message"),
+            Err(e) => Err(e).context("Unable to update channel message"),
         }
     }
 }
