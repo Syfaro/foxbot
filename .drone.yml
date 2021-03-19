@@ -13,7 +13,7 @@ concurrency:
 steps:
 - name: test
   pull: always
-  image: rust:1.49-slim-buster
+  image: rust:1.50-slim-buster
   commands:
   - apt-get update -y
   - apt-get install pkg-config libssl-dev ca-certificates wget -y
@@ -49,7 +49,7 @@ trigger:
 ---
 kind: pipeline
 type: docker
-name: deploy
+name: images
 
 platform:
   os: linux
@@ -60,7 +60,7 @@ concurrency:
 
 steps:
 - name: build-bot
-  image: rust:1.49-slim-buster
+  image: rust:1.50-slim-buster
   commands:
   - apt-get update -y
   - apt-get install pkg-config libssl-dev ca-certificates wget -y
@@ -82,7 +82,7 @@ steps:
     SCCACHE_S3_USE_SSL: true
 
 - name: build-channel-worker
-  image: rust:1.49-slim-buster
+  image: rust:1.50-slim-buster
   commands:
   - apt-get update -y
   - apt-get install pkg-config libssl-dev ca-certificates wget -y
@@ -193,13 +193,36 @@ steps:
     SENTRY_PROJECT:
       from_secret: sentry_project
   when:
+    branch:
+    - master
     event:
-    - promote
-    target:
-    - production
+    - push
   depends_on:
   - deploy-staging
 
+image_pull_secrets:
+- dockerconfig
+
+trigger:
+  event:
+    exclude:
+    - pull_request
+    - cron
+    - custom
+
+---
+kind: pipeline
+type: docker
+name: deploy
+
+platform:
+  os: linux
+  arch: amd64
+
+concurrency:
+  limit: 1
+
+steps:
 - name: deploy
   pull: always
   image: appleboy/drone-ssh
@@ -215,13 +238,6 @@ steps:
     - bash /deploy/foxbot.sh
     username:
       from_secret: deploy_username
-  when:
-    event:
-    - promote
-    target:
-    - production
-  depends_on:
-  - sentry-finalize
 
 - name: sentry-deploy
   image: getsentry/sentry-cli
@@ -234,23 +250,12 @@ steps:
       from_secret: sentry_org
     SENTRY_PROJECT:
       from_secret: sentry_project
-  when:
-    event:
-    - promote
-    target:
-    - production
-  depends_on:
-  - deploy
-
-image_pull_secrets:
-- dockerconfig
 
 trigger:
   event:
-    exclude:
-    - pull_request
-    - cron
-    - custom
+  - promote
+  target:
+  - production
 
 ---
 kind: pipeline
@@ -282,6 +287,6 @@ trigger:
 
 ---
 kind: signature
-hmac: 6a30deaaabe40af733c19943e6f8ee97938093ba10a010357c80d4a9f1655e6c
+hmac: 73daf497e16d13499ad0507ec3de3914897ace32f69cc2180d1024c4b609326d
 
 ...
