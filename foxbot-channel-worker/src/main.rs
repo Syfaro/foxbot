@@ -247,7 +247,11 @@ impl Handler {
 
         let first = match matches.first() {
             Some(first) => first,
-            _ => return Ok(()),
+            _ => {
+                tracing::debug!("Unable to find sources for image");
+
+                return Ok(());
+            }
         };
 
         let sites = self.sites.lock().await;
@@ -287,6 +291,7 @@ impl Handler {
     #[tracing::instrument(skip(self, job), fields(job_id = job.id()))]
     async fn process_channel_edit(&self, job: faktory::Job) -> anyhow::Result<()> {
         let data: serde_json::Value = job.args().iter().next().unwrap().to_owned();
+
         tracing::trace!("Got enqueued edit: {:?}", data);
 
         let MessageEdit {
@@ -366,15 +371,25 @@ impl Handler {
             // an update, so ignore these errors.
             Err(tgbotapi::Error::Telegram(tgbotapi::TelegramError {
                 error_code: Some(400),
+                description,
                 ..
-            })) => Ok(()),
+            })) => {
+                tracing::warn!("Got 400 error, ignoring: {:?}", description);
+
+                Ok(())
+            }
             // If permissions have changed (bot was removed from channel, etc.)
             // we may no longer be allowed to process this update. There's
             // nothing else we can do so mark it as successful.
             Err(tgbotapi::Error::Telegram(tgbotapi::TelegramError {
                 error_code: Some(403),
+                description,
                 ..
-            })) => Ok(()),
+            })) => {
+                tracing::warn!("Got 403 error, ignoring: {:?}", description);
+
+                Ok(())
+            }
             Ok(_) => Ok(()),
             Err(e) => Err(e).context("Unable to update channel message"),
         }
