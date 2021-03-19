@@ -209,6 +209,7 @@ trigger:
     - pull_request
     - cron
     - custom
+    - promote
 
 ---
 kind: pipeline
