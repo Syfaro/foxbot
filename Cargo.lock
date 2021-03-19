@@ -762,6 +762,7 @@ dependencies = [
  "dotenv",
  "envy",
  "faktory",
+ "fluent",
  "foxbot-sites",
  "foxbot-utils",
  "fuzzysearch",
@@ -773,6 +774,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "unic-langid",
 ]
 
 [[package]]

@@ -74,6 +74,7 @@ fn main() {
     let handler = Arc::new(Handler {
         sites: tokio::sync::Mutex::new(sites),
         langs,
+        best_langs: Default::default(),
         telegram,
         producer: Arc::new(Mutex::new(producer)),
         fuzzysearch,
@@ -160,10 +161,13 @@ struct MessageEdit {
     file: fuzzysearch::File,
 }
 
+type BestLangs = std::collections::HashMap<String, LangBundle>;
+
 struct Handler {
     sites: tokio::sync::Mutex<Vec<BoxedSite>>,
 
     langs: Langs,
+    best_langs: tokio::sync::RwLock<BestLangs>,
 
     producer: Arc<Mutex<faktory::Producer<std::net::TcpStream>>>,
     telegram: tgbotapi::Telegram,
@@ -173,12 +177,45 @@ struct Handler {
 }
 
 impl Handler {
+    /// Enqueue a new Faktory job by spawning a blocking task.
     async fn enqueue(&self, job: faktory::Job) {
         let producer = self.producer.clone();
         tokio::task::spawn_blocking(move || {
             let mut producer = producer.lock().unwrap();
             producer.enqueue(job).unwrap();
         });
+    }
+
+    /// Build a fluent language bundle for a specified language and cache the
+    /// result.
+    async fn get_fluent_bundle<C, R>(&self, requested: Option<&str>, callback: C) -> R
+    where
+        C: FnOnce(&fluent::concurrent::FluentBundle<fluent::FluentResource>) -> R,
+    {
+        let requested = requested.unwrap_or(L10N_LANGS[0]);
+
+        tracing::trace!(lang = requested, "Looking up language bundle");
+
+        {
+            let lock = self.best_langs.read().await;
+            if let Some(bundle) = lock.get(requested) {
+                return callback(bundle);
+            }
+        }
+
+        tracing::debug!(lang = requested, "Got new language, building bundle");
+
+        let bundle = get_lang_bundle(&self.langs, requested);
+
+        // Lock for writing for as short as possible.
+        {
+            let mut lock = self.best_langs.write().await;
+            lock.insert(requested.to_string(), bundle);
+        }
+
+        let lock = self.best_langs.read().await;
+        let bundle = lock.get(requested).expect("value just inserted is missing");
+        callback(bundle)
     }
 
     #[tracing::instrument(skip(self, job), fields(job_id = job.id()))]
@@ -188,6 +225,7 @@ impl Handler {
 
         tracing::trace!("Got enqueued message: {:?}", message);
 
+        // Photos should exist for job to be enqueued.
         let sizes = match &message.photo {
             Some(photo) => photo,
             _ => return Ok(()),
@@ -202,7 +240,7 @@ impl Handler {
             Some(3),
         )
         .await
-        .context("unable to get matches")?;
+        .context("Unable to get matches")?;
 
         // Only keep matches with a distance of 3 or less
         matches.retain(|m| m.distance.unwrap() <= 3);
@@ -214,14 +252,20 @@ impl Handler {
 
         let sites = self.sites.lock().await;
 
-        // If this link was already in the message, we can ignore it.
-        if link_was_seen(&sites, &extract_links(&message), &first.url) {
+        // If any matches contained a link we found in the message, skip adding
+        // a source.
+        if matches
+            .iter()
+            .any(|file| link_was_seen(&sites, &extract_links(&message), &file.url()))
+        {
+            tracing::trace!("Post already contained valid source URL");
             return Ok(());
         }
 
         drop(sites);
 
         if already_had_source(&self.redis, &message, &matches).await? {
+            tracing::trace!("Post group already contained source URL");
             return Ok(());
         }
 
@@ -265,8 +309,10 @@ impl Handler {
             self.telegram.make_request(&edit_caption_markup).await
         // Not a media group, we should create an inline keyboard.
         } else {
-            let bundle = get_lang_bundle(&self.langs, L10N_LANGS[0]);
-            let text = get_message(&bundle, "inline-source", None).unwrap();
+            let text = self
+                .get_fluent_bundle(None, |bundle| get_message(&bundle, "inline-source", None))
+                .await
+                .unwrap();
 
             let markup = InlineKeyboardMarkup {
                 inline_keyboard: vec![vec![InlineKeyboardButton {
@@ -357,7 +403,7 @@ async fn already_had_source(
 
     let key = format!("group-sources:{}", group_id);
 
-    let mut urls = matches.iter().map(|m| m.url()).collect::<Vec<_>>();
+    let mut urls: Vec<_> = matches.iter().map(|m| m.url()).collect();
     urls.sort();
     urls.dedup();
     let source_count = urls.len();
