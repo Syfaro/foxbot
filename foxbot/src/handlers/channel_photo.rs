@@ -70,3 +70,68 @@ fn initial_filter(message: &tgbotapi::Message) -> anyhow::Result<Option<Status>>
 
     Ok(None)
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_initial_filter() {
+        use super::initial_filter;
+        use crate::handlers::Status::*;
+
+        let message = tgbotapi::Message {
+            chat: tgbotapi::Chat {
+                chat_type: tgbotapi::ChatType::Private,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            initial_filter(&message).unwrap(),
+            Some(Ignored),
+            "should filter out non-channel updates"
+        );
+
+        let message = tgbotapi::Message {
+            chat: tgbotapi::Chat {
+                chat_type: tgbotapi::ChatType::Channel,
+                ..Default::default()
+            },
+            forward_date: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(
+            initial_filter(&message).unwrap(),
+            Some(Completed),
+            "should mark forwarded messages as complete"
+        );
+
+        let message = tgbotapi::Message {
+            chat: tgbotapi::Chat {
+                chat_type: tgbotapi::ChatType::Channel,
+                ..Default::default()
+            },
+            reply_markup: Some(tgbotapi::InlineKeyboardMarkup {
+                inline_keyboard: Default::default(),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            initial_filter(&message).unwrap(),
+            Some(Completed),
+            "should mark messages with reply markup as complete"
+        );
+
+        let message = tgbotapi::Message {
+            chat: tgbotapi::Chat {
+                chat_type: tgbotapi::ChatType::Channel,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            initial_filter(&message).unwrap(),
+            None,
+            "should not mark typical channel messages"
+        );
+    }
+}

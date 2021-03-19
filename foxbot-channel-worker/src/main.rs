@@ -408,6 +408,8 @@ async fn already_had_source(
     urls.dedup();
     let source_count = urls.len();
 
+    tracing::trace!(%group_id, "Adding new sources: {:?}", urls);
+
     let mut conn = conn.clone();
     let added_links: usize = conn.sadd(&key, urls).await?;
     conn.expire(&key, 300).await?;
@@ -418,5 +420,106 @@ async fn already_had_source(
         "Determined existing and new source links"
     );
 
-    Ok(source_count < added_links)
+    Ok(source_count > added_links)
+}
+
+#[cfg(test)]
+mod tests {
+    async fn get_redis() -> redis::aio::ConnectionManager {
+        let redis_client =
+            redis::Client::open(std::env::var("REDIS_DSN").expect("Missing REDIS_DSN")).unwrap();
+        redis::aio::ConnectionManager::new(redis_client)
+            .await
+            .expect("Unable to open Redis connection")
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_already_had_source() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        use super::already_had_source;
+
+        let mut conn = get_redis().await;
+        let _: () = redis::cmd("FLUSHDB").query_async(&mut conn).await.unwrap();
+
+        let site_info = Some(fuzzysearch::SiteInfo::FurAffinity(
+            fuzzysearch::FurAffinityFile { file_id: 123 },
+        ));
+
+        let message = tgbotapi::Message {
+            media_group_id: Some("test-group".to_string()),
+            ..Default::default()
+        };
+
+        let sources = vec![fuzzysearch::File {
+            site_id: 123,
+            site_info: site_info.clone(),
+            ..Default::default()
+        }];
+
+        let resp = already_had_source(&conn, &message, &sources).await;
+        assert!(resp.is_ok(), "filtering should not cause an error");
+        assert_eq!(
+            resp.unwrap(),
+            false,
+            "filtering with no results should have no status flag"
+        );
+
+        let resp = already_had_source(&conn, &message, &sources).await;
+        assert!(resp.is_ok(), "filtering should not cause an error");
+        assert_eq!(
+            resp.unwrap(),
+            true,
+            "filtering with same media group id and source should flag completed"
+        );
+
+        let sources = vec![fuzzysearch::File {
+            site_id: 456,
+            site_info: site_info.clone(),
+            ..Default::default()
+        }];
+
+        let resp = already_had_source(&conn, &message, &sources).await;
+        assert!(resp.is_ok(), "filtering should not cause an error");
+        assert_eq!(
+            resp.unwrap(),
+            false,
+            "filtering same group with new source should have no status flag"
+        );
+
+        let message = tgbotapi::Message {
+            media_group_id: Some("test-group-2".to_string()),
+            ..Default::default()
+        };
+
+        let resp = already_had_source(&conn, &message, &sources).await;
+        assert!(resp.is_ok(), "filtering should not cause an error");
+        assert_eq!(
+            resp.unwrap(),
+            false,
+            "different group should not be affected by other group sources"
+        );
+
+        let sources = vec![
+            fuzzysearch::File {
+                site_id: 456,
+                site_info: site_info.clone(),
+                ..Default::default()
+            },
+            fuzzysearch::File {
+                site_id: 789,
+                site_info: site_info.clone(),
+                ..Default::default()
+            },
+        ];
+
+        let resp = already_had_source(&conn, &message, &sources).await;
+        assert!(resp.is_ok(), "filtering should not cause an error");
+        assert_eq!(
+            resp.unwrap(),
+            true,
+            "adding a new with an old source should set a completed flag"
+        );
+    }
 }
