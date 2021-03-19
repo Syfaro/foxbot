@@ -155,10 +155,10 @@ struct Config {
 
 #[derive(serde::Deserialize, serde::Serialize)]
 struct MessageEdit {
-    chat_id: i64,
+    chat_id: String,
     message_id: i32,
     media_group_id: Option<String>,
-    file: fuzzysearch::File,
+    url: String,
 }
 
 type BestLangs = std::collections::HashMap<String, LangBundle>;
@@ -270,10 +270,10 @@ impl Handler {
         }
 
         let data = serde_json::to_value(&MessageEdit {
-            chat_id: message.chat.id,
+            chat_id: message.chat.id.to_string(),
             message_id: message.message_id,
             media_group_id: message.media_group_id,
-            file: first.to_owned(),
+            url: first.url(),
         })?;
 
         self.enqueue(
@@ -293,8 +293,9 @@ impl Handler {
             chat_id,
             message_id,
             media_group_id,
-            file,
+            url,
         } = serde_json::value::from_value(data.clone()).unwrap();
+        let chat_id: &str = &chat_id;
 
         // If this photo was part of a media group, we should set a caption on
         // the image because we can't make an inline keyboard on it.
@@ -302,7 +303,7 @@ impl Handler {
             let edit_caption_markup = EditMessageCaption {
                 chat_id: chat_id.into(),
                 message_id: Some(message_id),
-                caption: Some(file.url()),
+                caption: Some(url),
                 ..Default::default()
             };
 
@@ -317,7 +318,7 @@ impl Handler {
             let markup = InlineKeyboardMarkup {
                 inline_keyboard: vec![vec![InlineKeyboardButton {
                     text,
-                    url: Some(file.url()),
+                    url: Some(url),
                     ..Default::default()
                 }]],
             };
