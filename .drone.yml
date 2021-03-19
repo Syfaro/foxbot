@@ -69,7 +69,6 @@ steps:
   - export RUSTC_WRAPPER=$(pwd)/sccache-0.2.14-x86_64-unknown-linux-musl/sccache
   - export RELEASE=${DRONE_COMMIT_SHA}
   - RUSTFLAGS=-g cargo build --bin foxbot --release
-  - RUSTFLAGS=-g cargo build --bin foxbot-channel-worker --release
   - $(pwd)/sccache-0.2.14-x86_64-unknown-linux-musl/sccache --show-stats
   - cp ./target/release/foxbot ./foxbot
   environment:
@@ -91,7 +90,6 @@ steps:
   - tar zxvf sccache.tar.gz
   - export RUSTC_WRAPPER=$(pwd)/sccache-0.2.14-x86_64-unknown-linux-musl/sccache
   - export RELEASE=${DRONE_COMMIT_SHA}
-  - RUSTFLAGS=-g cargo build --bin foxbot --release
   - RUSTFLAGS=-g cargo build --bin foxbot-channel-worker --release
   - $(pwd)/sccache-0.2.14-x86_64-unknown-linux-musl/sccache --show-stats
   - cp ./target/release/foxbot-channel-worker ./foxbot-channel-worker
@@ -104,6 +102,8 @@ steps:
     SCCACHE_ENDPOINT:
       from_secret: sccache_s3_endpoint
     SCCACHE_S3_USE_SSL: true
+  depends_on:
+  - build-bot
 
 - name: docker-bot
   pull: always
@@ -153,6 +153,9 @@ steps:
     - master
     event:
     - push
+  depends_on:
+  - docker-bot
+  - docker-channel-worker
 
 - name: deploy-staging
   pull: always
@@ -278,6 +281,6 @@ trigger:
 
 ---
 kind: signature
-hmac: 1c89cfecdad44db7751937ba2b4765f848986eb381b14f295ab1a4beef82137c
+hmac: 0ff379da2c8a428b2f9c9d8d4f720227488383d4d7c8d78be788ab5bbe09f8d0
 
 ...
