@@ -71,6 +71,29 @@ pub trait Site {
     ) -> anyhow::Result<Option<Vec<PostInfo>>>;
 }
 
+pub async fn get_all_sites(
+    fa_a: String,
+    fa_b: String,
+    fuzzysearch_apitoken: String,
+    weasyl_apitoken: String,
+    twitter_consumer_key: String,
+    twitter_consumer_secret: String,
+    inkbunny_username: String,
+    inkbunny_password: String,
+    pool: sqlx::Pool<sqlx::Postgres>,
+) -> Vec<BoxedSite> {
+    vec![
+        Box::new(E621::default()),
+        Box::new(FurAffinity::new((fa_a, fa_b), fuzzysearch_apitoken.clone())),
+        Box::new(Weasyl::new(weasyl_apitoken)),
+        Box::new(Twitter::new(twitter_consumer_key, twitter_consumer_secret, pool).await),
+        Box::new(Inkbunny::new(inkbunny_username, inkbunny_password)),
+        Box::new(Mastodon::default()),
+        Box::new(DeviantArt::default()),
+        Box::new(Direct::new(fuzzysearch_apitoken)),
+    ]
+}
+
 // workaround for NoneError not actually being an Error
 // https://github.com/rust-lang-nursery/failure/issues/59#issuecomment-602862336
 #[derive(Debug, Error)]
@@ -107,7 +130,9 @@ impl Direct {
     /// Mime types we should consider valid images.
     const TYPES: &'static [&'static str] = &["image/png", "image/jpeg", "image/gif"];
 
-    pub fn new(fautil: std::sync::Arc<fuzzysearch::FuzzySearch>) -> Self {
+    pub fn new(fuzzysearch_apitoken: String) -> Self {
+        let fautil = std::sync::Arc::new(fuzzysearch::FuzzySearch::new(fuzzysearch_apitoken));
+
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(2))
             .user_agent(USER_AGENT)

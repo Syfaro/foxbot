@@ -16,11 +16,10 @@ steps:
   image: rust:1.49-slim-buster
   commands:
   - apt-get update -y
-  - apt-get install pkg-config libssl-dev ca-certificates python3 python3-pip nodejs wget -y
+  - apt-get install pkg-config libssl-dev ca-certificates wget -y
   - wget -O sccache.tar.gz https://github.com/mozilla/sccache/releases/download/0.2.14/sccache-0.2.14-x86_64-unknown-linux-musl.tar.gz
   - tar zxvf sccache.tar.gz
   - export RUSTC_WRAPPER=$(pwd)/sccache-0.2.14-x86_64-unknown-linux-musl/sccache
-  - pip3 install cfscrape
   - cargo test
   - cargo test -- --ignored
   - $(pwd)/sccache-0.2.14-x86_64-unknown-linux-musl/sccache --show-stats
@@ -60,28 +59,14 @@ concurrency:
   limit: 1
 
 steps:
-- name: sentry-release
-  pull: always
-  image: getsentry/sentry-cli
-  commands:
-  - sentry-cli releases new ${DRONE_COMMIT_SHA}
-  environment:
-    SENTRY_AUTH_TOKEN:
-      from_secret: sentry_auth_token
-    SENTRY_ORG:
-      from_secret: sentry_org
-    SENTRY_PROJECT:
-      from_secret: sentry_project
-
-- name: build
+- name: build-bot
   image: rust:1.49-slim-buster
   commands:
   - apt-get update -y
-  - apt-get install pkg-config libssl-dev ca-certificates python3 python3-pip nodejs wget -y
+  - apt-get install pkg-config libssl-dev ca-certificates wget -y
   - wget -O sccache.tar.gz https://github.com/mozilla/sccache/releases/download/0.2.14/sccache-0.2.14-x86_64-unknown-linux-musl.tar.gz
   - tar zxvf sccache.tar.gz
   - export RUSTC_WRAPPER=$(pwd)/sccache-0.2.14-x86_64-unknown-linux-musl/sccache
-  - pip3 install cfscrape
   - export RELEASE=${DRONE_COMMIT_SHA}
   - RUSTFLAGS=-g cargo build --bin foxbot --release
   - $(pwd)/sccache-0.2.14-x86_64-unknown-linux-musl/sccache --show-stats
@@ -96,7 +81,31 @@ steps:
       from_secret: sccache_s3_endpoint
     SCCACHE_S3_USE_SSL: true
 
-- name: docker
+- name: build-channel-worker
+  image: rust:1.49-slim-buster
+  commands:
+  - apt-get update -y
+  - apt-get install pkg-config libssl-dev ca-certificates wget -y
+  - wget -O sccache.tar.gz https://github.com/mozilla/sccache/releases/download/0.2.14/sccache-0.2.14-x86_64-unknown-linux-musl.tar.gz
+  - tar zxvf sccache.tar.gz
+  - export RUSTC_WRAPPER=$(pwd)/sccache-0.2.14-x86_64-unknown-linux-musl/sccache
+  - export RELEASE=${DRONE_COMMIT_SHA}
+  - RUSTFLAGS=-g cargo build --bin foxbot-channel-worker --release
+  - $(pwd)/sccache-0.2.14-x86_64-unknown-linux-musl/sccache --show-stats
+  - cp ./target/release/foxbot-channel-worker ./foxbot-channel-worker
+  environment:
+    AWS_ACCESS_KEY_ID:
+      from_secret: sccache_s3_access_key
+    AWS_SECRET_ACCESS_KEY:
+      from_secret: sccache_s3_secret_key
+    SCCACHE_BUCKET: cache
+    SCCACHE_ENDPOINT:
+      from_secret: sccache_s3_endpoint
+    SCCACHE_S3_USE_SSL: true
+  depends_on:
+  - build-bot
+
+- name: docker-bot
   pull: always
   image: plugins/docker
   settings:
@@ -108,12 +117,52 @@ steps:
     - ${DRONE_COMMIT_SHA}
     username:
       from_secret: docker_username
+  depends_on:
+  - build-bot
+
+- name: docker-channel-worker
+  pull: always
+  image: plugins/docker
+  settings:
+    dockerfile: Dockerfile.channel-worker
+    password:
+      from_secret: docker_password
+    registry: registry.huefox.com
+    repo: registry.huefox.com/foxbot-channel-worker
+    tags:
+    - ${DRONE_COMMIT_SHA}
+    username:
+      from_secret: docker_username
+  depends_on:
+  - build-channel-worker
+
+- name: sentry-release
+  pull: always
+  image: getsentry/sentry-cli
+  commands:
+  - sentry-cli releases new ${DRONE_COMMIT_SHA}
+  environment:
+    SENTRY_AUTH_TOKEN:
+      from_secret: sentry_auth_token
+    SENTRY_ORG:
+      from_secret: sentry_org
+    SENTRY_PROJECT:
+      from_secret: sentry_project
+  when:
+    branch:
+    - master
+    event:
+    - push
+  depends_on:
+  - docker-bot
+  - docker-channel-worker
 
 - name: deploy-staging
   pull: always
   image: sinlead/drone-kubectl
   commands:
   - kubectl -n foxbot-staging set image deployment/foxbot foxbot=registry.huefox.com/foxbot:${DRONE_COMMIT_SHA}
+  - kubectl -n foxbot-staging set image deployment/foxbot-channel-worker foxbot-channel-worker=registry.huefox.com/foxbot-channel-worker:${DRONE_COMMIT_SHA}
   settings:
     kubernetes_cert:
       from_secret: k8s-cert
@@ -126,6 +175,9 @@ steps:
     - master
     event:
     - push
+  depends_on:
+  - docker-bot
+  - docker-channel-worker
 
 - name: sentry-finalize
   image: getsentry/sentry-cli
@@ -145,6 +197,8 @@ steps:
     - promote
     target:
     - production
+  depends_on:
+  - deploy-staging
 
 - name: deploy
   pull: always
@@ -166,6 +220,8 @@ steps:
     - promote
     target:
     - production
+  depends_on:
+  - sentry-finalize
 
 - name: sentry-deploy
   image: getsentry/sentry-cli
@@ -183,6 +239,8 @@ steps:
     - promote
     target:
     - production
+  depends_on:
+  - deploy
 
 image_pull_secrets:
 - dockerconfig
@@ -224,6 +282,6 @@ trigger:
 
 ---
 kind: signature
-hmac: 1012b205da589eab0d3733e44e510d76e601b64860a0a1982e9f429bd188fb73
+hmac: 6a30deaaabe40af733c19943e6f8ee97938093ba10a010357c80d4a9f1655e6c
 
 ...

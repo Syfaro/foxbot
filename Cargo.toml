@@ -4,7 +4,8 @@ members = [
     "foxbot",
     "foxbot-sites",
     "foxbot-models",
-    "foxbot-utils"
+    "foxbot-utils",
+    "foxbot-channel-worker"
 ]
 
 [profile.release]

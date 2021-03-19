@@ -88,6 +88,7 @@ pub struct Config {
     pub cache_all_images: Option<bool>,
 
     redis_dsn: String,
+    faktory_url: Option<String>,
 
     metrics_host: String,
 
@@ -228,31 +229,18 @@ async fn main() {
         config.fautil_apitoken.clone(),
     ));
 
-    use foxbot_sites::*;
-
-    let sites: Vec<BoxedSite> = vec![
-        Box::new(E621::default()),
-        Box::new(FurAffinity::new(
-            (config.fa_a.clone(), config.fa_b.clone()),
-            config.fautil_apitoken.clone(),
-        )),
-        Box::new(Weasyl::new(config.weasyl_apitoken.clone())),
-        Box::new(
-            Twitter::new(
-                config.twitter_consumer_key.clone(),
-                config.twitter_consumer_secret.clone(),
-                pool.clone(),
-            )
-            .await,
-        ),
-        Box::new(Inkbunny::new(
-            config.inkbunny_username.clone(),
-            config.inkbunny_password.clone(),
-        )),
-        Box::new(Mastodon::default()),
-        Box::new(DeviantArt::default()),
-        Box::new(Direct::new(fapi.clone())),
-    ];
+    let sites = foxbot_sites::get_all_sites(
+        config.fa_a.clone(),
+        config.fa_b.clone(),
+        config.fautil_apitoken.clone(),
+        config.weasyl_apitoken.clone(),
+        config.twitter_consumer_key.clone(),
+        config.twitter_consumer_secret.clone(),
+        config.inkbunny_username.clone(),
+        config.inkbunny_password.clone(),
+        pool.clone(),
+    )
+    .await;
 
     let bot = Arc::new(Telegram::new(config.telegram_apitoken.clone()));
 
@@ -327,6 +315,9 @@ async fn main() {
         .await
         .expect("Unable to open Redis connection");
 
+    let faktory = faktory::Producer::connect(config.faktory_url.as_deref())
+        .expect("Unable to connect to Faktory");
+
     let handler = Arc::new(MessageHandler {
         bot_user,
         langs,
@@ -339,6 +330,7 @@ async fn main() {
         finder,
         s3,
         coconut,
+        faktory: Arc::new(std::sync::Mutex::new(faktory)),
 
         sites: Mutex::new(sites),
         conn: pool,
@@ -803,6 +795,7 @@ pub struct MessageHandler {
     pub finder: linkify::LinkFinder,
     pub s3: rusoto_s3::S3Client,
     pub coconut: coconut::Coconut,
+    pub faktory: Arc<std::sync::Mutex<faktory::Producer<std::net::TcpStream>>>,
 
     // Configuration
     pub sites: Mutex<Vec<foxbot_sites::BoxedSite>>, // We always need mutable access, no reason to use a RwLock
@@ -824,53 +817,14 @@ impl MessageHandler {
 
         {
             let lock = self.best_lang.read().await;
-            if lock.contains_key(requested) {
-                let bundle = lock.get(requested).expect("should have contained");
+            if let Some(bundle) = lock.get(requested) {
                 return callback(bundle);
             }
         }
 
         tracing::info!(lang = requested, "got new language, building bundle");
 
-        let requested_locale = match requested.parse::<LanguageIdentifier>() {
-            Ok(locale) => locale,
-            Err(err) => {
-                tracing::error!("unknown locale: {:?}", err);
-                L10N_LANGS[0].parse::<LanguageIdentifier>().unwrap()
-            }
-        };
-
-        let requested_locales: Vec<LanguageIdentifier> = vec![requested_locale];
-        let default_locale = L10N_LANGS[0]
-            .parse::<LanguageIdentifier>()
-            .expect("unable to parse langid");
-        let available: Vec<LanguageIdentifier> = self.langs.keys().map(Clone::clone).collect();
-        let resolved_locales = fluent_langneg::negotiate_languages(
-            &requested_locales,
-            &available,
-            Some(&&default_locale),
-            fluent_langneg::NegotiationStrategy::Filtering,
-        );
-
-        let current_locale = resolved_locales.get(0).expect("no locales were available");
-
-        let mut bundle = fluent::concurrent::FluentBundle::<fluent::FluentResource>::new(
-            resolved_locales.clone(),
-        );
-        let resources = self
-            .langs
-            .get(current_locale)
-            .expect("missing known locale");
-
-        for resource in resources {
-            let resource = fluent::FluentResource::try_new(resource.to_string())
-                .expect("unable to parse FTL string");
-            bundle
-                .add_resource(resource)
-                .expect("unable to add resource");
-        }
-
-        bundle.set_use_isolating(false);
+        let bundle = get_lang_bundle(&self.langs, requested);
 
         {
             let mut lock = self.best_lang.write().await;
