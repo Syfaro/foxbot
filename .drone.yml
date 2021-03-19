@@ -162,6 +162,7 @@ steps:
   image: sinlead/drone-kubectl
   commands:
   - kubectl -n foxbot-staging set image deployment/foxbot foxbot=registry.huefox.com/foxbot:${DRONE_COMMIT_SHA}
+  - kubectl -n foxbot-staging set image deployment/foxbot-channel-worker foxbot-channel-worker=registry.huefox.com/foxbot-channel-worker:${DRONE_COMMIT_SHA}
   settings:
     kubernetes_cert:
       from_secret: k8s-cert
@@ -281,6 +282,6 @@ trigger:
 
 ---
 kind: signature
-hmac: 0ff379da2c8a428b2f9c9d8d4f720227488383d4d7c8d78be788ab5bbe09f8d0
+hmac: 6a30deaaabe40af733c19943e6f8ee97938093ba10a010357c80d4a9f1655e6c
 
 ...
