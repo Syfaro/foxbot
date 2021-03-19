@@ -323,7 +323,8 @@ impl CommandHandler {
             &best_photo,
             Some(3),
         )
-        .await?;
+        .await?
+        .1;
         sort_results(
             &handler.conn,
             message.from.as_ref().unwrap().id,
@@ -390,6 +391,7 @@ impl CommandHandler {
                     Some(10),
                 )
                 .await?
+                .1
             }
             None => {
                 let links = extract_links(&message);

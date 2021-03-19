@@ -766,6 +766,8 @@ dependencies = [
  "foxbot-sites",
  "foxbot-utils",
  "fuzzysearch",
+ "hamming",
+ "image",
  "redis",
  "serde",
  "serde_json",
