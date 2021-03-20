@@ -60,9 +60,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.38"
+version = "1.0.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "afddf7f520a80dbf76e6f50a35bca42a2331ef227a28b3b6dc5c2e2338d114b1"
+checksum = "81cddc5f91628367664cc7c69714ff08deee8a3efc54623011c772544d7b2767"
 
 [[package]]
 name = "arc-swap"
@@ -2833,9 +2833,9 @@ dependencies = [
 
 [[package]]
 name = "siphasher"
-version = "0.3.3"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa8f3741c7372e75519bd9346068370c9cdaabcc1f9599cbcf2a2719352286b7"
+checksum = "cbce6d4507c7e4a3962091436e56e95290cb71fa302d0d270e32130b75fbff27"
 
 [[package]]
 name = "slab"
@@ -3147,7 +3147,7 @@ dependencies = [
 [[package]]
 name = "tgbotapi"
 version = "0.1.0"
-source = "git+https://github.com/Syfaro/tgbotapi-rs#71fc539882d0fbea06e56f4ac79d9478d785fb8a"
+source = "git+https://github.com/Syfaro/tgbotapi-rs#053c5e94032a3b5a58dc073972a70d12f7e9fc0f"
 dependencies = [
  "reqwest",
  "serde",

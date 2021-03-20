@@ -23,6 +23,13 @@ pub enum ResultType {
     VideoToBeProcessed,
 }
 
+#[derive(Debug)]
+enum SentAs {
+    Video(String),
+    Animation(String),
+    Document(String),
+}
+
 impl InlineHandler {
     async fn process_video(
         &self,
@@ -182,32 +189,66 @@ impl InlineHandler {
         let message = handler.make_request(&send_video).await?;
         drop(action);
 
+        if messages.is_empty() {
+            return Ok(Completed);
+        }
+
         // Now that we've sent the first message, send each additional message
         // with the returned video ID.
 
-        let file_id = message
-            .video
-            .context("Sent video was missing file ID")?
-            .file_id;
+        let file = if let Some(video) = message.video {
+            SentAs::Video(video.file_id)
+        } else if let Some(animation) = message.animation {
+            SentAs::Animation(animation.file_id)
+        } else if let Some(document) = message.document {
+            SentAs::Document(document.file_id)
+        } else {
+            anyhow::bail!("Sent video was missing all known file IDs");
+        };
 
-        tracing::debug!(%file_id, "Sent video, reusing for additional messages");
+        tracing::debug!(?file, "Sent video, reusing for additional messages");
+
+        let reply_markup = Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
+            inline_keyboard: vec![vec![InlineKeyboardButton {
+                text: video_return_button.clone(),
+                switch_inline_query: Some(video.display_url.to_owned()),
+                ..Default::default()
+            }]],
+        }));
 
         for message in messages {
-            let send_video = SendVideo {
-                chat_id: message.0.into(),
-                video: FileType::FileID(file_id.clone()),
-                reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
-                    inline_keyboard: vec![vec![InlineKeyboardButton {
-                        text: video_return_button.clone(),
-                        switch_inline_query: Some(video.display_url.to_owned()),
+            let request: Option<tgbotapi::Error> = match file {
+                SentAs::Video(ref file_id) => {
+                    let send_video = SendVideo {
+                        chat_id: message.0.into(),
+                        video: FileType::FileID(file_id.clone()),
+                        reply_markup: reply_markup.clone(),
+                        supports_streaming: Some(true),
                         ..Default::default()
-                    }]],
-                })),
-                supports_streaming: Some(true),
-                ..Default::default()
+                    };
+                    handler.make_request(&send_video).await.err()
+                }
+                SentAs::Animation(ref file_id) => {
+                    let send_animation = SendAnimation {
+                        chat_id: message.0.into(),
+                        animation: FileType::FileID(file_id.clone()),
+                        reply_markup: reply_markup.clone(),
+                        ..Default::default()
+                    };
+                    handler.make_request(&send_animation).await.err()
+                }
+                SentAs::Document(ref file_id) => {
+                    let send_document = SendDocument {
+                        chat_id: message.0.into(),
+                        document: FileType::FileID(file_id.clone()),
+                        reply_markup: reply_markup.clone(),
+                        ..Default::default()
+                    };
+                    handler.make_request(&send_document).await.err()
+                }
             };
 
-            if let Err(err) = handler.make_request(&send_video).await {
+            if let Some(err) = request {
                 tracing::error!("Unable to send video: {:?}", err);
             }
         }
