@@ -380,75 +380,27 @@ impl CommandHandler {
                 (message.message_id, message)
             };
 
-        let matches = match &message.photo {
-            Some(photo) => {
-                let best_photo = find_best_photo(&photo).unwrap();
-                match_image(
-                    &handler.bot,
-                    &handler.conn,
-                    &handler.fapi,
-                    &best_photo,
-                    Some(10),
-                )
-                .await?
-                .1
-            }
-            None => {
-                let links = extract_links(&message);
-
-                if links.is_empty() {
-                    drop(action);
-
-                    handler
-                        .send_generic_reply(&message, "source-no-photo")
-                        .await?;
-                    return Ok(());
-                } else if links.len() > 1 {
-                    drop(action);
-
-                    handler
-                        .send_generic_reply(&message, "alternate-multiple-photo")
-                        .await?;
-                    return Ok(());
-                }
-
-                let mut sites = handler.sites.lock().await;
-                let mut link = None;
-                find_images(
-                    &message.from.as_ref().unwrap(),
-                    links,
-                    &mut sites,
-                    &mut |info| {
-                        link = info.results.into_iter().next();
-                    },
-                )
-                .await?;
-
-                let bytes = match link {
-                    Some(link) => reqwest::get(&link.url)
-                        .await
-                        .unwrap()
-                        .bytes()
-                        .await
-                        .unwrap()
-                        .to_vec(),
-                    None => {
-                        drop(action);
-
-                        handler
-                            .send_generic_reply(&message, "source-no-photo")
-                            .await?;
-                        return Ok(());
-                    }
-                };
+        let sizes = match &message.photo {
+            Some(sizes) => sizes,
+            _ => {
+                drop(action);
 
                 handler
-                    .fapi
-                    .image_search(&bytes, fuzzysearch::MatchType::Close, Some(10))
-                    .await?
-                    .matches
+                    .send_generic_reply(&message, "source-no-photo")
+                    .await?;
+                return Ok(());
             }
         };
+
+        let best_photo = find_best_photo(&sizes).unwrap();
+        let (searched_hash, matches) = match_image(
+            &handler.bot,
+            &handler.conn,
+            &handler.fapi,
+            &best_photo,
+            Some(10),
+        )
+        .await?;
 
         if matches.is_empty() {
             drop(action);
@@ -527,7 +479,7 @@ impl CommandHandler {
                 artist.push(fuzzysearch::File {
                     distance: hamming::distance_fast(
                         &m.hash.unwrap().to_be_bytes(),
-                        &m.searched_hash.unwrap().to_be_bytes(),
+                        &searched_hash.to_be_bytes(),
                     )
                     .ok(),
                     ..m
