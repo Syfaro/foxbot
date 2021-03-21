@@ -1234,7 +1234,7 @@ mod tests {
         let links: Vec<&str> = links.into_iter().map(|link| link.as_str()).collect();
 
         let sites: Vec<foxbot_sites::BoxedSite> = vec![
-            Box::new(foxbot_sites::E621::default()),
+            Box::new(foxbot_sites::E621::new("".into(), "".into())),
             Box::new(foxbot_sites::Mastodon::default()),
         ];
 

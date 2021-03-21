@@ -45,6 +45,8 @@ pub struct Config {
     pub weasyl_apitoken: String,
     pub inkbunny_username: String,
     pub inkbunny_password: String,
+    pub e621_login: String,
+    pub e621_api_key: String,
 
     // Twitter config
     pub twitter_consumer_key: String,
@@ -238,6 +240,8 @@ async fn main() {
         config.twitter_consumer_secret.clone(),
         config.inkbunny_username.clone(),
         config.inkbunny_password.clone(),
+        config.e621_login.clone(),
+        config.e621_api_key.clone(),
         pool.clone(),
     )
     .await;

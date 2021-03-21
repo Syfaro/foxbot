@@ -57,6 +57,8 @@ fn main() {
         config.twitter_consumer_secret,
         config.inkbunny_username,
         config.inkbunny_password,
+        config.e621_login,
+        config.e621_api_key,
         pool.clone(),
     ));
 
@@ -137,6 +139,8 @@ struct Config {
     weasyl_apitoken: String,
     inkbunny_username: String,
     inkbunny_password: String,
+    e621_login: String,
+    e621_api_key: String,
 
     // Twitter config
     twitter_consumer_key: String,
