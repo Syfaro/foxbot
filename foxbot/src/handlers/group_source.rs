@@ -149,11 +149,15 @@ impl Handler for GroupSourceHandler {
             ..Default::default()
         };
 
-        handler
-            .make_request(&message)
-            .await
-            .context("unable to send group source message")?;
-
-        Ok(Completed)
+        // It's possible the user has deleted the message before a source could
+        // be determined so ignore any bad request errors.
+        match handler.make_request(&message).await {
+            Ok(_)
+            | Err(tgbotapi::Error::Telegram(tgbotapi::TelegramError {
+                error_code: Some(400),
+                ..
+            })) => Ok(Completed),
+            Err(err) => Err(err).context("Unable to send group source message"),
+        }
     }
 }
