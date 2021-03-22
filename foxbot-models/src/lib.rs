@@ -559,3 +559,57 @@ impl Permissions {
         Ok(())
     }
 }
+
+pub struct ChatAdmin;
+
+impl ChatAdmin {
+    pub async fn update_chat(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        data: &tgbotapi::ChatMemberUpdated,
+    ) -> anyhow::Result<()> {
+        use tgbotapi::ChatMemberStatus::*;
+
+        let is_admin = match data.new_chat_member.status {
+            Administrator | Creator => true,
+            _ => false,
+        };
+
+        // It's possible updates get processed out of order. We only want to
+        // update the table when the update occured more recently than the value
+        // in the database.
+        sqlx::query!(
+            "WITH data (user_id, chat_id, is_admin, last_update) AS (
+                VALUES ($1::bigint, $2::bigint, $3::boolean, to_timestamp($4::int))
+            )
+            INSERT INTO chat_administrator
+            SELECT data.user_id, data.chat_id, data.is_admin, data.last_update FROM data
+            LEFT JOIN chat_administrator ON data.user_id = chat_administrator.user_id AND data.chat_id = chat_administrator.chat_id
+            WHERE chat_administrator.last_update IS NULL OR data.last_update > chat_administrator.last_update
+            ON CONFLICT (user_id, chat_id) DO UPDATE SET is_admin = EXCLUDED.is_admin, last_update = EXCLUDED.last_update",
+            data.new_chat_member.user.id,
+            data.chat.id,
+            is_admin,
+            data.date,
+        )
+        .execute(conn)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn is_admin(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        user_id: i64,
+        chat_id: i64,
+    ) -> anyhow::Result<Option<bool>> {
+        let is_admin = sqlx::query_scalar!(
+            "SELECT is_admin FROM chat_administrator WHERE user_id = $1 AND chat_id = $2",
+            user_id,
+            chat_id
+        )
+        .fetch_optional(conn)
+        .await?;
+
+        Ok(is_admin)
+    }
+}

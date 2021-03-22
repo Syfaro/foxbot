@@ -7,7 +7,7 @@ use super::{
     Status::{self, *},
 };
 use crate::MessageHandler;
-use foxbot_models::{GroupConfig, GroupConfigKey};
+use foxbot_models::{ChatAdmin, GroupConfig, GroupConfigKey};
 use foxbot_sites::PostInfo;
 use foxbot_utils::*;
 
@@ -524,6 +524,8 @@ impl CommandHandler {
         message: &Message,
         bot_needs_admin: bool,
     ) -> anyhow::Result<bool> {
+        use tgbotapi::ChatMemberStatus::*;
+
         if !message.chat.chat_type.is_group() {
             handler
                 .send_generic_reply(&message, "automatic-enable-not-group")
@@ -533,13 +535,29 @@ impl CommandHandler {
 
         let user = message.from.as_ref().unwrap();
 
-        let get_chat_member = GetChatMember {
-            chat_id: message.chat_id(),
-            user_id: user.id,
-        };
-        let chat_member = handler.make_request(&get_chat_member).await?;
+        // As of the Bot API 5.1, Telegram can now proactively send updates
+        // about user information. There is another handler that listens for
+        // these changes and saves them to the database. When possible we should
+        // use these saved values instead of making more requests.
 
-        if !chat_member.status.is_admin() {
+        let user_is_admin =
+            match ChatAdmin::is_admin(&handler.conn, user.id, message.chat.id).await? {
+                Some(is_admin) => is_admin,
+                _ => {
+                    let get_chat_member = GetChatMember {
+                        chat_id: message.chat_id(),
+                        user_id: user.id,
+                    };
+                    let chat_member = handler.make_request(&get_chat_member).await?;
+
+                    match chat_member.status {
+                        Administrator | Creator => true,
+                        _ => false,
+                    }
+                }
+            };
+
+        if !user_is_admin {
             handler
                 .send_generic_reply(&message, "automatic-enable-not-admin")
                 .await?;
@@ -550,23 +568,34 @@ impl CommandHandler {
             return Ok(true);
         }
 
-        let get_chat_member = GetChatMember {
-            user_id: handler.bot_user.id,
-            ..get_chat_member
-        };
-        let bot_member = handler.make_request(&get_chat_member).await?;
+        let bot_is_admin =
+            match ChatAdmin::is_admin(&handler.conn, handler.bot_user.id, message.chat.id).await? {
+                Some(is_admin) => is_admin,
+                _ => {
+                    let get_chat_member = GetChatMember {
+                        chat_id: message.chat_id(),
+                        user_id: handler.bot_user.id,
+                    };
+                    let bot_member = handler.make_request(&get_chat_member).await?;
 
-        // Already fetching it, should save it for trying to delete summoning
-        // messages.
-        GroupConfig::set(
-            &handler.conn,
-            GroupConfigKey::HasDeletePermission,
-            message.chat.id,
-            bot_member.can_delete_messages.unwrap_or(false),
-        )
-        .await?;
+                    // Already fetching it, should save it for trying to delete summoning
+                    // messages.
+                    GroupConfig::set(
+                        &handler.conn,
+                        GroupConfigKey::HasDeletePermission,
+                        message.chat.id,
+                        bot_member.can_delete_messages.unwrap_or(false),
+                    )
+                    .await?;
 
-        if !bot_member.status.is_admin() {
+                    match bot_member.status {
+                        Administrator | Creator => true,
+                        _ => false,
+                    }
+                }
+            };
+
+        if !bot_is_admin {
             handler
                 .send_generic_reply(&message, "automatic-enable-bot-not-admin")
                 .await?;

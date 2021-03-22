@@ -383,6 +383,15 @@ async fn main() {
             .expect("Missing WEBHOOK_ENDPOINT");
         let set_webhook = SetWebhook {
             url: webhook_endpoint.to_owned(),
+            allowed_updates: Some(vec![
+                "message".into(),
+                "channel_post".into(),
+                "inline_query".into(),
+                "chosen_inline_result".into(),
+                "callback_query".into(),
+                "my_chat_member".into(),
+                "chat_member".into(),
+            ]),
             ..Default::default()
         };
         if let Err(e) = bot.make_request(&set_webhook).await {
@@ -746,6 +755,15 @@ async fn poll_updates(
 ) {
     let mut update_req = GetUpdates {
         timeout: Some(30),
+        allowed_updates: Some(vec![
+            "message".into(),
+            "channel_post".into(),
+            "inline_query".into(),
+            "chosen_inline_result".into(),
+            "callback_query".into(),
+            "my_chat_member".into(),
+            "chat_member".into(),
+        ]),
         ..Default::default()
     };
 
