@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tgbotapi::{requests::*, *};
 use tokio::sync::{Mutex, RwLock};
+use tracing::Instrument;
 use unic_langid::LanguageIdentifier;
 
 use foxbot_utils::*;
@@ -1087,20 +1088,27 @@ impl MessageHandler {
             .and_then(|message| message.get_command());
 
         for handler in &self.handlers {
-            tracing::trace!(handler = handler.name(), "running handler");
             let hist = HANDLER_DURATION
                 .get_metric_with_label_values(&[handler.name()])
                 .unwrap()
                 .start_timer();
 
-            match handler.handle(&self, &update, command.as_ref()).await {
+            match handler
+                .handle(&self, &update, command.as_ref())
+                .instrument(tracing::info_span!(
+                    "handler_handle",
+                    handler = handler.name()
+                ))
+                .await
+            {
                 Ok(status) if status == handlers::Status::Completed => {
-                    tracing::debug!(handler = handler.name(), "handled update");
+                    tracing::debug!(handled_by = handler.name(), "Completed update");
                     hist.stop_and_record();
+
                     break;
                 }
-                Err(e) => {
-                    tracing::error!("error handling update: {:?}", e);
+                Err(err) => {
+                    tracing::error!(handled_by = handler.name(), "Handler error: {:?}", err);
                     hist.stop_and_record();
 
                     let mut tags = vec![("handler", handler.name().to_string())];
@@ -1115,10 +1123,10 @@ impl MessageHandler {
                     }
 
                     if let Some(msg) = &update.message {
-                        self.report_error(&msg, Some(tags), || capture_anyhow(&e))
+                        self.report_error(&msg, Some(tags), || capture_anyhow(&err))
                             .await;
                     } else {
-                        capture_anyhow(&e);
+                        capture_anyhow(&err);
                     }
 
                     break;
