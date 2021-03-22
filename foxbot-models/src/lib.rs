@@ -574,10 +574,7 @@ impl ChatAdmin {
     ) -> anyhow::Result<Option<bool>> {
         use tgbotapi::ChatMemberStatus::*;
 
-        let is_admin = match data.new_chat_member.status {
-            Administrator | Creator => true,
-            _ => false,
-        };
+        let is_admin = matches!(data.new_chat_member.status, Administrator | Creator);
 
         // It's possible updates get processed out of order. We only want to
         // update the table when the update occured more recently than the value

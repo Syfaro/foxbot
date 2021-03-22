@@ -550,10 +550,7 @@ impl CommandHandler {
                     };
                     let chat_member = handler.make_request(&get_chat_member).await?;
 
-                    match chat_member.status {
-                        Administrator | Creator => true,
-                        _ => false,
-                    }
+                    matches!(chat_member.status, Administrator | Creator)
                 }
             };
 
@@ -588,10 +585,7 @@ impl CommandHandler {
                     )
                     .await?;
 
-                    match bot_member.status {
-                        Administrator | Creator => true,
-                        _ => false,
-                    }
+                    matches!(bot_member.status, Administrator | Creator)
                 }
             };
 

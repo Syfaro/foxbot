@@ -72,6 +72,19 @@
       "nullable": []
     }
   },
+  "321e47d50ebfcd5cdfb43c1642a7aaea899c8f7952ea1a7839e87a7a44991743": {
+    "query": "DELETE FROM chat_administrator WHERE chat_id = $1 AND user_id <> $2",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Int8"
+        ]
+      },
+      "nullable": []
+    }
+  },
   "3dd1ec96436781e96e7cf25af7d38007d21bca735234b5d7f42725f8a2c5fc6a": {
     "query": "SELECT id, post_url, thumb, cdn_url, width, height FROM cached_post WHERE post_url = $1 AND thumb = $2",
     "describe": {
@@ -252,6 +265,29 @@
       },
       "nullable": [
         false,
+        false
+      ]
+    }
+  },
+  "91a46d07897a33996412cf40a46d149932a8fe0db4499c485e0a6a300e2ad5a8": {
+    "query": "WITH data (user_id, chat_id, is_admin, last_update) AS (\n                VALUES ($1::bigint, $2::bigint, $3::boolean, to_timestamp($4::int))\n            )\n            INSERT INTO chat_administrator\n            SELECT data.user_id, data.chat_id, data.is_admin, data.last_update FROM data\n            LEFT JOIN chat_administrator ON data.user_id = chat_administrator.user_id AND data.chat_id = chat_administrator.chat_id\n            WHERE chat_administrator.last_update IS NULL OR data.last_update > chat_administrator.last_update\n            ON CONFLICT (user_id, chat_id) DO UPDATE SET is_admin = EXCLUDED.is_admin, last_update = EXCLUDED.last_update\n            RETURNING is_admin",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "is_admin",
+          "type_info": "Bool"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Int8",
+          "Bool",
+          "Int4"
+        ]
+      },
+      "nullable": [
         false
       ]
     }
@@ -539,6 +575,27 @@
         ]
       },
       "nullable": []
+    }
+  },
+  "f81647062f172850ce9f279aa806fbc5956979796eb78ef40c3cd5501c5f91cb": {
+    "query": "SELECT is_admin FROM chat_administrator WHERE user_id = $1 AND chat_id = $2",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "is_admin",
+          "type_info": "Bool"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Int8"
+        ]
+      },
+      "nullable": [
+        false
+      ]
     }
   }
 }

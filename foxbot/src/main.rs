@@ -392,7 +392,6 @@ async fn main() {
                 "my_chat_member".into(),
                 "chat_member".into(),
             ]),
-            ..Default::default()
         };
         if let Err(e) = bot.make_request(&set_webhook).await {
             panic!("unable to set webhook: {:?}", e);
