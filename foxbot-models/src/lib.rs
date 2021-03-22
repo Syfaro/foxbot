@@ -563,10 +563,15 @@ impl Permissions {
 pub struct ChatAdmin;
 
 impl ChatAdmin {
+    /// Update a chat's known administrators from a ChatMemberUpdated event.
+    ///
+    /// Will discard updates that are older than the newest item in the
+    /// database. Returns if the value was updated, and if it was, if the user
+    /// is currently an admin.
     pub async fn update_chat(
         conn: &sqlx::Pool<sqlx::Postgres>,
         data: &tgbotapi::ChatMemberUpdated,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Option<bool>> {
         use tgbotapi::ChatMemberStatus::*;
 
         let is_admin = match data.new_chat_member.status {
@@ -577,7 +582,7 @@ impl ChatAdmin {
         // It's possible updates get processed out of order. We only want to
         // update the table when the update occured more recently than the value
         // in the database.
-        sqlx::query!(
+        let is_admin = sqlx::query_scalar!(
             "WITH data (user_id, chat_id, is_admin, last_update) AS (
                 VALUES ($1::bigint, $2::bigint, $3::boolean, to_timestamp($4::int))
             )
@@ -585,18 +590,20 @@ impl ChatAdmin {
             SELECT data.user_id, data.chat_id, data.is_admin, data.last_update FROM data
             LEFT JOIN chat_administrator ON data.user_id = chat_administrator.user_id AND data.chat_id = chat_administrator.chat_id
             WHERE chat_administrator.last_update IS NULL OR data.last_update > chat_administrator.last_update
-            ON CONFLICT (user_id, chat_id) DO UPDATE SET is_admin = EXCLUDED.is_admin, last_update = EXCLUDED.last_update",
+            ON CONFLICT (user_id, chat_id) DO UPDATE SET is_admin = EXCLUDED.is_admin, last_update = EXCLUDED.last_update
+            RETURNING is_admin",
             data.new_chat_member.user.id,
             data.chat.id,
             is_admin,
             data.date,
         )
-        .execute(conn)
+        .fetch_optional(conn)
         .await?;
 
-        Ok(())
+        Ok(is_admin)
     }
 
+    /// Check if a user is currently an admin.
     pub async fn is_admin(
         conn: &sqlx::Pool<sqlx::Postgres>,
         user_id: i64,
@@ -611,5 +618,23 @@ impl ChatAdmin {
         .await?;
 
         Ok(is_admin)
+    }
+
+    /// Remove all known administrators from a group, except for the bot. We
+    /// always get updates for our own user, so it's safe to keep.
+    pub async fn flush(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        bot_user_id: i64,
+        chat_id: i64,
+    ) -> anyhow::Result<()> {
+        sqlx::query!(
+            "DELETE FROM chat_administrator WHERE chat_id = $1 AND user_id <> $2",
+            chat_id,
+            bot_user_id
+        )
+        .execute(conn)
+        .await?;
+
+        Ok(())
     }
 }

@@ -80,8 +80,29 @@ async fn handle_chat_member(
 
     tracing::debug!("Got updated chat member info: {:?}", chat_member);
 
-    if let Err(err) = ChatAdmin::update_chat(&handler.conn, &chat_member).await {
-        tracing::error!("Unable to save permission change: {:?}", err);
+    match ChatAdmin::update_chat(&handler.conn, &chat_member).await {
+        Ok(Some(is_admin)) => {
+            tracing::debug!(
+                user_id = chat_member.new_chat_member.user.id,
+                is_admin,
+                "Updated user"
+            );
+
+            if !is_admin && chat_member.new_chat_member.user.id == handler.bot_user.id {
+                tracing::warn!("Bot has lost admin permissions, discarding potentially stale data");
+
+                ChatAdmin::flush(&handler.conn, handler.bot_user.id, chat_member.chat.id).await?;
+            }
+        }
+        Ok(None) => {
+            tracing::warn!(
+                user_id = chat_member.new_chat_member.user.id,
+                "Update was out of date, ignoring"
+            );
+        }
+        Err(err) => {
+            tracing::error!("Unable to save permission change: {:?}", err);
+        }
     }
 
     Ok(true)
