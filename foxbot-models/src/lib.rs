@@ -53,6 +53,50 @@ impl Sites {
     }
 }
 
+struct Chat;
+
+impl Chat {
+    async fn get(conn: &sqlx::Pool<sqlx::Postgres>, telegram_id: i64) -> anyhow::Result<i32> {
+        if let Some(id) =
+            sqlx::query_scalar!("SELECT id FROM chat WHERE telegram_id = $1", telegram_id)
+                .fetch_optional(conn)
+                .await?
+        {
+            return Ok(id);
+        }
+
+        let id = sqlx::query_scalar!(
+            "INSERT INTO chat (telegram_id) VALUES ($1) RETURNING id",
+            telegram_id
+        )
+        .fetch_one(conn)
+        .await?;
+        Ok(id)
+    }
+}
+
+struct Account;
+
+impl Account {
+    async fn get(conn: &sqlx::Pool<sqlx::Postgres>, telegram_id: i64) -> anyhow::Result<i32> {
+        if let Some(id) =
+            sqlx::query_scalar!("SELECT id FROM account WHERE telegram_id = $1", telegram_id)
+                .fetch_optional(conn)
+                .await?
+        {
+            return Ok(id);
+        }
+
+        let id = sqlx::query_scalar!(
+            "INSERT INTO account (telegram_id) VALUES ($1) RETURNING id",
+            telegram_id
+        )
+        .fetch_one(conn)
+        .await?;
+        Ok(id)
+    }
+}
+
 pub struct UserConfig;
 
 pub enum UserConfigKey {
@@ -79,7 +123,10 @@ impl UserConfig {
         user_id: i64,
     ) -> anyhow::Result<Option<T>> {
         sqlx::query!(
-            "SELECT value FROM user_config WHERE user_id = $1 AND name = $2",
+            "SELECT value
+            FROM user_config
+            JOIN account ON account.id = user_config.user_id
+            WHERE account.telegram_id = $1 AND name = $2",
             user_id,
             key.as_str()
         )
@@ -98,14 +145,14 @@ impl UserConfig {
     ) -> anyhow::Result<()> {
         let value = serde_json::to_value(&data)?;
 
+        let user_id = Account::get(&conn, user_id).await?;
+
         sqlx::query!(
-            "
-            INSERT INTO user_config (user_id, name, value)
+            "INSERT INTO user_config (user_id, name, value)
             VALUES ($1, $2, $3)
             ON CONFLICT (user_id, name)
             DO
-                UPDATE SET value = EXCLUDED.value
-        ",
+                UPDATE SET value = EXCLUDED.value",
             user_id,
             key,
             value
@@ -142,7 +189,10 @@ impl GroupConfig {
         name: GroupConfigKey,
     ) -> anyhow::Result<Option<T>> {
         sqlx::query!(
-            "SELECT value FROM group_config WHERE chat_id = $1 AND name = $2",
+            "SELECT value
+            FROM group_config
+            JOIN chat ON chat.id = group_config.chat_id
+            WHERE chat.telegram_id = $1 AND name = $2",
             chat_id,
             name.as_str()
         )
@@ -160,14 +210,13 @@ impl GroupConfig {
     ) -> anyhow::Result<()> {
         let value = serde_json::to_value(data)?;
 
+        let chat_id = Chat::get(&conn, chat_id).await?;
+
         sqlx::query!(
-            "
-            INSERT INTO group_config (chat_id, name, value)
-            VALUES ($1, $2, $3)
+            "INSERT INTO group_config (chat_id, name, value) VALUES
+                ($1, $2, $3)
             ON CONFLICT (chat_id, name)
-            DO
-                UPDATE SET value = EXCLUDED.value
-        ",
+                DO UPDATE SET value = EXCLUDED.value",
             chat_id,
             key.as_str(),
             value
@@ -183,8 +232,11 @@ impl GroupConfig {
         key: GroupConfigKey,
         chat_id: i64,
     ) -> anyhow::Result<()> {
+        let chat_id = Chat::get(&conn, chat_id).await?;
+
         sqlx::query!(
-            "DELETE FROM group_config WHERE chat_id = $1 AND name = $2",
+            "DELETE FROM group_config
+            WHERE chat_id = $1 AND name = $2",
             chat_id,
             key.as_str()
         )
@@ -219,7 +271,10 @@ impl Twitter {
     ) -> anyhow::Result<Option<TwitterAccount>> {
         let account = sqlx::query_as!(
             TwitterAccount,
-            "SELECT consumer_key, consumer_secret FROM twitter_account WHERE user_id = $1",
+            "SELECT consumer_key, consumer_secret
+            FROM twitter_account
+            JOIN account ON account.id = twitter_account.user_id
+            WHERE account.telegram_id = $1",
             user_id
         )
         .fetch_optional(conn)
@@ -235,7 +290,10 @@ impl Twitter {
     ) -> anyhow::Result<Option<TwitterRequest>> {
         let req = sqlx::query_as!(
             TwitterRequest,
-            "SELECT user_id, request_key, request_secret FROM twitter_auth WHERE request_key = $1",
+            "SELECT account.telegram_id user_id, request_key, request_secret
+            FROM twitter_auth
+            JOIN account ON account.id = twitter_auth.user_id
+            WHERE request_key = $1",
             request_key
         )
         .fetch_optional(conn)
@@ -257,13 +315,31 @@ impl Twitter {
     ) -> anyhow::Result<()> {
         let mut tx = conn.begin().await?;
 
-        sqlx::query!("DELETE FROM twitter_account WHERE user_id = $1", user_id)
-            .execute(&mut tx)
-            .await?;
-        sqlx::query!("DELETE FROM twitter_auth WHERE user_id = $1", user_id)
-            .execute(&mut tx)
-            .await?;
-        sqlx::query!("INSERT INTO twitter_account (user_id, consumer_key, consumer_secret) VALUES ($1, $2, $3)", user_id, creds.consumer_key, creds.consumer_secret).execute(&mut tx).await?;
+        let user_id = Account::get(&conn, user_id).await?;
+
+        sqlx::query!(
+            "DELETE FROM twitter_account
+            WHERE user_id = $1",
+            user_id
+        )
+        .execute(&mut tx)
+        .await?;
+        sqlx::query!(
+            "DELETE FROM twitter_auth
+            WHERE user_id = $1",
+            user_id
+        )
+        .execute(&mut tx)
+        .await?;
+        sqlx::query!(
+            "INSERT INTO twitter_account (user_id, consumer_key, consumer_secret) VALUES
+                ($1, $2, $3)",
+            user_id,
+            creds.consumer_key,
+            creds.consumer_secret
+        )
+        .execute(&mut tx)
+        .await?;
 
         tx.commit().await?;
 
@@ -278,11 +354,18 @@ impl Twitter {
     ) -> anyhow::Result<()> {
         let mut tx = conn.begin().await?;
 
-        sqlx::query!("DELETE FROM twitter_auth WHERE user_id = $1", &user_id)
-            .execute(&mut tx)
-            .await?;
+        let user_id = Account::get(&conn, user_id).await?;
+
         sqlx::query!(
-            "INSERT INTO twitter_auth (user_id, request_key, request_secret) VALUES ($1, $2, $3)",
+            "DELETE FROM twitter_auth
+            WHERE user_id = $1",
+            &user_id
+        )
+        .execute(&mut tx)
+        .await?;
+        sqlx::query!(
+            "INSERT INTO twitter_auth (user_id, request_key, request_secret) VALUES
+                ($1, $2, $3)",
             user_id,
             request_key,
             request_secret
@@ -299,9 +382,15 @@ impl Twitter {
         conn: &sqlx::Pool<sqlx::Postgres>,
         user_id: i64,
     ) -> anyhow::Result<()> {
-        sqlx::query!("DELETE FROM twitter_account WHERE user_id = $1", user_id)
-            .execute(conn)
-            .await?;
+        let user_id = Account::get(&conn, user_id).await?;
+
+        sqlx::query!(
+            "DELETE FROM twitter_account
+            WHERE user_id = $1",
+            user_id
+        )
+        .execute(conn)
+        .await?;
         Ok(())
     }
 }
@@ -382,7 +471,9 @@ impl Video {
     ) -> anyhow::Result<Option<Video>> {
         let video = sqlx::query_as!(
             Video,
-            "SELECT id, processed, source, url, mp4_url, thumb_url, display_url, display_name, job_id FROM videos WHERE display_name = $1",
+            "SELECT id, processed, source, url, mp4_url, thumb_url, display_url, display_name, job_id
+            FROM videos
+            WHERE display_name = $1",
             display_name
         )
         .fetch_optional(conn)
@@ -398,7 +489,9 @@ impl Video {
     ) -> anyhow::Result<Option<Video>> {
         let video = sqlx::query_as!(
             Video,
-            "SELECT id, processed, source, url, mp4_url, thumb_url, display_url, display_name, job_id FROM videos WHERE source = $1",
+            "SELECT id, processed, source, url, mp4_url, thumb_url, display_url, display_name, job_id
+            FROM videos
+            WHERE source = $1",
             url_id
         )
         .fetch_optional(conn)
@@ -416,7 +509,11 @@ impl Video {
         display_name: &str,
     ) -> anyhow::Result<String> {
         let row = sqlx::query!(
-            "INSERT INTO videos (source, url, display_url, display_name) VALUES ($1, $2, $3, $4) ON CONFLICT ON CONSTRAINT unique_source DO UPDATE SET source = EXCLUDED.source RETURNING display_name",
+            "INSERT INTO videos (source, url, display_url, display_name) VALUES
+                ($1, $2, $3, $4)
+            ON CONFLICT ON CONSTRAINT unique_source
+                DO UPDATE SET source = EXCLUDED.source
+            RETURNING display_name",
             url_id,
             media_url,
             display_url,
@@ -467,8 +564,11 @@ impl Video {
         chat_id: i64,
         message_id: i32,
     ) -> anyhow::Result<()> {
+        let chat_id = Chat::get(&conn, chat_id).await?;
+
         sqlx::query!(
-            "INSERT INTO video_job_message (video_id, chat_id, message_id) VALUES ($1, $2, $3)",
+            "INSERT INTO video_job_message (video_id, chat_id, message_id) VALUES
+                ($1, $2, $3)",
             id,
             chat_id,
             message_id
@@ -485,7 +585,10 @@ impl Video {
         id: i32,
     ) -> anyhow::Result<Vec<(i64, i32)>> {
         let ids = sqlx::query!(
-            "SELECT chat_id, message_id FROM video_job_message WHERE video_id = $1",
+            "SELECT chat.telegram_id chat_id, message_id
+            FROM video_job_message
+            JOIN chat ON chat.id = video_job_message.chat_id
+            WHERE video_id = $1",
             id
         )
         .map(|row| (row.chat_id, row.message_id))
@@ -510,7 +613,15 @@ impl CachedPost {
         post_url: &str,
         thumb: bool,
     ) -> anyhow::Result<Option<CachedPost>> {
-        let post = sqlx::query!("SELECT id, post_url, thumb, cdn_url, width, height FROM cached_post WHERE post_url = $1 AND thumb = $2", post_url, thumb).fetch_optional(conn).await?;
+        let post = sqlx::query!(
+            "SELECT id, post_url, thumb, cdn_url, width, height
+            FROM cached_post
+            WHERE post_url = $1 AND thumb = $2",
+            post_url,
+            thumb
+        )
+        .fetch_optional(conn)
+        .await?;
 
         let post = match post {
             Some(post) => post,
@@ -533,7 +644,17 @@ impl CachedPost {
         thumb: bool,
         dimensions: (u32, u32),
     ) -> anyhow::Result<i32> {
-        let row = sqlx::query!("INSERT INTO cached_post (post_url, thumb, cdn_url, width, height) VALUES ($1, $2, $3, $4, $5) RETURNING id", post_url, thumb, cdn_url, dimensions.0 as i64, dimensions.1 as i64).fetch_one(conn).await?;
+        let row = sqlx::query!(
+            "INSERT INTO cached_post (post_url, thumb, cdn_url, width, height) VALUES
+                ($1, $2, $3, $4, $5) RETURNING id",
+            post_url,
+            thumb,
+            cdn_url,
+            dimensions.0 as i64,
+            dimensions.1 as i64
+        )
+        .fetch_one(conn)
+        .await?;
 
         Ok(row.id)
     }
@@ -548,13 +669,17 @@ impl Permissions {
     ) -> anyhow::Result<()> {
         let data = serde_json::to_value(&my_chat_member.new_chat_member).unwrap();
 
+        let chat_id = Chat::get(&conn, my_chat_member.chat.id).await?;
+
         sqlx::query!(
-            "INSERT INTO permission (chat_id, updated_at, permissions) VALUES ($1, to_timestamp($2::int), $3)",
-            my_chat_member.chat.id,
+            "INSERT INTO permission (chat_id, updated_at, permissions) VALUES
+                ($1, to_timestamp($2::int), $3)",
+            chat_id,
             my_chat_member.date,
             data
         )
-        .execute(conn).await?;
+        .execute(conn)
+        .await?;
 
         Ok(())
     }
