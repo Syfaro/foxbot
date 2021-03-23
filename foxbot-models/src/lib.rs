@@ -570,11 +570,14 @@ impl ChatAdmin {
     /// is currently an admin.
     pub async fn update_chat(
         conn: &sqlx::Pool<sqlx::Postgres>,
-        data: &tgbotapi::ChatMemberUpdated,
+        status: &tgbotapi::ChatMemberStatus,
+        user_id: i64,
+        chat_id: i64,
+        date: i32,
     ) -> anyhow::Result<Option<bool>> {
         use tgbotapi::ChatMemberStatus::*;
 
-        let is_admin = matches!(data.new_chat_member.status, Administrator | Creator);
+        let is_admin = matches!(status, Administrator | Creator);
 
         // It's possible updates get processed out of order. We only want to
         // update the table when the update occured more recently than the value
@@ -589,10 +592,10 @@ impl ChatAdmin {
             WHERE chat_administrator.last_update IS NULL OR data.last_update > chat_administrator.last_update
             ON CONFLICT (user_id, chat_id) DO UPDATE SET is_admin = EXCLUDED.is_admin, last_update = EXCLUDED.last_update
             RETURNING is_admin",
-            data.new_chat_member.user.id,
-            data.chat.id,
+            user_id,
+            chat_id,
             is_admin,
-            data.date,
+            date,
         )
         .fetch_optional(conn)
         .await?;

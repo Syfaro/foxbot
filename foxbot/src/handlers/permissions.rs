@@ -1,3 +1,4 @@
+use anyhow::Context;
 use async_trait::async_trait;
 use tgbotapi::ChatMemberUpdated;
 
@@ -80,7 +81,15 @@ async fn handle_chat_member(
 
     tracing::debug!("Got updated chat member info: {:?}", chat_member);
 
-    match ChatAdmin::update_chat(&handler.conn, &chat_member).await {
+    match ChatAdmin::update_chat(
+        &handler.conn,
+        &chat_member.new_chat_member.status,
+        chat_member.new_chat_member.user.id,
+        chat_member.chat.id,
+        chat_member.date,
+    )
+    .await
+    {
         Ok(Some(is_admin)) => {
             tracing::debug!(
                 user_id = chat_member.new_chat_member.user.id,
@@ -88,10 +97,12 @@ async fn handle_chat_member(
                 "Updated user"
             );
 
-            if !is_admin && chat_member.new_chat_member.user.id == handler.bot_user.id {
-                tracing::warn!("Bot has lost admin permissions, discarding potentially stale data");
-
-                ChatAdmin::flush(&handler.conn, handler.bot_user.id, chat_member.chat.id).await?;
+            // Handle loading some data when the bot's administrative status
+            // changes.
+            if chat_member.new_chat_member.user.id == handler.bot_user.id {
+                if let Err(err) = handle_bot_update(&handler, &chat_member, is_admin).await {
+                    tracing::error!("Unable to update requested data: {:?}", err);
+                }
             }
         }
         Ok(None) => {
@@ -106,4 +117,47 @@ async fn handle_chat_member(
     }
 
     Ok(true)
+}
+
+async fn handle_bot_update(
+    handler: &MessageHandler,
+    chat_member: &ChatMemberUpdated,
+    is_admin: bool,
+) -> anyhow::Result<()> {
+    tracing::debug!("Bot permissions changed");
+
+    if !is_admin {
+        tracing::warn!("Bot has lost admin permissions, discarding potentially stale data");
+
+        ChatAdmin::flush(&handler.conn, handler.bot_user.id, chat_member.chat.id)
+            .await
+            .context("Bot permissions changed and unable to flush channel administrators")?;
+    } else {
+        let get_chat_administrators = tgbotapi::requests::GetChatAdministrators {
+            chat_id: chat_member.chat.id.into(),
+        };
+
+        let admins = handler
+            .make_request(&get_chat_administrators)
+            .await
+            .context("Unable to get chat administrators after bot permissions changed")?;
+
+        for admin in admins {
+            tracing::trace!(user_id = admin.user.id, "Discovered group admin");
+
+            ChatAdmin::update_chat(
+                &handler.conn,
+                &admin.status,
+                admin.user.id,
+                chat_member.chat.id,
+                0,
+            )
+            .await
+            .context(
+                "Unable to update administrator status of user after bot permissions changed",
+            )?;
+        }
+    }
+
+    Ok(())
 }
