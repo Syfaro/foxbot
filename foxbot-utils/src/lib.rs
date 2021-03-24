@@ -539,7 +539,7 @@ pub async fn match_image(
 
 /// Lookup a single hash from FuzzySearch, ensuring that the distance has been
 /// calculated from the provided hash.
-async fn lookup_single_hash(
+pub async fn lookup_single_hash(
     fapi: &fuzzysearch::FuzzySearch,
     hash: i64,
     distance: Option<i64>,
