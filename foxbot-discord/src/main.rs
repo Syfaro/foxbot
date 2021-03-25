@@ -1,5 +1,9 @@
 use futures::{stream::StreamExt, TryFutureExt};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::sync::Arc;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    sync::Mutex,
+};
 use twilight_cache_inmemory::{InMemoryCache, ResourceType};
 use twilight_gateway::{
     cluster::{Cluster, ShardScheme},
@@ -11,7 +15,8 @@ use twilight_model::{
         embed::Embed, Attachment, Channel, ChannelType, GuildChannel, Message, ReactionType,
     },
     gateway::Intents,
-    id::{ChannelId, MessageId, UserId},
+    guild::Permissions,
+    id::{ChannelId, GuildId, MessageId, UserId},
 };
 
 use foxbot_models::FileURLCache;
@@ -21,24 +26,43 @@ use foxbot_utils::*;
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let token = std::env::var("DISCORD_TOKEN").expect("Missing DISCORD_TOKEN");
+    load_env();
+    let config = match envy::from_env::<Config>() {
+        Ok(config) => config,
+        Err(err) => panic!("{:#?}", err),
+    };
 
     let fuzzysearch = std::sync::Arc::new(fuzzysearch::FuzzySearch::new(
-        std::env::var("FAUTIL_APITOKEN").expect("Missing FAUTIL_APITOKEN"),
+        config.fautil_apitoken.clone(),
     ));
-
-    let database_url = std::env::var("DATABASE_URL").expect("Missing DATABASE_URL");
 
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(8)
-        .connect(&database_url)
+        .connect(&config.database_url)
         .await
         .expect("Unable to connect to database");
+
+    let sites = foxbot_sites::get_all_sites(
+        config.fa_a,
+        config.fa_b,
+        config.fautil_apitoken,
+        config.weasyl_apitoken,
+        config.twitter_consumer_key,
+        config.twitter_consumer_secret,
+        config.inkbunny_username,
+        config.inkbunny_password,
+        config.e621_login,
+        config.e621_api_key,
+        pool.clone(),
+    )
+    .await;
+
+    let sites = Arc::new(Mutex::new(sites));
 
     let scheme = ShardScheme::Auto;
 
     let cluster = Cluster::builder(
-        &token,
+        &config.discord_token,
         Intents::GUILDS
             | Intents::GUILD_MESSAGES
             | Intents::GUILD_MESSAGE_REACTIONS
@@ -47,19 +71,13 @@ async fn main() {
     )
     .shard_scheme(scheme);
 
-    let resume_path = std::env::var("RESUME_PATH").ok();
-
-    let cluster = if let Some(sessions) = load_sessions(&resume_path).await {
+    let cluster = if let Some(sessions) = load_sessions(&config.resume_path).await {
         cluster.resume_sessions(sessions)
     } else {
         cluster
     };
 
-    let temp_admin: Option<UserId> = std::env::var("TEMP_ADMIN")
-        .ok()
-        .map(|admin| admin.parse::<u64>().ok())
-        .flatten()
-        .map(|admin| admin.into());
+    let temp_admin: Option<UserId> = config.temp_admin.map(|admin| admin.into());
 
     let cluster = cluster.build().await.expect("Unable to create cluster");
 
@@ -70,14 +88,14 @@ async fn main() {
         });
     }
 
-    let http = HttpClient::new(&token);
+    let http = HttpClient::new(&config.discord_token);
 
     let cache = InMemoryCache::builder()
         .resource_types(ResourceType::all())
         .build();
 
     let mut events = cluster.events();
-    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(4));
 
     while let Some((_shard_id, event)) = events.next().await {
         cache.update(&event);
@@ -89,7 +107,7 @@ async fn main() {
                 tracing::warn!("Got command to stop bot");
 
                 let sessions = cluster.down_resumable();
-                save_sessions(&resume_path, sessions)
+                save_sessions(&config.resume_path, sessions)
                     .await
                     .expect("Unable to save sessions");
 
@@ -101,6 +119,7 @@ async fn main() {
         let http = http.clone();
         let cache = cache.clone();
         let pool = pool.clone();
+        let sites = sites.clone();
         let fuzzysearch = fuzzysearch.clone();
         let semaphore = semaphore.clone();
 
@@ -111,6 +130,7 @@ async fn main() {
                 http: http.clone(),
                 cache,
                 pool,
+                sites,
                 fuzzysearch,
             };
 
@@ -138,6 +158,36 @@ async fn main() {
     }
 
     tracing::warn!("Bot has stopped.");
+}
+
+#[cfg(feature = "env")]
+fn load_env() {
+    dotenv::dotenv().unwrap();
+}
+
+#[cfg(not(feature = "env"))]
+fn load_env() {}
+
+#[derive(serde::Deserialize, Debug, Clone)]
+struct Config {
+    // Site config
+    fa_a: String,
+    fa_b: String,
+    weasyl_apitoken: String,
+    inkbunny_username: String,
+    inkbunny_password: String,
+    e621_login: String,
+    e621_api_key: String,
+    twitter_consumer_key: String,
+    twitter_consumer_secret: String,
+
+    fautil_apitoken: String,
+
+    // Bot config
+    discord_token: String,
+    temp_admin: Option<u64>,
+    resume_path: Option<String>,
+    database_url: String,
 }
 
 type Sessions = std::collections::HashMap<u64, twilight_gateway::shard::ResumeSession>;
@@ -173,6 +223,7 @@ struct Context {
     cache: InMemoryCache,
     pool: Pool,
 
+    sites: Arc<Mutex<Vec<foxbot_sites::BoxedSite>>>,
     fuzzysearch: std::sync::Arc<fuzzysearch::FuzzySearch>,
 }
 
@@ -184,6 +235,8 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
         Event::MessageCreate(msg) => {
             tracing::trace!("Got message: {:?}", msg);
 
+            can_manage_messages(&ctx, msg.guild_id.unwrap());
+
             if msg.author.bot {
                 tracing::debug!("Ignoring message from bot");
                 return Ok(());
@@ -193,54 +246,34 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
                 return Ok(());
             }
 
-            let (msg_id, attachments) = if let Some(referenced_msg) = &msg.referenced_message {
-                (referenced_msg.id, &referenced_msg.attachments)
-            } else {
-                (msg.id, &msg.attachments)
-            };
+            let (msg_id, attachments, content) =
+                if let Some(referenced_msg) = &msg.referenced_message {
+                    (
+                        referenced_msg.id,
+                        &referenced_msg.attachments,
+                        &referenced_msg.content,
+                    )
+                } else {
+                    (msg.id, &msg.attachments, &msg.content)
+                };
 
-            if attachments.is_empty() {
+            if !attachments.is_empty() {
+                source_attachments(
+                    &ctx,
+                    msg.guild_id,
+                    msg.channel_id,
+                    msg.id,
+                    msg_id,
+                    attachments,
+                )
+                .await?;
+            } else if let Some(links) = extract_links(content) {
+                mirror_links(&ctx, msg.guild_id, msg.channel_id, msg.id, msg_id, &links).await?;
+            } else {
                 ctx.http
                     .create_message(msg.channel_id)
                     .reply(msg.id)
-                    .content("No attachments found!")?
-                    .await?;
-
-                return Ok(());
-            }
-
-            for attachment in attachments {
-                ctx.http.create_typing_trigger(msg.channel_id).await?;
-
-                let hash = if let Some(hash) =
-                    FileURLCache::get(&ctx.pool, &attachment.proxy_url).await?
-                {
-                    hash
-                } else {
-                    let hash = hash_attachment(&attachment.proxy_url).await?;
-                    FileURLCache::set(&ctx.pool, &attachment.proxy_url, hash).await?;
-                    hash
-                };
-
-                let files = lookup_hash(&ctx.fuzzysearch, hash, Some(3)).await?;
-
-                if files.is_empty() {
-                    ctx.http
-                        .create_message(msg.channel_id)
-                        .reply(msg.id)
-                        .content("No matches found, sorry.")?
-                        .await?;
-
-                    continue;
-                }
-
-                let embed = sources_embed(&attachment, &files)
-                    .map_err(|err| UserErrorMessage::new(err, "Unable to properly respond"))?;
-
-                ctx.http
-                    .create_message(msg.channel_id)
-                    .reply(msg_id)
-                    .embed(embed)?
+                    .content("I don't know what to do here, sorry!")?
                     .await?;
             }
         }
@@ -283,22 +316,7 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
                 .embed(embed)?
                 .await?;
         }
-        Event::GatewayHeartbeatAck
-        | Event::GatewayHello(_)
-        | Event::GatewayInvalidateSession(_)
-        | Event::GuildCreate(_)
-        | Event::MessageUpdate(_)
-        | Event::Ready(_)
-        | Event::Resumed
-        | Event::ShardConnected(_)
-        | Event::ShardConnecting(_)
-        | Event::ShardDisconnected(_)
-        | Event::ShardIdentifying(_)
-        | Event::ShardReconnecting(_)
-        | Event::ShardResuming(_) => (),
-        ev => {
-            tracing::warn!("Got had unhandled event: {:?}", ev);
-        }
+        _ => (),
     }
 
     Ok(())
@@ -460,6 +478,18 @@ fn sources_embed(attachment: &Attachment, files: &[fuzzysearch::File]) -> anyhow
     Ok(embed)
 }
 
+fn link_embed(post: &foxbot_sites::PostInfo) -> anyhow::Result<Embed> {
+    use twilight_embed_builder::{EmbedBuilder, ImageSource};
+
+    let embed = EmbedBuilder::new()
+        .title(post.site_name)?
+        .url(post.source_link.as_deref().unwrap_or(&post.url))
+        .image(ImageSource::url(&post.url)?)
+        .build()?;
+
+    Ok(embed)
+}
+
 /// Get the attachment from a given channel and message ID, loading from the
 /// cache if possible.
 async fn get_cached_attachment(
@@ -495,4 +525,184 @@ async fn get_cached_attachment(
         .map(|attachment| attachment.to_owned());
 
     Ok(attachment)
+}
+
+async fn allow_nsfw(ctx: &Context, channel_id: ChannelId) -> Option<bool> {
+    if is_pm(&ctx, channel_id).await.ok()? {
+        return Some(true);
+    }
+
+    let channel = ctx.cache.guild_channel(channel_id)?;
+    Some(matches!(&*channel, GuildChannel::Text(channel) if channel.nsfw))
+}
+
+async fn source_attachments(
+    ctx: &Context,
+    guild_id: Option<GuildId>,
+    channel_id: ChannelId,
+    summoning_id: MessageId,
+    content_id: MessageId,
+    attachments: &[Attachment],
+) -> anyhow::Result<()> {
+    let allow_nsfw = allow_nsfw(&ctx, channel_id).await.unwrap_or(false);
+    let mut skip_delete = false;
+
+    for attachment in attachments {
+        ctx.http.create_typing_trigger(channel_id).await?;
+
+        let hash = if let Some(hash) = FileURLCache::get(&ctx.pool, &attachment.proxy_url).await? {
+            hash
+        } else {
+            let hash = hash_attachment(&attachment.proxy_url).await?;
+            FileURLCache::set(&ctx.pool, &attachment.proxy_url, hash).await?;
+            hash
+        };
+
+        let files = lookup_hash(&ctx.fuzzysearch, hash, Some(3)).await?;
+
+        if files.is_empty() {
+            ctx.http
+                .create_message(channel_id)
+                .reply(summoning_id)
+                .content("No matches found, sorry.")?
+                .await?;
+
+            skip_delete = true;
+            continue;
+        }
+
+        if !allow_nsfw
+            && files
+                .iter()
+                .any(|file| !matches!(file.rating, Some(fuzzysearch::Rating::General)))
+        {
+            ctx.http
+                .create_message(channel_id)
+                .reply(summoning_id)
+                .content("I'll only show NSFW results in NSFW channels.")?
+                .await?;
+
+            skip_delete = true;
+            continue;
+        }
+
+        let embed = sources_embed(&attachment, &files)
+            .map_err(|err| UserErrorMessage::new(err, "Unable to properly respond"))?;
+
+        ctx.http
+            .create_message(channel_id)
+            .reply(content_id)
+            .embed(embed)?
+            .await?;
+    }
+
+    if !skip_delete
+        && matches!(guild_id, Some(guild_id) if summoning_id != content_id && can_manage_messages(&ctx, guild_id).unwrap_or(false))
+    {
+        ctx.http.delete_message(channel_id, summoning_id).await?;
+    }
+
+    Ok(())
+}
+
+/// Collect links from text.
+fn extract_links(content: &str) -> Option<Vec<&str>> {
+    let finder = linkify::LinkFinder::new();
+
+    let links: Vec<_> = finder.links(&content).map(|link| link.as_str()).collect();
+
+    if links.is_empty() {
+        None
+    } else {
+        Some(links)
+    }
+}
+
+/// Collect all images from many links.
+async fn get_images<'a, C>(
+    ctx: &Context,
+    links: &'a [&str],
+    callback: &mut C,
+) -> anyhow::Result<Vec<&'a str>>
+where
+    C: FnMut(SiteCallback),
+{
+    let mut missing = vec![];
+
+    let mut sites = ctx.sites.lock().await;
+
+    'link: for link in links {
+        for site in sites.iter_mut() {
+            if site.url_supported(link).await {
+                let start = std::time::Instant::now();
+
+                let images = site.get_images(0, link).await?;
+
+                match images {
+                    Some(results) => {
+                        callback(SiteCallback {
+                            site: &site,
+                            link,
+                            duration: start.elapsed().as_millis() as i64,
+                            results,
+                        });
+                    }
+                    _ => {
+                        missing.push(*link);
+                    }
+                }
+
+                continue 'link;
+            }
+        }
+    }
+
+    Ok(missing)
+}
+
+fn can_manage_messages(ctx: &Context, guild_id: GuildId) -> Option<bool> {
+    let current_user = ctx.cache.current_user()?;
+    let member = ctx.cache.member(guild_id, current_user.id)?;
+
+    for role_id in &member.roles {
+        let role = ctx.cache.role(*role_id)?;
+
+        if role.permissions.contains(Permissions::MANAGE_MESSAGES) {
+            return Some(true);
+        }
+    }
+
+    Some(false)
+}
+
+/// Send an embed as a reply for each link contained in a message.
+async fn mirror_links(
+    ctx: &Context,
+    guild_id: Option<GuildId>,
+    channel_id: ChannelId,
+    summoning_id: MessageId,
+    content_id: MessageId,
+    links: &[&str],
+) -> anyhow::Result<()> {
+    let mut results: Vec<foxbot_sites::PostInfo> = Vec::with_capacity(links.len());
+
+    let _missing = get_images(&ctx, links, &mut |info| {
+        results.extend(info.results);
+    })
+    .await?;
+
+    for result in results {
+        ctx.http
+            .create_message(channel_id)
+            .reply(content_id)
+            .embed(link_embed(&result)?)?
+            .await?;
+    }
+
+    if matches!(guild_id, Some(guild_id) if summoning_id != content_id && can_manage_messages(&ctx, guild_id).unwrap_or(false))
+    {
+        ctx.http.delete_message(channel_id, summoning_id).await?;
+    }
+
+    Ok(())
 }
