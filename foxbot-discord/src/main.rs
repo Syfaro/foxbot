@@ -1,4 +1,3 @@
-use foxbot_utils::*;
 use futures::{stream::StreamExt, TryFutureExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use twilight_cache_inmemory::{InMemoryCache, ResourceType};
@@ -15,6 +14,9 @@ use twilight_model::{
     id::{ChannelId, MessageId, UserId},
 };
 
+use foxbot_models::FileURLCache;
+use foxbot_utils::*;
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
@@ -24,6 +26,14 @@ async fn main() {
     let fuzzysearch = std::sync::Arc::new(fuzzysearch::FuzzySearch::new(
         std::env::var("FAUTIL_APITOKEN").expect("Missing FAUTIL_APITOKEN"),
     ));
+
+    let database_url = std::env::var("DATABASE_URL").expect("Missing DATABASE_URL");
+
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(8)
+        .connect(&database_url)
+        .await
+        .expect("Unable to connect to database");
 
     let scheme = ShardScheme::Auto;
 
@@ -90,6 +100,7 @@ async fn main() {
 
         let http = http.clone();
         let cache = cache.clone();
+        let pool = pool.clone();
         let fuzzysearch = fuzzysearch.clone();
         let semaphore = semaphore.clone();
 
@@ -99,6 +110,7 @@ async fn main() {
             let context = Context {
                 http: http.clone(),
                 cache,
+                pool,
                 fuzzysearch,
             };
 
@@ -154,9 +166,12 @@ async fn load_sessions(path: &Option<String>) -> Option<Sessions> {
     serde_json::from_str(&buf).ok()?
 }
 
+type Pool = sqlx::Pool<sqlx::Postgres>;
+
 struct Context {
     http: HttpClient,
     cache: InMemoryCache,
+    pool: Pool,
 
     fuzzysearch: std::sync::Arc<fuzzysearch::FuzzySearch>,
 }
@@ -197,7 +212,16 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
             for attachment in attachments {
                 ctx.http.create_typing_trigger(msg.channel_id).await?;
 
-                let hash = hash_attachment(&attachment.proxy_url).await?;
+                let hash = if let Some(hash) =
+                    FileURLCache::get(&ctx.pool, &attachment.proxy_url).await?
+                {
+                    hash
+                } else {
+                    let hash = hash_attachment(&attachment.proxy_url).await?;
+                    FileURLCache::set(&ctx.pool, &attachment.proxy_url, hash).await?;
+                    hash
+                };
+
                 let files = lookup_hash(&ctx.fuzzysearch, hash, Some(3)).await?;
 
                 if files.is_empty() {

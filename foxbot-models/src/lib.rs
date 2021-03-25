@@ -559,3 +559,37 @@ impl Permissions {
         Ok(())
     }
 }
+
+pub struct FileURLCache;
+
+impl FileURLCache {
+    /// Look up a file's cached hash by a URL that is known to never change.
+    pub async fn get(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        file_url: &str,
+    ) -> anyhow::Result<Option<i64>> {
+        let result = sqlx::query!("SELECT hash FROM file_url_cache WHERE url = $1", file_url)
+            .fetch_optional(conn)
+            .await
+            .map(|row| row.map(|row| row.hash))
+            .context("Unable to select hash from file_url_cache");
+
+        result
+    }
+
+    pub async fn set(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        file_url: &str,
+        hash: i64,
+    ) -> anyhow::Result<()> {
+        sqlx::query!(
+            "INSERT INTO file_url_cache (url, hash) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            file_url,
+            hash
+        )
+        .execute(conn)
+        .await?;
+
+        Ok(())
+    }
+}
