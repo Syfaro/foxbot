@@ -5,10 +5,13 @@ use twilight_gateway::{
     cluster::{Cluster, ShardScheme},
     Event,
 };
-use twilight_http::Client as HttpClient;
+use twilight_http::{request::channel::message::CreateMessage, Client as HttpClient};
 use twilight_model::{
-    channel::{Channel, ChannelType, GuildChannel},
+    channel::{
+        embed::Embed, Attachment, Channel, ChannelType, GuildChannel, Message, ReactionType,
+    },
     gateway::Intents,
+    id::{ChannelId, MessageId},
 };
 
 #[tokio::main]
@@ -50,6 +53,7 @@ async fn main() {
         .build();
 
     let mut events = cluster.events();
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
 
     while let Some((_shard_id, event)) = events.next().await {
         cache.update(&event);
@@ -57,7 +61,11 @@ async fn main() {
         let http = http.clone();
         let cache = cache.clone();
         let fuzzysearch = fuzzysearch.clone();
+        let semaphore = semaphore.clone();
+
         tokio::spawn(async move {
+            let _permit = semaphore.acquire().await.expect("Unable to acquire permit");
+
             let context = Context {
                 http: http.clone(),
                 cache,
@@ -119,7 +127,6 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
             };
 
             if attachments.is_empty() {
-                // Only respond to messages without media in private messages.
                 ctx.http
                     .create_message(msg.channel_id)
                     .reply(msg.id)
@@ -156,40 +163,19 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
             }
         }
         Event::ReactionAdd(reaction) => {
-            use twilight_model::channel::ReactionType;
-
             if !matches!(&reaction.emoji, ReactionType::Unicode { name } if name == "🦊") {
                 return Ok(());
             }
 
             tracing::debug!("Added reaction: {:?}", reaction);
 
-            let attachment = match ctx.cache.message(reaction.channel_id, reaction.message_id) {
-                Some(message) => message
-                    .attachments
-                    .first()
-                    .map(|attachment| attachment.to_owned()),
-                None => {
-                    let message = match ctx
-                        .http
-                        .message(reaction.channel_id, reaction.message_id)
-                        .await?
-                    {
-                        Some(message) => message,
-                        None => {
-                            tracing::warn!("Could not get message from reaction");
-                            return Ok(());
-                        }
-                    };
-
-                    message
-                        .attachments
-                        .first()
-                        .map(|attachment| attachment.to_owned())
-                }
-            };
-
-            let attachment = match attachment {
+            let attachment = match get_cached_attachment(
+                &ctx,
+                reaction.channel_id,
+                reaction.message_id,
+            )
+            .await?
+            {
                 Some(attachment) => attachment,
                 None => {
                     tracing::debug!("Message had no attachments");
@@ -237,25 +223,18 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
 }
 
 trait CreateErrorMessage<'a> {
-    fn create_message(
-        &self,
-        http: &'a twilight_http::Client,
-        channel_id: twilight_model::id::ChannelId,
-    ) -> twilight_http::request::channel::message::CreateMessage<'a>;
+    fn create_message(&self, http: &'a HttpClient, channel_id: ChannelId) -> CreateMessage<'a>;
 }
 
 impl<'a> CreateErrorMessage<'a> for anyhow::Error {
-    fn create_message(
-        &self,
-        http: &'a twilight_http::Client,
-        channel_id: twilight_model::id::ChannelId,
-    ) -> twilight_http::request::channel::message::CreateMessage<'a> {
+    fn create_message(&self, http: &'a HttpClient, channel_id: ChannelId) -> CreateMessage<'a> {
         http.create_message(channel_id)
             .content("An error occured.")
             .unwrap()
     }
 }
 
+/// An error message that can be displayed to the user.
 #[derive(Debug, thiserror::Error)]
 struct UserErrorMessage<'a> {
     pub msg: std::borrow::Cow<'a, str>,
@@ -277,11 +256,7 @@ impl<'a> UserErrorMessage<'a> {
 }
 
 impl<'a> CreateErrorMessage<'a> for UserErrorMessage<'_> {
-    fn create_message(
-        &self,
-        http: &'a twilight_http::Client,
-        channel_id: twilight_model::id::ChannelId,
-    ) -> twilight_http::request::channel::message::CreateMessage<'a> {
+    fn create_message(&self, http: &'a HttpClient, channel_id: ChannelId) -> CreateMessage<'a> {
         http.create_message(channel_id)
             .content(self.msg.to_string())
             .unwrap()
@@ -322,12 +297,9 @@ fn lookup_hash(
         .map_err(|err| UserErrorMessage::new(err, "Unable to look up sources"))
 }
 
-fn get_event_channel(
-    event: &Event,
-) -> Option<(
-    twilight_model::id::ChannelId,
-    Option<twilight_model::id::MessageId>,
-)> {
+/// Check the channel and possibily message ID from an event where it would make
+/// sense to reply to the message.
+fn get_event_channel(event: &Event) -> Option<(ChannelId, Option<MessageId>)> {
     match event {
         Event::MessageCreate(msg) => Some((msg.channel_id, Some(msg.id))),
         Event::MessageDelete(msg) => Some((msg.channel_id, Some(msg.id))),
@@ -338,36 +310,36 @@ fn get_event_channel(
     }
 }
 
-async fn is_pm(
-    ctx: &Context,
-    channel_id: twilight_model::id::ChannelId,
-) -> Result<bool, UserErrorMessage<'static>> {
-    let is_pm = match ctx.cache.guild_channel(channel_id) {
-        Some(channel) => {
-            matches!(&*channel, GuildChannel::Text(text) if text.kind == ChannelType::Private)
-        }
-        _ => {
-            let channel = ctx
-                .http
-                .channel(channel_id)
-                .await
-                .map_err(|err| UserErrorMessage::new(err, "Unable to check channel context"))?
-                .ok_or_else(|| {
-                    UserErrorMessage::new(
-                        anyhow::format_err!("ChannelId did not exist: {}", channel_id),
-                        "Channel did not load",
-                    )
-                })?;
+/// Check if a channel is a private message, using the cache if possible.
+async fn is_pm(ctx: &Context, channel_id: ChannelId) -> Result<bool, UserErrorMessage<'static>> {
+    if let Some(channel) = ctx.cache.guild_channel(channel_id) {
+        return Ok(
+            matches!(&*channel, GuildChannel::Text(text) if text.kind == ChannelType::Private),
+        );
+    }
 
-            matches!(channel, Channel::Private(_))
-        }
-    };
+    let channel = ctx
+        .http
+        .channel(channel_id)
+        .await
+        .map_err(|err| UserErrorMessage::new(err, "Unable to check channel context"))?
+        .ok_or_else(|| {
+            UserErrorMessage::new(
+                anyhow::format_err!("ChannelId did not exist: {}", channel_id),
+                "Channel did not load",
+            )
+        })?;
 
-    Ok(is_pm)
+    Ok(matches!(channel, Channel::Private(_)))
 }
 
-fn is_mention(ctx: &Context, message: &twilight_model::channel::Message) -> bool {
-    let current_user = ctx.cache.current_user().unwrap();
+/// Check if a message mentions the bot, assuming that the bot user is in the
+/// cache.
+fn is_mention(ctx: &Context, message: &Message) -> bool {
+    let current_user = ctx
+        .cache
+        .current_user()
+        .expect("Current user was not in cache");
 
     message
         .mentions
@@ -375,10 +347,8 @@ fn is_mention(ctx: &Context, message: &twilight_model::channel::Message) -> bool
         .any(|mention| mention.id == current_user.id)
 }
 
-fn sources_embed(
-    attachment: &twilight_model::channel::Attachment,
-    files: &[fuzzysearch::File],
-) -> anyhow::Result<twilight_model::channel::embed::Embed> {
+/// Build an embed for a collection of sources from an attachment.
+fn sources_embed(attachment: &Attachment, files: &[fuzzysearch::File]) -> anyhow::Result<Embed> {
     use twilight_embed_builder::{EmbedBuilder, EmbedFooterBuilder, ImageSource};
 
     let urls = files
@@ -395,4 +365,41 @@ fn sources_embed(
         .build()?;
 
     Ok(embed)
+}
+
+/// Get the attachment from a given channel and message ID, loading from the
+/// cache if possible.
+async fn get_cached_attachment(
+    ctx: &Context,
+    channel_id: ChannelId,
+    message_id: MessageId,
+) -> Result<Option<Attachment>, UserErrorMessage<'static>> {
+    if let Some(message) = ctx.cache.message(channel_id, message_id) {
+        let attachment = message
+            .attachments
+            .first()
+            .map(|attachment| attachment.to_owned());
+
+        return Ok(attachment);
+    }
+
+    let message = match ctx
+        .http
+        .message(channel_id, message_id)
+        .await
+        .map_err(|err| UserErrorMessage::new(err, "Unable to get message"))?
+    {
+        Some(message) => message,
+        None => {
+            tracing::warn!("Could not get message");
+            return Ok(None);
+        }
+    };
+
+    let attachment = message
+        .attachments
+        .first()
+        .map(|attachment| attachment.to_owned());
+
+    Ok(attachment)
 }
