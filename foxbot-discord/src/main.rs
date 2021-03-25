@@ -235,8 +235,6 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
         Event::MessageCreate(msg) => {
             tracing::trace!("Got message: {:?}", msg);
 
-            can_manage_messages(&ctx, msg.guild_id.unwrap());
-
             if msg.author.bot {
                 tracing::debug!("Ignoring message from bot");
                 return Ok(());
