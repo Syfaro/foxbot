@@ -164,37 +164,30 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
 
             tracing::debug!("Added reaction: {:?}", reaction);
 
-            let (author, attachment) =
-                match ctx.cache.message(reaction.channel_id, reaction.message_id) {
-                    Some(message) => (
-                        message.author,
-                        message
-                            .attachments
-                            .first()
-                            .map(|attachment| attachment.to_owned()),
-                    ),
-                    None => {
-                        let message = match ctx
-                            .http
-                            .message(reaction.channel_id, reaction.message_id)
-                            .await?
-                        {
-                            Some(message) => message,
-                            None => {
-                                tracing::warn!("Could not get message from reaction");
-                                return Ok(());
-                            }
-                        };
+            let attachment = match ctx.cache.message(reaction.channel_id, reaction.message_id) {
+                Some(message) => message
+                    .attachments
+                    .first()
+                    .map(|attachment| attachment.to_owned()),
+                None => {
+                    let message = match ctx
+                        .http
+                        .message(reaction.channel_id, reaction.message_id)
+                        .await?
+                    {
+                        Some(message) => message,
+                        None => {
+                            tracing::warn!("Could not get message from reaction");
+                            return Ok(());
+                        }
+                    };
 
-                        (
-                            message.author.id,
-                            message
-                                .attachments
-                                .first()
-                                .map(|attachment| attachment.to_owned()),
-                        )
-                    }
-                };
+                    message
+                        .attachments
+                        .first()
+                        .map(|attachment| attachment.to_owned())
+                }
+            };
 
             let attachment = match attachment {
                 Some(attachment) => attachment,
@@ -215,7 +208,7 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
             let embed = sources_embed(&attachment, &files)
                 .map_err(|err| UserErrorMessage::new(err, "Unable to properly respond"))?;
 
-            let private_channel = ctx.http.create_private_channel(author).await?;
+            let private_channel = ctx.http.create_private_channel(reaction.user_id).await?;
 
             ctx.http
                 .create_message(private_channel.id)
