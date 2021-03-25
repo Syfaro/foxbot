@@ -196,6 +196,26 @@
       "nullable": []
     }
   },
+  "65d64e09fa623877a370f1b46dfa48de1e105e34a97227c81805d6b26a966286": {
+    "query": "SELECT hash FROM file_url_cache WHERE url = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "hash",
+          "type_info": "Int8"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        false
+      ]
+    }
+  },
   "77f5d6866fc999ad65c32ed4516bcdb1a9b0c97f506a220100b0b79debb69274": {
     "query": "SELECT value FROM group_config WHERE chat_id = $1 AND name = $2",
     "describe": {
@@ -511,6 +531,19 @@
           "Int4",
           "Int8",
           "Int4"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "dc5ffecf6ca8dd081cd0ee3970219a73c27bff1fc30ea0ebb6a1354cdccddfbf": {
+    "query": "INSERT INTO file_url_cache (url, hash) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Text",
+          "Int8"
         ]
       },
       "nullable": []
