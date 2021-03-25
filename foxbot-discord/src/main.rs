@@ -51,23 +51,35 @@ async fn main() {
 
     let mut events = cluster.events();
 
-    while let Some((shard_id, event)) = events.next().await {
+    while let Some((_shard_id, event)) = events.next().await {
         cache.update(&event);
 
         let http = http.clone();
         let cache = cache.clone();
         let fuzzysearch = fuzzysearch.clone();
         tokio::spawn(async move {
-            if let Err(err) =
-                handle_event(shard_id, event.clone(), http.clone(), cache, fuzzysearch).await
-            {
+            let context = Context {
+                http: http.clone(),
+                cache,
+                fuzzysearch,
+            };
+
+            if let Err(err) = handle_event(event.clone(), context).await {
                 tracing::error!("Error handling event: {:?}", err);
 
-                if let Some((channel_id, _message_id)) = get_event_channel(&event) {
-                    if let Err(err) = match err.downcast::<UserErrorMessage>() {
-                        Ok(err) => err.create_message(&http, channel_id).await,
-                        Err(err) => err.create_message(&http, channel_id).await,
-                    } {
+                if let Some((channel_id, message_id)) = get_event_channel(&event) {
+                    let create_message = match err.downcast::<UserErrorMessage>() {
+                        Ok(err) => err.create_message(&http, channel_id),
+                        Err(err) => err.create_message(&http, channel_id),
+                    };
+
+                    let create_message = if let Some(message_id) = message_id {
+                        create_message.reply(message_id)
+                    } else {
+                        create_message
+                    };
+
+                    if let Err(err) = create_message.await {
                         tracing::error!("Unable to send error message: {:?}", err);
                     }
                 }
@@ -76,14 +88,15 @@ async fn main() {
     }
 }
 
-#[tracing::instrument(err, skip(event, http, cache, fuzzysearch))]
-async fn handle_event(
-    shard_id: u64,
-    event: Event,
+struct Context {
     http: HttpClient,
     cache: InMemoryCache,
+
     fuzzysearch: std::sync::Arc<fuzzysearch::FuzzySearch>,
-) -> anyhow::Result<()> {
+}
+
+#[tracing::instrument(err, skip(event, ctx))]
+async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
     tracing::trace!("Got event: {:?}", event);
 
     match &event {
@@ -95,35 +108,20 @@ async fn handle_event(
                 return Ok(());
             }
 
-            let is_pm = match cache.guild_channel(msg.channel_id) {
-                Some(channel) => {
-                    matches!(&*channel, GuildChannel::Text(text) if text.kind == ChannelType::Private)
-                }
-                _ => {
-                    let channel = http
-                        .channel(msg.channel_id)
-                        .await
-                        .map_err(|err| {
-                            UserErrorMessage::new(err, "Unable to check channel context")
-                        })?
-                        .ok_or_else(|| {
-                            UserErrorMessage::new(
-                                anyhow::format_err!("ChannelId did not exist: {}", msg.channel_id),
-                                "Channel did not load",
-                            )
-                        })?;
-
-                    matches!(channel, Channel::Private(_))
-                }
-            };
-
-            if !is_pm {
+            if !is_pm(&ctx, msg.channel_id).await? && !is_mention(&ctx, &msg) {
                 return Ok(());
             }
 
-            if msg.attachments.is_empty() {
+            let (msg_id, attachments) = if let Some(referenced_msg) = &msg.referenced_message {
+                (referenced_msg.id, &referenced_msg.attachments)
+            } else {
+                (msg.id, &msg.attachments)
+            };
+
+            if attachments.is_empty() {
                 // Only respond to messages without media in private messages.
-                http.create_message(msg.channel_id)
+                ctx.http
+                    .create_message(msg.channel_id)
                     .reply(msg.id)
                     .content("No attachments found!")?
                     .await?;
@@ -131,14 +129,15 @@ async fn handle_event(
                 return Ok(());
             }
 
-            for attachment in &msg.attachments {
-                http.create_typing_trigger(msg.channel_id).await?;
+            for attachment in attachments {
+                ctx.http.create_typing_trigger(msg.channel_id).await?;
 
                 let hash = hash_attachment(&attachment.proxy_url).await?;
-                let files = lookup_hash(&fuzzysearch, hash, Some(3)).await?;
+                let files = lookup_hash(&ctx.fuzzysearch, hash, Some(3)).await?;
 
                 if files.is_empty() {
-                    http.create_message(msg.channel_id)
+                    ctx.http
+                        .create_message(msg.channel_id)
                         .reply(msg.id)
                         .content("No matches found, sorry.")?
                         .await?;
@@ -146,20 +145,17 @@ async fn handle_event(
                     continue;
                 }
 
-                let urls = files
-                    .into_iter()
-                    .map(|file| format!("<{}>", file.url()))
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                let embed = sources_embed(&attachment, &files)
+                    .map_err(|err| UserErrorMessage::new(err, "Unable to properly respond"))?;
 
-                http.create_message(msg.channel_id)
-                    .reply(msg.id)
-                    .content(urls)?
+                ctx.http
+                    .create_message(msg.channel_id)
+                    .reply(msg_id)
+                    .embed(embed)?
                     .await?;
             }
         }
         Event::ReactionAdd(reaction) => {
-            use twilight_embed_builder::{EmbedBuilder, EmbedFooterBuilder, ImageSource};
             use twilight_model::channel::ReactionType;
 
             if !matches!(&reaction.emoji, ReactionType::Unicode { name } if name == "🦊") {
@@ -168,36 +164,37 @@ async fn handle_event(
 
             tracing::debug!("Added reaction: {:?}", reaction);
 
-            let (author, attachment) = match cache.message(reaction.channel_id, reaction.message_id)
-            {
-                Some(message) => (
-                    message.author,
-                    message
-                        .attachments
-                        .first()
-                        .map(|attachment| attachment.to_owned()),
-                ),
-                None => {
-                    let message = match http
-                        .message(reaction.channel_id, reaction.message_id)
-                        .await?
-                    {
-                        Some(message) => message,
-                        None => {
-                            tracing::warn!("Could not get message from reaction");
-                            return Ok(());
-                        }
-                    };
-
-                    (
-                        message.author.id,
+            let (author, attachment) =
+                match ctx.cache.message(reaction.channel_id, reaction.message_id) {
+                    Some(message) => (
+                        message.author,
                         message
                             .attachments
                             .first()
                             .map(|attachment| attachment.to_owned()),
-                    )
-                }
-            };
+                    ),
+                    None => {
+                        let message = match ctx
+                            .http
+                            .message(reaction.channel_id, reaction.message_id)
+                            .await?
+                        {
+                            Some(message) => message,
+                            None => {
+                                tracing::warn!("Could not get message from reaction");
+                                return Ok(());
+                            }
+                        };
+
+                        (
+                            message.author.id,
+                            message
+                                .attachments
+                                .first()
+                                .map(|attachment| attachment.to_owned()),
+                        )
+                    }
+                };
 
             let attachment = match attachment {
                 Some(attachment) => attachment,
@@ -208,28 +205,20 @@ async fn handle_event(
             };
 
             let hash = hash_attachment(&attachment.proxy_url).await?;
-            let files = lookup_hash(&fuzzysearch, hash, Some(3)).await?;
+            let files = lookup_hash(&ctx.fuzzysearch, hash, Some(3)).await?;
 
             if files.is_empty() {
                 tracing::debug!("No matches were found");
                 return Ok(());
             }
 
-            let urls = files
-                .into_iter()
-                .map(|file| format!("<{}>", file.url()))
-                .collect::<Vec<_>>()
-                .join("\n");
+            let embed = sources_embed(&attachment, &files)
+                .map_err(|err| UserErrorMessage::new(err, "Unable to properly respond"))?;
 
-            let embed = EmbedBuilder::new()
-                .title("Image Sources")?
-                .description(urls)?
-                .thumbnail(ImageSource::url(attachment.url.to_string())?)
-                .footer(EmbedFooterBuilder::new("fuzzysearch.net")?)
-                .build()?;
+            let private_channel = ctx.http.create_private_channel(author).await?;
 
-            let private_channel = http.create_private_channel(author).await?;
-            http.create_message(private_channel.id)
+            ctx.http
+                .create_message(private_channel.id)
                 .embed(embed)?
                 .await?;
         }
@@ -354,4 +343,63 @@ fn get_event_channel(
         Event::ReactionRemove(re) => Some((re.channel_id, Some(re.message_id))),
         _ => None,
     }
+}
+
+async fn is_pm(
+    ctx: &Context,
+    channel_id: twilight_model::id::ChannelId,
+) -> Result<bool, UserErrorMessage<'static>> {
+    let is_pm = match ctx.cache.guild_channel(channel_id) {
+        Some(channel) => {
+            matches!(&*channel, GuildChannel::Text(text) if text.kind == ChannelType::Private)
+        }
+        _ => {
+            let channel = ctx
+                .http
+                .channel(channel_id)
+                .await
+                .map_err(|err| UserErrorMessage::new(err, "Unable to check channel context"))?
+                .ok_or_else(|| {
+                    UserErrorMessage::new(
+                        anyhow::format_err!("ChannelId did not exist: {}", channel_id),
+                        "Channel did not load",
+                    )
+                })?;
+
+            matches!(channel, Channel::Private(_))
+        }
+    };
+
+    Ok(is_pm)
+}
+
+fn is_mention(ctx: &Context, message: &twilight_model::channel::Message) -> bool {
+    let current_user = ctx.cache.current_user().unwrap();
+
+    message
+        .mentions
+        .iter()
+        .any(|mention| mention.id == current_user.id)
+}
+
+fn sources_embed(
+    attachment: &twilight_model::channel::Attachment,
+    files: &[fuzzysearch::File],
+) -> anyhow::Result<twilight_model::channel::embed::Embed> {
+    use twilight_embed_builder::{EmbedBuilder, EmbedFooterBuilder, ImageSource};
+
+    let urls = files
+        .iter()
+        .map(|file| format!("<{}>", file.url()))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let embed = EmbedBuilder::new()
+        .title("Image Sources")?
+        .description(urls)?
+        .thumbnail(ImageSource::url(attachment.url.to_string())?)
+        .footer(EmbedFooterBuilder::new("fuzzysearch.net")?)
+        .build()?;
+
+    Ok(embed)
 }
