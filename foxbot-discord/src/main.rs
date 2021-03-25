@@ -1,5 +1,6 @@
 use foxbot_utils::*;
 use futures::{stream::StreamExt, TryFutureExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use twilight_cache_inmemory::{InMemoryCache, ResourceType};
 use twilight_gateway::{
     cluster::{Cluster, ShardScheme},
@@ -11,7 +12,7 @@ use twilight_model::{
         embed::Embed, Attachment, Channel, ChannelType, GuildChannel, Message, ReactionType,
     },
     gateway::Intents,
-    id::{ChannelId, MessageId},
+    id::{ChannelId, MessageId, UserId},
 };
 
 #[tokio::main]
@@ -34,10 +35,23 @@ async fn main() {
             | Intents::DIRECT_MESSAGES
             | Intents::DIRECT_MESSAGE_REACTIONS,
     )
-    .shard_scheme(scheme)
-    .build()
-    .await
-    .expect("Unable to create cluster");
+    .shard_scheme(scheme);
+
+    let resume_path = std::env::var("RESUME_PATH").ok();
+
+    let cluster = if let Some(sessions) = load_sessions(&resume_path).await {
+        cluster.resume_sessions(sessions)
+    } else {
+        cluster
+    };
+
+    let temp_admin: Option<UserId> = std::env::var("TEMP_ADMIN")
+        .ok()
+        .map(|admin| admin.parse::<u64>().ok())
+        .flatten()
+        .map(|admin| admin.into());
+
+    let cluster = cluster.build().await.expect("Unable to create cluster");
 
     {
         let cluster = cluster.clone();
@@ -57,6 +71,22 @@ async fn main() {
 
     while let Some((_shard_id, event)) = events.next().await {
         cache.update(&event);
+
+        match (temp_admin, &event) {
+            (Some(temp_admin), Event::MessageCreate(msg))
+                if msg.author.id == temp_admin && msg.content == "/foxbot-stop" =>
+            {
+                tracing::warn!("Got command to stop bot");
+
+                let sessions = cluster.down_resumable();
+                save_sessions(&resume_path, sessions)
+                    .await
+                    .expect("Unable to save sessions");
+
+                break;
+            }
+            _ => (),
+        }
 
         let http = http.clone();
         let cache = cache.clone();
@@ -94,6 +124,34 @@ async fn main() {
             }
         });
     }
+
+    tracing::warn!("Bot has stopped.");
+}
+
+type Sessions = std::collections::HashMap<u64, twilight_gateway::shard::ResumeSession>;
+
+async fn save_sessions(path: &Option<String>, sessions: Sessions) -> anyhow::Result<()> {
+    let path = match path {
+        Some(path) => path,
+        None => return Ok(()),
+    };
+
+    let contents = serde_json::to_string(&sessions)?;
+    let mut f = tokio::fs::File::create(path).await?;
+    f.write_all(&contents.as_bytes()).await?;
+    Ok(())
+}
+
+async fn load_sessions(path: &Option<String>) -> Option<Sessions> {
+    let path = match path {
+        Some(path) => path,
+        None => return None,
+    };
+
+    let mut f = tokio::fs::File::open(path).await.ok()?;
+    let mut buf = String::new();
+    f.read_to_string(&mut buf).await.ok()?;
+    serde_json::from_str(&buf).ok()?
 }
 
 struct Context {
@@ -116,7 +174,7 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
                 return Ok(());
             }
 
-            if !is_pm(&ctx, msg.channel_id).await? && !is_mention(&ctx, &msg) {
+            if !is_pm(&ctx, msg.channel_id).await? && !is_mention(&ctx, &msg).await? {
                 return Ok(());
             }
 
@@ -333,18 +391,29 @@ async fn is_pm(ctx: &Context, channel_id: ChannelId) -> Result<bool, UserErrorMe
     Ok(matches!(channel, Channel::Private(_)))
 }
 
-/// Check if a message mentions the bot, assuming that the bot user is in the
-/// cache.
-fn is_mention(ctx: &Context, message: &Message) -> bool {
-    let current_user = ctx
-        .cache
-        .current_user()
-        .expect("Current user was not in cache");
+/// Check if a message mentions the bot.
+async fn is_mention(ctx: &Context, message: &Message) -> Result<bool, UserErrorMessage<'static>> {
+    let current_user_id = match ctx.cache.current_user() {
+        Some(user) => user.id,
+        None => {
+            tracing::warn!("Current user is not cached");
 
-    message
+            let current_user = ctx
+                .http
+                .current_user()
+                .await
+                .map_err(|err| UserErrorMessage::new(err, "Unable to load bot metadata"))?;
+
+            current_user.id
+        }
+    };
+
+    let is_mention = message
         .mentions
         .iter()
-        .any(|mention| mention.id == current_user.id)
+        .any(|mention| mention.id == current_user_id);
+
+    Ok(is_mention)
 }
 
 /// Build an embed for a collection of sources from an attachment.
