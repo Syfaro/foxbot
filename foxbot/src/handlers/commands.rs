@@ -435,6 +435,8 @@ impl CommandHandler {
                     lookup_single_hash(&handler.fapi, hash, Some(10)).await?,
                 )
             } else {
+                drop(action);
+
                 handler
                     .send_generic_reply(&message, "source-no-photo")
                     .await?;
