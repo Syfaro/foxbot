@@ -307,12 +307,22 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
             let embed = sources_embed(&attachment, &files)
                 .map_err(|err| UserErrorMessage::new(err, "Unable to properly respond"))?;
 
-            let private_channel = ctx.http.create_private_channel(reaction.user_id).await?;
+            let private_channel = match ctx.http.create_private_channel(reaction.user_id).await {
+                Ok(private_channel) => private_channel,
+                Err(err) => {
+                    tracing::warn!("Unable to create private channel: {:?}", err);
+                    return Ok(());
+                }
+            };
 
-            ctx.http
+            if let Err(err) = ctx
+                .http
                 .create_message(private_channel.id)
                 .embed(embed)?
-                .await?;
+                .await
+            {
+                tracing::warn!("Unable to send private message: {:?}", err);
+            }
         }
         _ => (),
     }
