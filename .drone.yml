@@ -13,7 +13,7 @@ concurrency:
 steps:
 - name: test
   pull: always
-  image: rust:1.50-slim-buster
+  image: rust:1.51-slim-buster
   commands:
   - apt-get update -y
   - apt-get install pkg-config libssl-dev ca-certificates wget -y
@@ -60,7 +60,7 @@ concurrency:
 
 steps:
 - name: build-bot
-  image: rust:1.50-slim-buster
+  image: rust:1.51-slim-buster
   commands:
   - apt-get update -y
   - apt-get install pkg-config libssl-dev ca-certificates wget -y
@@ -82,7 +82,7 @@ steps:
     SCCACHE_S3_USE_SSL: true
 
 - name: build-channel-worker
-  image: rust:1.50-slim-buster
+  image: rust:1.51-slim-buster
   commands:
   - apt-get update -y
   - apt-get install pkg-config libssl-dev ca-certificates wget -y
@@ -288,6 +288,6 @@ trigger:
 
 ---
 kind: signature
-hmac: 8d5f728efa973ef5bc65ed3298e634b4eacdca2ef686161f3b0e8f1792b086a9
+hmac: 73e6044505bdb4920e02a59adef7f4107b1c449624fe52c0216762e3513471b5
 
 ...
