@@ -87,6 +87,7 @@ alternate-title = Here are some possible alternate versions:
 alternate-posted-by = Posted by { $name }
 alternate-distance = · { $link } ({ $rating }, distance of { $distance })
 alternate-multiple-photo = I can only find alternates for a single photo, sorry.
+alternate-unknown-link = Sorry, I don't understand the provided link.
 
 # Automatic group sourcing
 automatic-single = It looks like this image may have come from here: { $link } ({ $rating })
