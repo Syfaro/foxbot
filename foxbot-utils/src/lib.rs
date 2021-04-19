@@ -395,11 +395,11 @@ pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (S
         s.push_str(&get_message(&bundle, "alternate-posted-by", Some(args)).unwrap());
         s.push('\n');
         let mut subs: Vec<fuzzysearch::File> = item.1.to_vec();
-        subs.sort_by(|a, b| a.id.partial_cmp(&b.id).unwrap());
-        subs.dedup_by(|a, b| a.id == b.id);
+        subs.sort_by(|a, b| a.id().partial_cmp(&b.id()).unwrap());
+        subs.dedup_by(|a, b| a.id() == b.id());
         subs.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
         for sub in subs {
-            tracing::trace!(site = sub.site_name(), id = sub.id, "looking at submission");
+            tracing::trace!(site = sub.site_name(), id = %sub.id(), "looking at submission");
             let mut args = fluent::FluentArgs::new();
             args.insert("link", sub.url().into());
             args.insert("distance", sub.distance.unwrap_or(10).into());
@@ -594,11 +594,11 @@ pub async fn sort_results(
         let a_idx = sites
             .iter()
             .position(|s| s.as_str() == a.site_name())
-            .unwrap();
+            .unwrap_or_default();
         let b_idx = sites
             .iter()
             .position(|s| s.as_str() == b.site_name())
-            .unwrap();
+            .unwrap_or_default();
 
         a_idx.cmp(&b_idx)
     });

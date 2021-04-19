@@ -1007,7 +1007,7 @@ dependencies = [
 [[package]]
 name = "fuzzysearch"
 version = "0.2.0"
-source = "git+https://github.com/Syfaro/fuzzysearch-rs#cebf81c71fe9581c632df9dfb606e3e4299a2283"
+source = "git+https://github.com/Syfaro/fuzzysearch-rs#0fe0e855e27cd6048fcc5952f4ec319298bd1aca"
 dependencies = [
  "image",
  "img_hash",
