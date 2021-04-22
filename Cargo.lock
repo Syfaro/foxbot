@@ -800,7 +800,7 @@ dependencies = [
 
 [[package]]
 name = "foxbot-channel-worker"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -813,6 +813,8 @@ dependencies = [
  "fuzzysearch",
  "hamming",
  "image",
+ "opentelemetry",
+ "opentelemetry-jaeger",
  "redis",
  "serde",
  "serde_json",
@@ -820,6 +822,7 @@ dependencies = [
  "tgbotapi",
  "tokio",
  "tracing",
+ "tracing-opentelemetry",
  "tracing-subscriber",
  "unic-langid",
 ]
@@ -881,6 +884,7 @@ dependencies = [
  "reqwest",
  "rusoto_s3",
  "sentry",
+ "serde_json",
  "sha2 0.9.3",
  "sqlx",
  "tgbotapi",

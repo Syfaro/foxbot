@@ -1113,6 +1113,25 @@ pub fn get_lang_bundle(langs: &Langs, requested: &str) -> LangBundle {
     bundle
 }
 
+pub fn get_faktory_custom() -> std::collections::HashMap<String, serde_json::Value> {
+    use opentelemetry::propagation::TextMapPropagator;
+    use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+    let context = tracing::Span::current().context();
+
+    let mut extra: std::collections::HashMap<String, String> = Default::default();
+    let propagator = opentelemetry::sdk::propagation::TraceContextPropagator::new();
+    propagator.inject_context(&context, &mut extra);
+
+    extra
+        .into_iter()
+        .filter_map(|(key, value)| match serde_json::to_value(value) {
+            Ok(val) => Some((key, val)),
+            _ => None,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     fn get_finder() -> linkify::LinkFinder {
