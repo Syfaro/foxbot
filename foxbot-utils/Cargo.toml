@@ -9,8 +9,9 @@ anyhow = "1"
 tracing = "0.1"
 tracing-futures = "0.2"
 
-opentelemetry = "0.6"
-tracing-opentelemetry = "0.5"
+opentelemetry = "0.13"
+tracing-opentelemetry = "0.12"
+opentelemetry-http = "0.2"
 
 sentry = "0.22"
 

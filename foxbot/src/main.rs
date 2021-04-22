@@ -103,12 +103,8 @@ pub struct Config {
 
 /// Configure tracing with Jaeger.
 fn configure_tracing(collector: String) {
-    use opentelemetry::{
-        api::{KeyValue, Provider},
-        sdk::{Config as TelemConfig, Sampler},
-    };
+    use opentelemetry::KeyValue;
     use tracing_subscriber::layer::SubscriberExt;
-    use tracing_subscriber::prelude::*;
 
     let env = std::env::var("ENVIRONMENT");
     let env = if let Ok(env) = env.as_ref() {
@@ -119,44 +115,39 @@ fn configure_tracing(collector: String) {
         "release"
     };
 
-    let fmt_layer = tracing_subscriber::fmt::layer();
-    let filter_layer = tracing_subscriber::EnvFilter::try_from_default_env()
-        .or_else(|_| tracing_subscriber::EnvFilter::try_new("info"))
-        .unwrap();
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .finish();
-    let registry = tracing_subscriber::registry()
-        .with(filter_layer)
-        .with(fmt_layer);
+    opentelemetry::global::set_text_map_propagator(opentelemetry_jaeger::Propagator::new());
 
-    let exporter = opentelemetry_jaeger::Exporter::builder()
+    let tracer = opentelemetry_jaeger::new_pipeline()
         .with_agent_endpoint(collector)
-        .with_process(opentelemetry_jaeger::Process {
-            service_name: "foxbot".to_string(),
-            tags: vec![
-                KeyValue::new("environment", env),
-                KeyValue::new("version", env!("CARGO_PKG_VERSION")),
-            ],
-        })
-        .init()
-        .expect("Unable to create jaeger exporter");
+        .with_service_name("foxbot")
+        .with_tags(vec![
+            KeyValue::new("environment", env.to_owned()),
+            KeyValue::new("version", env!("CARGO_PKG_VERSION")),
+        ])
+        .install_batch(opentelemetry::runtime::Tokio)
+        .unwrap();
 
-    let provider = opentelemetry::sdk::Provider::builder()
-        .with_simple_exporter(exporter)
-        .with_config(TelemConfig {
-            default_sampler: Box::new(Sampler::Always),
-            ..Default::default()
-        })
-        .build();
+    let trace = tracing_opentelemetry::layer().with_tracer(tracer);
+    let env_filter = tracing_subscriber::EnvFilter::from_default_env();
 
-    opentelemetry::global::set_provider(provider);
-
-    let tracer = opentelemetry::global::trace_provider().get_tracer("foxbot");
-    let telem_layer = tracing_opentelemetry::layer().with_tracer(tracer);
-    let registry = registry.with(telem_layer);
-
-    registry.init();
+    if matches!(std::env::var("LOG_FMT").as_deref(), Ok("json")) {
+        let subscriber = tracing_subscriber::fmt::layer()
+            .json()
+            .with_timer(tracing_subscriber::fmt::time::ChronoUtc::rfc3339())
+            .with_target(true);
+        let subscriber = tracing_subscriber::Registry::default()
+            .with(env_filter)
+            .with(trace)
+            .with(subscriber);
+        tracing::subscriber::set_global_default(subscriber).unwrap();
+    } else {
+        let subscriber = tracing_subscriber::fmt::layer();
+        let subscriber = tracing_subscriber::Registry::default()
+            .with(env_filter)
+            .with(trace)
+            .with(subscriber);
+        tracing::subscriber::set_global_default(subscriber).unwrap();
+    }
 }
 
 fn setup_shutdown() -> tokio::sync::mpsc::Receiver<bool> {
@@ -442,6 +433,8 @@ async fn main() {
             }
         })
         .await;
+
+    opentelemetry::global::shutdown_tracer_provider();
 }
 
 /// Handle an incoming HTTP POST request to /{token}.
