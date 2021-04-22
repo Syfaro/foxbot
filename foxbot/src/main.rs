@@ -433,6 +433,8 @@ async fn main() {
             }
         })
         .await;
+
+    opentelemetry::global::shutdown_tracer_provider();
 }
 
 /// Handle an incoming HTTP POST request to /{token}.
