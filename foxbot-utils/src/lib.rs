@@ -309,17 +309,21 @@ pub fn get_message(
 
 /// Add current opentelemetry span to a Sentry scope.
 pub fn add_sentry_tracing(scope: &mut sentry::Scope) {
-    use opentelemetry::api::HttpTextFormat;
     use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-    let current_context = tracing::Span::current().context();
+    let context = tracing::Span::current().context();
 
-    let mut carrier = std::collections::HashMap::new();
-    let propagator = opentelemetry::api::B3Propagator::new(true);
-    propagator.inject_context(&current_context, &mut carrier);
+    let mut headers: reqwest::header::HeaderMap = Default::default();
+    opentelemetry::global::get_text_map_propagator(|propagator| {
+        propagator.inject_context(
+            &context,
+            &mut opentelemetry_http::HeaderInjector(&mut headers),
+        )
+    });
 
-    let data: &str = carrier.get("X-B3").unwrap();
-    scope.set_extra("x-b3", data.to_owned().into());
+    let header_value = headers.get("uber-trace-id").unwrap();
+    let trace_id = header_value.to_str().unwrap();
+    scope.set_extra("uber-trace-id", trace_id.to_owned().into());
 }
 
 /// Tags to add to a sentry event.
