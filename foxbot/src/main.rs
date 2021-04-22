@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tgbotapi::{requests::*, *};
 use tokio::sync::{Mutex, RwLock};
+use tracing::Instrument;
 use unic_langid::LanguageIdentifier;
 
 use foxbot_utils::*;
@@ -405,12 +406,12 @@ async fn main() {
     let h = handler.clone();
     tokio::spawn(async move {
         ReceiverStream::new(inline_rx)
-            .for_each_concurrent(INLINE_HANDLERS, |inline_query| {
+            .for_each_concurrent(INLINE_HANDLERS, |(inline_query, span)| {
                 let handler = h.clone();
 
                 async move {
                     tokio::spawn(async move {
-                        handler.handle_update(*inline_query).await;
+                        handler.handle_update(*inline_query).instrument(span).await;
                     })
                     .await
                     .unwrap();
@@ -421,12 +422,12 @@ async fn main() {
 
     // Process all other updates, limited by `CONCURRENT_HANDLERS`.
     ReceiverStream::new(update_rx)
-        .for_each_concurrent(CONCURRENT_HANDLERS, |update| {
+        .for_each_concurrent(CONCURRENT_HANDLERS, |(update, span)| {
             let handler = handler.clone();
 
             async move {
                 tokio::spawn(async move {
-                    handler.handle_update(*update).await;
+                    handler.handle_update(*update).instrument(span).await;
                 })
                 .await
                 .unwrap();
@@ -442,8 +443,8 @@ async fn main() {
 /// It spawns a handler for each request.
 async fn handle_request(
     req: hyper::Request<hyper::Body>,
-    update_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
-    inline_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    update_tx: tokio::sync::mpsc::Sender<(Box<tgbotapi::Update>, tracing::Span)>,
+    inline_tx: tokio::sync::mpsc::Sender<(Box<tgbotapi::Update>, tracing::Span)>,
     secret: &str,
     video_secret: &str,
     templates: Arc<handlebars::Handlebars<'_>>,
@@ -476,9 +477,15 @@ async fn handle_request(
 
             let update = Box::new(update);
             if update.inline_query.is_some() {
-                inline_tx.send(update).await.unwrap();
+                inline_tx
+                    .send((update, tracing::Span::current()))
+                    .await
+                    .unwrap();
             } else {
-                update_tx.send(update).await.unwrap();
+                update_tx
+                    .send((update, tracing::Span::current()))
+                    .await
+                    .unwrap();
             }
 
             Ok(Response::new(Body::from("✓")))
@@ -502,20 +509,23 @@ async fn handle_request(
                 tracing::debug!("Got video progress, {}", progress);
 
                 update_tx
-                    .send(Box::new(tgbotapi::Update {
-                        message: Some(tgbotapi::Message {
-                            text: Some(format!("/videoprogress {} {}", display_name, progress)),
-                            entities: Some(vec![tgbotapi::MessageEntity {
-                                entity_type: tgbotapi::MessageEntityType::BotCommand,
-                                offset: 0,
-                                length: 14,
-                                url: None,
-                                user: None,
-                            }]),
+                    .send((
+                        Box::new(tgbotapi::Update {
+                            message: Some(tgbotapi::Message {
+                                text: Some(format!("/videoprogress {} {}", display_name, progress)),
+                                entities: Some(vec![tgbotapi::MessageEntity {
+                                    entity_type: tgbotapi::MessageEntityType::BotCommand,
+                                    offset: 0,
+                                    length: 14,
+                                    url: None,
+                                    user: None,
+                                }]),
+                                ..Default::default()
+                            }),
                             ..Default::default()
                         }),
-                        ..Default::default()
-                    }))
+                        tracing::Span::current(),
+                    ))
                     .await
                     .unwrap();
             } else {
@@ -544,23 +554,26 @@ async fn handle_request(
                     .unwrap();
 
                 update_tx
-                    .send(Box::new(tgbotapi::Update {
-                        message: Some(tgbotapi::Message {
-                            text: Some(format!(
-                                "/videocomplete {} {} {}",
-                                display_name, video_url, thumb_url
-                            )),
-                            entities: Some(vec![tgbotapi::MessageEntity {
-                                entity_type: tgbotapi::MessageEntityType::BotCommand,
-                                offset: 0,
-                                length: 14,
-                                url: None,
-                                user: None,
-                            }]),
+                    .send((
+                        Box::new(tgbotapi::Update {
+                            message: Some(tgbotapi::Message {
+                                text: Some(format!(
+                                    "/videocomplete {} {} {}",
+                                    display_name, video_url, thumb_url
+                                )),
+                                entities: Some(vec![tgbotapi::MessageEntity {
+                                    entity_type: tgbotapi::MessageEntityType::BotCommand,
+                                    offset: 0,
+                                    length: 14,
+                                    url: None,
+                                    user: None,
+                                }]),
+                                ..Default::default()
+                            }),
                             ..Default::default()
                         }),
-                        ..Default::default()
-                    }))
+                        tracing::Span::current(),
+                    ))
                     .await
                     .unwrap();
             }
@@ -598,20 +611,23 @@ async fn handle_request(
             // This is extremely stupid but it works without having to pull
             // a handler into HTTP requests
             update_tx
-                .send(Box::new(tgbotapi::Update {
-                    message: Some(tgbotapi::Message {
-                        text: Some(format!("/twitterverify {} {}", token, verifier)),
-                        entities: Some(vec![tgbotapi::MessageEntity {
-                            entity_type: tgbotapi::MessageEntityType::BotCommand,
-                            offset: 0,
-                            length: 14,
-                            url: None,
-                            user: None,
-                        }]),
+                .send((
+                    Box::new(tgbotapi::Update {
+                        message: Some(tgbotapi::Message {
+                            text: Some(format!("/twitterverify {} {}", token, verifier)),
+                            entities: Some(vec![tgbotapi::MessageEntity {
+                                entity_type: tgbotapi::MessageEntityType::BotCommand,
+                                offset: 0,
+                                length: 14,
+                                url: None,
+                                user: None,
+                            }]),
+                            ..Default::default()
+                        }),
                         ..Default::default()
                     }),
-                    ..Default::default()
-                }))
+                    tracing::Span::current(),
+                ))
                 .await
                 .unwrap();
 
@@ -633,8 +649,8 @@ async fn handle_request(
 
 /// Start a web server to handle webhooks and pass updates to [handle_request].
 async fn receive_webhook(
-    update_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
-    inline_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    update_tx: tokio::sync::mpsc::Sender<(Box<tgbotapi::Update>, tracing::Span)>,
+    inline_tx: tokio::sync::mpsc::Sender<(Box<tgbotapi::Update>, tracing::Span)>,
     mut shutdown: tokio::sync::mpsc::Receiver<bool>,
     config: Config,
 ) {
@@ -662,6 +678,15 @@ async fn receive_webhook(
         let templates = templates.clone();
         async move {
             Ok::<_, hyper::Error>(hyper::service::service_fn(move |req| {
+                use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+                let parent_cx = opentelemetry::global::get_text_map_propagator(|propagator| {
+                    propagator.extract(&opentelemetry_http::HeaderExtractor(req.headers()))
+                });
+
+                let span = tracing::info_span!("handle_request");
+                span.set_parent(parent_cx);
+
                 handle_request(
                     req,
                     update_tx.clone(),
@@ -670,6 +695,7 @@ async fn receive_webhook(
                     video_secret,
                     templates.clone(),
                 )
+                .instrument(span)
             }))
         }
     });
@@ -732,8 +758,8 @@ async fn serve_metrics(config: Config) {
 
 /// Start polling updates using Bot API long polling.
 async fn poll_updates(
-    update_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
-    inline_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    update_tx: tokio::sync::mpsc::Sender<(Box<tgbotapi::Update>, tracing::Span)>,
+    inline_tx: tokio::sync::mpsc::Sender<(Box<tgbotapi::Update>, tracing::Span)>,
     mut shutdown: tokio::sync::mpsc::Receiver<bool>,
     bot: Arc<Telegram>,
 ) {
@@ -765,12 +791,13 @@ async fn poll_updates(
 
             for update in updates {
                 let id = update.update_id;
+                let span = tracing::info_span!("poll_update");
 
                 let update = Box::new(update);
                 if update.inline_query.is_some() {
-                    inline_tx.send(update).await.unwrap();
+                    inline_tx.send((update, span)).await.unwrap();
                 } else {
-                    update_tx.send(update).await.unwrap();
+                    update_tx.send((update, span)).await.unwrap();
                 }
 
                 update_req.offset = Some(id + 1);
