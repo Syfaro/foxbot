@@ -587,6 +587,13 @@ pub async fn sort_results(
         None => Sites::default_order(),
     };
 
+    sort_results_by(&sites, results);
+
+    Ok(())
+}
+
+/// Sort match results with a given order.
+pub fn sort_results_by(order: &[Sites], results: &mut [fuzzysearch::File]) {
     results.sort_unstable_by(|a, b| {
         let a_dist = a.distance.unwrap();
         let b_dist = b.distance.unwrap();
@@ -595,19 +602,17 @@ pub async fn sort_results(
             return a_dist.cmp(&b_dist);
         }
 
-        let a_idx = sites
+        let a_idx = order
             .iter()
             .position(|s| s.as_str() == a.site_name())
             .unwrap_or_default();
-        let b_idx = sites
+        let b_idx = order
             .iter()
             .position(|s| s.as_str() == b.site_name())
             .unwrap_or_default();
 
         a_idx.cmp(&b_idx)
     });
-
-    Ok(())
 }
 
 /// Extract all possible links from a Message. It looks at the text,

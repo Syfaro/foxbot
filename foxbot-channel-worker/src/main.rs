@@ -305,6 +305,9 @@ impl Handler {
         // Only keep matches with a distance of 3 or less
         matches.1.retain(|m| m.distance.unwrap() <= 3);
 
+        // Try to prioritize good results.
+        sort_results_by(&foxbot_models::Sites::default_order(), &mut matches.1);
+
         let first = match matches.1.first() {
             Some(first) => first,
             _ => {

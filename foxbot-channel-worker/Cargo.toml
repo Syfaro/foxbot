@@ -35,6 +35,7 @@ fuzzysearch = { git = "https://github.com/Syfaro/fuzzysearch-rs", features = ["t
 
 foxbot-sites = { path = "../foxbot-sites" }
 foxbot-utils = { path = "../foxbot-utils"}
+foxbot-models = { path = "../foxbot-models" }
 
 [features]
 env = ["dotenv"]

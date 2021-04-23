@@ -808,6 +808,7 @@ dependencies = [
  "envy",
  "faktory",
  "fluent",
+ "foxbot-models",
  "foxbot-sites",
  "foxbot-utils",
  "fuzzysearch",
