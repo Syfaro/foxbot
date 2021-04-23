@@ -65,14 +65,12 @@ impl Sites {
 pub struct UserConfig;
 
 pub enum UserConfigKey {
-    SourceName,
     SiteSortOrder,
 }
 
 impl UserConfigKey {
     fn as_str(&self) -> &str {
         match self {
-            UserConfigKey::SourceName => "source-name",
             UserConfigKey::SiteSortOrder => "site-sort-order",
         }
     }

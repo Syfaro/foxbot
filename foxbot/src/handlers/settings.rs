@@ -44,130 +44,8 @@ impl Handler for SettingsHandler {
             return order(&handler, &callback_query, &data).await;
         }
 
-        if data.starts_with("s:name:") {
-            return name(&handler, &callback_query, &data).await;
-        }
-
         Ok(Completed)
     }
-}
-
-async fn name(
-    handler: &MessageHandler,
-    callback_query: &CallbackQuery,
-    data: &str,
-) -> anyhow::Result<Status> {
-    let reply_message = needs_field!(callback_query, message);
-    let from = reply_message
-        .from
-        .as_ref()
-        .and_then(|from| from.language_code.as_deref());
-
-    if data.ends_with(":t") {
-        let source_name: Option<bool> = UserConfig::get(
-            &handler.conn,
-            UserConfigKey::SourceName,
-            callback_query.from.id,
-        )
-        .await
-        .context("unable to query user source name setting")?;
-        let source_name = source_name.unwrap_or(false);
-
-        let source_name = !source_name;
-
-        UserConfig::set(
-            &handler.conn,
-            "source-name",
-            callback_query.from.id,
-            source_name,
-        )
-        .await
-        .context("unable to set user source name setting")?;
-
-        let text = handler
-            .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
-                get_message(&bundle, "settings-name-toggled", None).unwrap()
-            })
-            .await;
-
-        let answer = AnswerCallbackQuery {
-            callback_query_id: callback_query.id.clone(),
-            text: Some(text),
-            ..Default::default()
-        };
-
-        let keyboard = name_keyboard(&handler, &callback_query.from).await?;
-
-        let edit_message = EditMessageReplyMarkup {
-            message_id: Some(reply_message.message_id),
-            chat_id: reply_message.chat_id(),
-            reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(keyboard)),
-            ..Default::default()
-        };
-
-        futures::try_join!(
-            handler.make_request(&answer),
-            handler.make_request(&edit_message)
-        )
-        .context("unable to send answer or edit message")?;
-
-        return Ok(Completed);
-    }
-
-    let text = handler
-        .get_fluent_bundle(from, |bundle| {
-            get_message(&bundle, "settings-name", None).unwrap()
-        })
-        .await;
-
-    let keyboard = name_keyboard(&handler, &callback_query.from).await?;
-
-    let edit_message = EditMessageText {
-        message_id: Some(reply_message.message_id),
-        chat_id: reply_message.chat_id(),
-        reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(keyboard)),
-        text,
-        ..Default::default()
-    };
-
-    handler
-        .make_request(&edit_message)
-        .await
-        .context("unable to send setting message")?;
-
-    Ok(Completed)
-}
-
-async fn name_keyboard(
-    handler: &MessageHandler,
-    from: &User,
-) -> anyhow::Result<InlineKeyboardMarkup> {
-    let enabled = UserConfig::get(&handler.conn, UserConfigKey::SourceName, from.id)
-        .await
-        .context("unable to query user source setting")?
-        .unwrap_or(false);
-
-    let message_name = if enabled {
-        "settings-name-source"
-    } else {
-        "settings-name-site"
-    };
-
-    let text = handler
-        .get_fluent_bundle(from.language_code.as_deref(), |bundle| {
-            get_message(&bundle, &message_name, None).unwrap()
-        })
-        .await;
-
-    let keyboard = vec![vec![InlineKeyboardButton {
-        text,
-        callback_data: Some("s:name:t".into()),
-        ..Default::default()
-    }]];
-
-    Ok(InlineKeyboardMarkup {
-        inline_keyboard: keyboard,
-    })
 }
 
 async fn order(
@@ -339,28 +217,18 @@ async fn send_settings_message(
         .as_ref()
         .and_then(|user| user.language_code.as_deref());
 
-    let (site_preference, source_name) = handler
+    let site_preference = handler
         .get_fluent_bundle(from, |bundle| {
-            (
-                get_message(&bundle, "settings-site-preference", None).unwrap(),
-                get_message(&bundle, "settings-source-name", None).unwrap(),
-            )
+            get_message(&bundle, "settings-site-preference", None).unwrap()
         })
         .await;
 
     let keyboard = InlineKeyboardMarkup {
-        inline_keyboard: vec![vec![
-            InlineKeyboardButton {
-                text: site_preference,
-                callback_data: Some("s:order:".into()),
-                ..Default::default()
-            },
-            InlineKeyboardButton {
-                text: source_name,
-                callback_data: Some("s:name:".into()),
-                ..Default::default()
-            },
-        ]],
+        inline_keyboard: vec![vec![InlineKeyboardButton {
+            text: site_preference,
+            callback_data: Some("s:order:".into()),
+            ..Default::default()
+        }]],
     };
 
     let text = handler
