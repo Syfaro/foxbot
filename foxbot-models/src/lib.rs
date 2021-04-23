@@ -5,11 +5,13 @@ lazy_static::lazy_static! {
 }
 
 /// Each available site, for configuration usage.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Hash, Eq, serde::Deserialize)]
 pub enum Sites {
     FurAffinity,
+    #[serde(rename = "e621")]
     E621,
     Twitter,
+    Weasyl,
 }
 
 impl serde::Serialize for Sites {
@@ -32,6 +34,7 @@ impl std::str::FromStr for Sites {
             "FurAffinity" => Ok(Sites::FurAffinity),
             "e621" => Ok(Sites::E621),
             "Twitter" => Ok(Sites::Twitter),
+            "Weasyl" => Ok(Sites::Weasyl),
             _ => Err(ParseSitesError),
         }
     }
@@ -44,12 +47,18 @@ impl Sites {
             Sites::FurAffinity => "FurAffinity",
             Sites::E621 => "e621",
             Sites::Twitter => "Twitter",
+            Sites::Weasyl => "Weasyl",
         }
     }
 
     /// The bot's default site ordering.
     pub fn default_order() -> Vec<Sites> {
-        vec![Sites::FurAffinity, Sites::E621, Sites::Twitter]
+        vec![
+            Sites::FurAffinity,
+            Sites::Weasyl,
+            Sites::E621,
+            Sites::Twitter,
+        ]
     }
 }
 
@@ -100,14 +109,12 @@ impl Account {
 pub struct UserConfig;
 
 pub enum UserConfigKey {
-    SourceName,
     SiteSortOrder,
 }
 
 impl UserConfigKey {
     fn as_str(&self) -> &str {
         match self {
-            UserConfigKey::SourceName => "source-name",
             UserConfigKey::SiteSortOrder => "site-sort-order",
         }
     }

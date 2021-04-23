@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tgbotapi::{requests::*, *};
 use tokio::sync::{Mutex, RwLock};
+use tracing::Instrument;
 use unic_langid::LanguageIdentifier;
 
 use foxbot_utils::*;
@@ -103,12 +104,8 @@ pub struct Config {
 
 /// Configure tracing with Jaeger.
 fn configure_tracing(collector: String) {
-    use opentelemetry::{
-        api::{KeyValue, Provider},
-        sdk::{Config as TelemConfig, Sampler},
-    };
+    use opentelemetry::KeyValue;
     use tracing_subscriber::layer::SubscriberExt;
-    use tracing_subscriber::prelude::*;
 
     let env = std::env::var("ENVIRONMENT");
     let env = if let Ok(env) = env.as_ref() {
@@ -119,44 +116,39 @@ fn configure_tracing(collector: String) {
         "release"
     };
 
-    let fmt_layer = tracing_subscriber::fmt::layer();
-    let filter_layer = tracing_subscriber::EnvFilter::try_from_default_env()
-        .or_else(|_| tracing_subscriber::EnvFilter::try_new("info"))
-        .unwrap();
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .finish();
-    let registry = tracing_subscriber::registry()
-        .with(filter_layer)
-        .with(fmt_layer);
+    opentelemetry::global::set_text_map_propagator(opentelemetry_jaeger::Propagator::new());
 
-    let exporter = opentelemetry_jaeger::Exporter::builder()
+    let tracer = opentelemetry_jaeger::new_pipeline()
         .with_agent_endpoint(collector)
-        .with_process(opentelemetry_jaeger::Process {
-            service_name: "foxbot".to_string(),
-            tags: vec![
-                KeyValue::new("environment", env),
-                KeyValue::new("version", env!("CARGO_PKG_VERSION")),
-            ],
-        })
-        .init()
-        .expect("Unable to create jaeger exporter");
+        .with_service_name("foxbot")
+        .with_tags(vec![
+            KeyValue::new("environment", env.to_owned()),
+            KeyValue::new("version", env!("CARGO_PKG_VERSION")),
+        ])
+        .install_batch(opentelemetry::runtime::Tokio)
+        .unwrap();
 
-    let provider = opentelemetry::sdk::Provider::builder()
-        .with_simple_exporter(exporter)
-        .with_config(TelemConfig {
-            default_sampler: Box::new(Sampler::Always),
-            ..Default::default()
-        })
-        .build();
+    let trace = tracing_opentelemetry::layer().with_tracer(tracer);
+    let env_filter = tracing_subscriber::EnvFilter::from_default_env();
 
-    opentelemetry::global::set_provider(provider);
-
-    let tracer = opentelemetry::global::trace_provider().get_tracer("foxbot");
-    let telem_layer = tracing_opentelemetry::layer().with_tracer(tracer);
-    let registry = registry.with(telem_layer);
-
-    registry.init();
+    if matches!(std::env::var("LOG_FMT").as_deref(), Ok("json")) {
+        let subscriber = tracing_subscriber::fmt::layer()
+            .json()
+            .with_timer(tracing_subscriber::fmt::time::ChronoUtc::rfc3339())
+            .with_target(true);
+        let subscriber = tracing_subscriber::Registry::default()
+            .with(env_filter)
+            .with(trace)
+            .with(subscriber);
+        tracing::subscriber::set_global_default(subscriber).unwrap();
+    } else {
+        let subscriber = tracing_subscriber::fmt::layer();
+        let subscriber = tracing_subscriber::Registry::default()
+            .with(env_filter)
+            .with(trace)
+            .with(subscriber);
+        tracing::subscriber::set_global_default(subscriber).unwrap();
+    }
 }
 
 fn setup_shutdown() -> tokio::sync::mpsc::Receiver<bool> {
@@ -414,12 +406,12 @@ async fn main() {
     let h = handler.clone();
     tokio::spawn(async move {
         ReceiverStream::new(inline_rx)
-            .for_each_concurrent(INLINE_HANDLERS, |inline_query| {
+            .for_each_concurrent(INLINE_HANDLERS, |(inline_query, span)| {
                 let handler = h.clone();
 
                 async move {
                     tokio::spawn(async move {
-                        handler.handle_update(*inline_query).await;
+                        handler.handle_update(*inline_query).instrument(span).await;
                     })
                     .await
                     .unwrap();
@@ -430,18 +422,20 @@ async fn main() {
 
     // Process all other updates, limited by `CONCURRENT_HANDLERS`.
     ReceiverStream::new(update_rx)
-        .for_each_concurrent(CONCURRENT_HANDLERS, |update| {
+        .for_each_concurrent(CONCURRENT_HANDLERS, |(update, span)| {
             let handler = handler.clone();
 
             async move {
                 tokio::spawn(async move {
-                    handler.handle_update(*update).await;
+                    handler.handle_update(*update).instrument(span).await;
                 })
                 .await
                 .unwrap();
             }
         })
         .await;
+
+    opentelemetry::global::shutdown_tracer_provider();
 }
 
 /// Handle an incoming HTTP POST request to /{token}.
@@ -449,8 +443,8 @@ async fn main() {
 /// It spawns a handler for each request.
 async fn handle_request(
     req: hyper::Request<hyper::Body>,
-    update_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
-    inline_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    update_tx: tokio::sync::mpsc::Sender<(Box<tgbotapi::Update>, tracing::Span)>,
+    inline_tx: tokio::sync::mpsc::Sender<(Box<tgbotapi::Update>, tracing::Span)>,
     secret: &str,
     video_secret: &str,
     templates: Arc<handlebars::Handlebars<'_>>,
@@ -483,9 +477,15 @@ async fn handle_request(
 
             let update = Box::new(update);
             if update.inline_query.is_some() {
-                inline_tx.send(update).await.unwrap();
+                inline_tx
+                    .send((update, tracing::Span::current()))
+                    .await
+                    .unwrap();
             } else {
-                update_tx.send(update).await.unwrap();
+                update_tx
+                    .send((update, tracing::Span::current()))
+                    .await
+                    .unwrap();
             }
 
             Ok(Response::new(Body::from("✓")))
@@ -509,20 +509,23 @@ async fn handle_request(
                 tracing::debug!("Got video progress, {}", progress);
 
                 update_tx
-                    .send(Box::new(tgbotapi::Update {
-                        message: Some(tgbotapi::Message {
-                            text: Some(format!("/videoprogress {} {}", display_name, progress)),
-                            entities: Some(vec![tgbotapi::MessageEntity {
-                                entity_type: tgbotapi::MessageEntityType::BotCommand,
-                                offset: 0,
-                                length: 14,
-                                url: None,
-                                user: None,
-                            }]),
+                    .send((
+                        Box::new(tgbotapi::Update {
+                            message: Some(tgbotapi::Message {
+                                text: Some(format!("/videoprogress {} {}", display_name, progress)),
+                                entities: Some(vec![tgbotapi::MessageEntity {
+                                    entity_type: tgbotapi::MessageEntityType::BotCommand,
+                                    offset: 0,
+                                    length: 14,
+                                    url: None,
+                                    user: None,
+                                }]),
+                                ..Default::default()
+                            }),
                             ..Default::default()
                         }),
-                        ..Default::default()
-                    }))
+                        tracing::Span::current(),
+                    ))
                     .await
                     .unwrap();
             } else {
@@ -551,23 +554,26 @@ async fn handle_request(
                     .unwrap();
 
                 update_tx
-                    .send(Box::new(tgbotapi::Update {
-                        message: Some(tgbotapi::Message {
-                            text: Some(format!(
-                                "/videocomplete {} {} {}",
-                                display_name, video_url, thumb_url
-                            )),
-                            entities: Some(vec![tgbotapi::MessageEntity {
-                                entity_type: tgbotapi::MessageEntityType::BotCommand,
-                                offset: 0,
-                                length: 14,
-                                url: None,
-                                user: None,
-                            }]),
+                    .send((
+                        Box::new(tgbotapi::Update {
+                            message: Some(tgbotapi::Message {
+                                text: Some(format!(
+                                    "/videocomplete {} {} {}",
+                                    display_name, video_url, thumb_url
+                                )),
+                                entities: Some(vec![tgbotapi::MessageEntity {
+                                    entity_type: tgbotapi::MessageEntityType::BotCommand,
+                                    offset: 0,
+                                    length: 14,
+                                    url: None,
+                                    user: None,
+                                }]),
+                                ..Default::default()
+                            }),
                             ..Default::default()
                         }),
-                        ..Default::default()
-                    }))
+                        tracing::Span::current(),
+                    ))
                     .await
                     .unwrap();
             }
@@ -605,20 +611,23 @@ async fn handle_request(
             // This is extremely stupid but it works without having to pull
             // a handler into HTTP requests
             update_tx
-                .send(Box::new(tgbotapi::Update {
-                    message: Some(tgbotapi::Message {
-                        text: Some(format!("/twitterverify {} {}", token, verifier)),
-                        entities: Some(vec![tgbotapi::MessageEntity {
-                            entity_type: tgbotapi::MessageEntityType::BotCommand,
-                            offset: 0,
-                            length: 14,
-                            url: None,
-                            user: None,
-                        }]),
+                .send((
+                    Box::new(tgbotapi::Update {
+                        message: Some(tgbotapi::Message {
+                            text: Some(format!("/twitterverify {} {}", token, verifier)),
+                            entities: Some(vec![tgbotapi::MessageEntity {
+                                entity_type: tgbotapi::MessageEntityType::BotCommand,
+                                offset: 0,
+                                length: 14,
+                                url: None,
+                                user: None,
+                            }]),
+                            ..Default::default()
+                        }),
                         ..Default::default()
                     }),
-                    ..Default::default()
-                }))
+                    tracing::Span::current(),
+                ))
                 .await
                 .unwrap();
 
@@ -640,8 +649,8 @@ async fn handle_request(
 
 /// Start a web server to handle webhooks and pass updates to [handle_request].
 async fn receive_webhook(
-    update_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
-    inline_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    update_tx: tokio::sync::mpsc::Sender<(Box<tgbotapi::Update>, tracing::Span)>,
+    inline_tx: tokio::sync::mpsc::Sender<(Box<tgbotapi::Update>, tracing::Span)>,
     mut shutdown: tokio::sync::mpsc::Receiver<bool>,
     config: Config,
 ) {
@@ -669,6 +678,15 @@ async fn receive_webhook(
         let templates = templates.clone();
         async move {
             Ok::<_, hyper::Error>(hyper::service::service_fn(move |req| {
+                use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+                let parent_cx = opentelemetry::global::get_text_map_propagator(|propagator| {
+                    propagator.extract(&opentelemetry_http::HeaderExtractor(req.headers()))
+                });
+
+                let span = tracing::info_span!("handle_request");
+                span.set_parent(parent_cx);
+
                 handle_request(
                     req,
                     update_tx.clone(),
@@ -677,6 +695,7 @@ async fn receive_webhook(
                     video_secret,
                     templates.clone(),
                 )
+                .instrument(span)
             }))
         }
     });
@@ -739,8 +758,8 @@ async fn serve_metrics(config: Config) {
 
 /// Start polling updates using Bot API long polling.
 async fn poll_updates(
-    update_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
-    inline_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    update_tx: tokio::sync::mpsc::Sender<(Box<tgbotapi::Update>, tracing::Span)>,
+    inline_tx: tokio::sync::mpsc::Sender<(Box<tgbotapi::Update>, tracing::Span)>,
     mut shutdown: tokio::sync::mpsc::Receiver<bool>,
     bot: Arc<Telegram>,
 ) {
@@ -772,12 +791,13 @@ async fn poll_updates(
 
             for update in updates {
                 let id = update.update_id;
+                let span = tracing::info_span!("poll_update");
 
                 let update = Box::new(update);
                 if update.inline_query.is_some() {
-                    inline_tx.send(update).await.unwrap();
+                    inline_tx.send((update, span)).await.unwrap();
                 } else {
-                    update_tx.send(update).await.unwrap();
+                    update_tx.send((update, span)).await.unwrap();
                 }
 
                 update_req.offset = Some(id + 1);

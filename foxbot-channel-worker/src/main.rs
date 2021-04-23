@@ -1,19 +1,77 @@
-use anyhow::Context;
 use std::{
+    collections::HashMap,
     ops::Add,
     sync::{Arc, Mutex},
 };
+
+use anyhow::Context;
+use opentelemetry::propagation::TextMapPropagator;
 use tgbotapi::{
     requests::{EditMessageCaption, EditMessageReplyMarkup, ReplyMarkup},
     InlineKeyboardButton, InlineKeyboardMarkup,
 };
 use tracing::Instrument;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+use foxbot_models::Sites;
 use foxbot_sites::BoxedSite;
 use foxbot_utils::*;
 
 fn main() {
-    tracing_subscriber::fmt::init();
+    use opentelemetry::KeyValue;
+    use tracing_subscriber::layer::SubscriberExt;
+
+    let runtime = Arc::new(
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap(),
+    );
+
+    let env = std::env::var("ENVIRONMENT");
+    let env = if let Ok(env) = env.as_ref() {
+        env.as_str()
+    } else if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+
+    opentelemetry::global::set_text_map_propagator(opentelemetry_jaeger::Propagator::new());
+
+    let tracer = runtime.block_on(async move {
+        opentelemetry_jaeger::new_pipeline()
+            .with_agent_endpoint(std::env::var("JAEGER_COLLECTOR").unwrap())
+            .with_service_name("foxbot_channel_worker")
+            .with_tags(vec![
+                KeyValue::new("environment", env.to_owned()),
+                KeyValue::new("version", env!("CARGO_PKG_VERSION")),
+            ])
+            .install_batch(opentelemetry::runtime::Tokio)
+            .unwrap()
+    });
+
+    let trace = tracing_opentelemetry::layer().with_tracer(tracer);
+    let env_filter = tracing_subscriber::EnvFilter::from_default_env();
+
+    if matches!(std::env::var("LOG_FMT").as_deref(), Ok("json")) {
+        let subscriber = tracing_subscriber::fmt::layer()
+            .json()
+            .with_timer(tracing_subscriber::fmt::time::ChronoUtc::rfc3339())
+            .with_target(true);
+        let subscriber = tracing_subscriber::Registry::default()
+            .with(env_filter)
+            .with(trace)
+            .with(subscriber);
+        tracing::subscriber::set_global_default(subscriber).unwrap();
+    } else {
+        let subscriber = tracing_subscriber::fmt::layer();
+        let subscriber = tracing_subscriber::Registry::default()
+            .with(env_filter)
+            .with(trace)
+            .with(subscriber);
+        tracing::subscriber::set_global_default(subscriber).unwrap();
+    }
 
     tracing::info!("Starting channel worker");
 
@@ -33,13 +91,6 @@ fn main() {
 
     let mut faktory = faktory::ConsumerBuilder::default();
     faktory.workers(workers);
-
-    let runtime = Arc::new(
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap(),
-    );
 
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(2)
@@ -72,12 +123,8 @@ fn main() {
 
     let producer = faktory::Producer::connect(None).unwrap();
 
-    let langs = load_langs();
-
     let handler = Arc::new(Handler {
         sites: tokio::sync::Mutex::new(sites),
-        langs,
-        best_langs: Default::default(),
         telegram,
         producer: Arc::new(Mutex::new(producer)),
         fuzzysearch,
@@ -91,10 +138,13 @@ fn main() {
         faktory.register(
             "foxbot_channel_update",
             move |job| -> Result<(), tgbotapi::Error> {
-                let err = match runtime.block_on(handler.process_channel_update(job)) {
-                    Ok(_) => return Ok(()),
-                    Err(err) => err,
-                };
+                let span = get_custom_span(&job);
+
+                let err =
+                    match runtime.block_on(handler.process_channel_update(job).instrument(span)) {
+                        Ok(_) => return Ok(()),
+                        Err(err) => err,
+                    };
 
                 match err.downcast::<tgbotapi::Error>() {
                     Ok(err) => Err(err),
@@ -107,7 +157,9 @@ fn main() {
     faktory.register(
         "foxbot_channel_edit",
         move |job| -> Result<(), tgbotapi::Error> {
-            let err = match runtime.block_on(handler.process_channel_edit(job)) {
+            let span = get_custom_span(&job);
+
+            let err = match runtime.block_on(handler.process_channel_edit(job).instrument(span)) {
                 Ok(_) => return Ok(()),
                 Err(err) => err,
             };
@@ -163,16 +215,11 @@ struct MessageEdit {
     chat_id: String,
     message_id: i32,
     media_group_id: Option<String>,
-    url: String,
+    firsts: Vec<(Sites, String)>,
 }
-
-type BestLangs = std::collections::HashMap<String, LangBundle>;
 
 struct Handler {
     sites: tokio::sync::Mutex<Vec<BoxedSite>>,
-
-    langs: Langs,
-    best_langs: tokio::sync::RwLock<BestLangs>,
 
     producer: Arc<Mutex<faktory::Producer<std::net::TcpStream>>>,
     telegram: tgbotapi::Telegram,
@@ -189,38 +236,6 @@ impl Handler {
             let mut producer = producer.lock().unwrap();
             producer.enqueue(job).unwrap();
         });
-    }
-
-    /// Build a fluent language bundle for a specified language and cache the
-    /// result.
-    async fn get_fluent_bundle<C, R>(&self, requested: Option<&str>, callback: C) -> R
-    where
-        C: FnOnce(&fluent::concurrent::FluentBundle<fluent::FluentResource>) -> R,
-    {
-        let requested = requested.unwrap_or(L10N_LANGS[0]);
-
-        tracing::trace!(lang = requested, "Looking up language bundle");
-
-        {
-            let lock = self.best_langs.read().await;
-            if let Some(bundle) = lock.get(requested) {
-                return callback(bundle);
-            }
-        }
-
-        tracing::debug!(lang = requested, "Got new language, building bundle");
-
-        let bundle = get_lang_bundle(&self.langs, requested);
-
-        // Lock for writing for as short as possible.
-        {
-            let mut lock = self.best_langs.write().await;
-            lock.insert(requested.to_string(), bundle);
-        }
-
-        let lock = self.best_langs.read().await;
-        let bundle = lock.get(requested).expect("value just inserted is missing");
-        callback(bundle)
     }
 
     #[tracing::instrument(skip(self, job), fields(job_id = job.id()))]
@@ -249,15 +264,6 @@ impl Handler {
 
         // Only keep matches with a distance of 3 or less
         matches.1.retain(|m| m.distance.unwrap() <= 3);
-
-        let first = match matches.1.first() {
-            Some(first) => first,
-            _ => {
-                tracing::debug!("Unable to find sources for image");
-
-                return Ok(());
-            }
-        };
 
         let links = extract_links(&message);
 
@@ -299,17 +305,26 @@ impl Handler {
             return Ok(());
         }
 
+        // Keep order of sites consistent.
+        sort_results_by(&foxbot_models::Sites::default_order(), &mut matches.1, true);
+
+        let firsts = first_of_each_site(&matches.1)
+            .into_iter()
+            .map(|(site, file)| (site, file.url()))
+            .collect();
+
         let data = serde_json::to_value(&MessageEdit {
             chat_id: message.chat.id.to_string(),
             message_id: message.message_id,
             media_group_id: message.media_group_id,
-            url: first.url(),
+            firsts,
         })?;
 
-        self.enqueue(
-            faktory::Job::new("foxbot_channel_edit", vec![data]).on_queue("foxbot_channel"),
-        )
-        .await;
+        let mut job =
+            faktory::Job::new("foxbot_channel_edit", vec![data]).on_queue("foxbot_channel");
+        job.custom = get_faktory_custom();
+
+        self.enqueue(job).await;
 
         Ok(())
     }
@@ -324,34 +339,46 @@ impl Handler {
             chat_id,
             message_id,
             media_group_id,
-            url,
+            firsts,
         } = serde_json::value::from_value(data.clone()).unwrap();
         let chat_id: &str = &chat_id;
 
         // If this photo was part of a media group, we should set a caption on
         // the image because we can't make an inline keyboard on it.
         let resp = if media_group_id.is_some() {
+            let caption = firsts
+                .into_iter()
+                .map(|(_site, url)| url)
+                .collect::<Vec<_>>()
+                .join("\n");
+
             let edit_caption_markup = EditMessageCaption {
                 chat_id: chat_id.into(),
                 message_id: Some(message_id),
-                caption: Some(url),
+                caption: Some(caption),
                 ..Default::default()
             };
 
             self.telegram.make_request(&edit_caption_markup).await
         // Not a media group, we should create an inline keyboard.
         } else {
-            let text = self
-                .get_fluent_bundle(None, |bundle| get_message(&bundle, "inline-source", None))
-                .await
-                .unwrap();
-
-            let markup = InlineKeyboardMarkup {
-                inline_keyboard: vec![vec![InlineKeyboardButton {
-                    text,
+            let buttons: Vec<_> = firsts
+                .into_iter()
+                .map(|(site, url)| InlineKeyboardButton {
+                    text: site.as_str().to_string(),
                     url: Some(url),
                     ..Default::default()
-                }]],
+                })
+                .collect();
+
+            let buttons = if buttons.len() % 2 == 0 {
+                buttons.chunks(2).map(|chunk| chunk.to_vec()).collect()
+            } else {
+                buttons.chunks(1).map(|chunk| chunk.to_vec()).collect()
+            };
+
+            let markup = InlineKeyboardMarkup {
+                inline_keyboard: buttons,
             };
 
             let edit_reply_markup = EditMessageReplyMarkup {
@@ -382,6 +409,8 @@ impl Handler {
                 let now = chrono::offset::Utc::now();
                 let retry_at = now.add(chrono::Duration::seconds(retry_after as i64));
                 job.at = Some(retry_at);
+                job.custom = get_faktory_custom();
+
                 self.enqueue(job).await;
 
                 Ok(())
@@ -525,6 +554,24 @@ async fn has_similar_hash(to: i64, urls: &[&str]) -> bool {
     }
 
     false
+}
+
+fn get_custom_span(job: &faktory::Job) -> tracing::Span {
+    let custom: HashMap<String, String> = job
+        .custom
+        .iter()
+        .filter_map(|(key, value)| match value.as_str() {
+            Some(s) => Some((key.to_owned(), s.to_owned())),
+            _ => None,
+        })
+        .collect();
+    let propagator = opentelemetry::sdk::propagation::TraceContextPropagator::new();
+    let context = propagator.extract(&custom);
+
+    let span = tracing::info_span!("faktory_job");
+    span.set_parent(context);
+
+    span
 }
 
 #[cfg(test)]
