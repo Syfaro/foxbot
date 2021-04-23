@@ -252,7 +252,7 @@ impl Handler {
         };
 
         let file = find_best_photo(&sizes).unwrap();
-        let mut matches = match_image(
+        let (searched_hash, mut matches) = match_image(
             &self.telegram,
             &self.conn,
             &self.fuzzysearch,
@@ -263,7 +263,12 @@ impl Handler {
         .context("Unable to get matches")?;
 
         // Only keep matches with a distance of 3 or less
-        matches.1.retain(|m| m.distance.unwrap() <= 3);
+        matches.retain(|m| m.distance.unwrap() <= 3);
+
+        if matches.is_empty() {
+            tracing::debug!("Unable to find sources for image");
+            return Ok(());
+        }
 
         let links = extract_links(&message);
 
@@ -272,7 +277,6 @@ impl Handler {
         // If any matches contained a link we found in the message, skip adding
         // a source.
         if matches
-            .1
             .iter()
             .any(|file| link_was_seen(&sites, &links, &file.url()))
         {
@@ -291,7 +295,7 @@ impl Handler {
                 .iter()
                 .map::<&str, _>(|result| &result.url)
                 .collect();
-            if has_similar_hash(matches.0, &urls).await {
+            if has_similar_hash(searched_hash, &urls).await {
                 tracing::debug!("URL in post contained similar hash");
 
                 return Ok(());
@@ -300,15 +304,15 @@ impl Handler {
 
         drop(sites);
 
-        if already_had_source(&self.redis, &message, &matches.1).await? {
+        if already_had_source(&self.redis, &message, &matches).await? {
             tracing::trace!("Post group already contained source URL");
             return Ok(());
         }
 
         // Keep order of sites consistent.
-        sort_results_by(&foxbot_models::Sites::default_order(), &mut matches.1, true);
+        sort_results_by(&foxbot_models::Sites::default_order(), &mut matches, true);
 
-        let firsts = first_of_each_site(&matches.1)
+        let firsts = first_of_each_site(&matches)
             .into_iter()
             .map(|(site, file)| (site, file.url()))
             .collect();
