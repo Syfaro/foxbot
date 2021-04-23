@@ -5,9 +5,10 @@ lazy_static::lazy_static! {
 }
 
 /// Each available site, for configuration usage.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Hash, Eq, serde::Deserialize)]
 pub enum Sites {
     FurAffinity,
+    #[serde(rename = "e621")]
     E621,
     Twitter,
     Weasyl,

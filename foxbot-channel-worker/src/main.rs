@@ -1,18 +1,19 @@
-use opentelemetry::propagation::TextMapPropagator;
 use std::{
     collections::HashMap,
     ops::Add,
     sync::{Arc, Mutex},
 };
-use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use anyhow::Context;
+use opentelemetry::propagation::TextMapPropagator;
 use tgbotapi::{
     requests::{EditMessageCaption, EditMessageReplyMarkup, ReplyMarkup},
     InlineKeyboardButton, InlineKeyboardMarkup,
 };
 use tracing::Instrument;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+use foxbot_models::Sites;
 use foxbot_sites::BoxedSite;
 use foxbot_utils::*;
 
@@ -122,12 +123,8 @@ fn main() {
 
     let producer = faktory::Producer::connect(None).unwrap();
 
-    let langs = load_langs();
-
     let handler = Arc::new(Handler {
         sites: tokio::sync::Mutex::new(sites),
-        langs,
-        best_langs: Default::default(),
         telegram,
         producer: Arc::new(Mutex::new(producer)),
         fuzzysearch,
@@ -218,16 +215,11 @@ struct MessageEdit {
     chat_id: String,
     message_id: i32,
     media_group_id: Option<String>,
-    url: String,
+    firsts: Vec<(Sites, String)>,
 }
-
-type BestLangs = std::collections::HashMap<String, LangBundle>;
 
 struct Handler {
     sites: tokio::sync::Mutex<Vec<BoxedSite>>,
-
-    langs: Langs,
-    best_langs: tokio::sync::RwLock<BestLangs>,
 
     producer: Arc<Mutex<faktory::Producer<std::net::TcpStream>>>,
     telegram: tgbotapi::Telegram,
@@ -244,38 +236,6 @@ impl Handler {
             let mut producer = producer.lock().unwrap();
             producer.enqueue(job).unwrap();
         });
-    }
-
-    /// Build a fluent language bundle for a specified language and cache the
-    /// result.
-    async fn get_fluent_bundle<C, R>(&self, requested: Option<&str>, callback: C) -> R
-    where
-        C: FnOnce(&fluent::concurrent::FluentBundle<fluent::FluentResource>) -> R,
-    {
-        let requested = requested.unwrap_or(L10N_LANGS[0]);
-
-        tracing::trace!(lang = requested, "Looking up language bundle");
-
-        {
-            let lock = self.best_langs.read().await;
-            if let Some(bundle) = lock.get(requested) {
-                return callback(bundle);
-            }
-        }
-
-        tracing::debug!(lang = requested, "Got new language, building bundle");
-
-        let bundle = get_lang_bundle(&self.langs, requested);
-
-        // Lock for writing for as short as possible.
-        {
-            let mut lock = self.best_langs.write().await;
-            lock.insert(requested.to_string(), bundle);
-        }
-
-        let lock = self.best_langs.read().await;
-        let bundle = lock.get(requested).expect("value just inserted is missing");
-        callback(bundle)
     }
 
     #[tracing::instrument(skip(self, job), fields(job_id = job.id()))]
@@ -304,18 +264,6 @@ impl Handler {
 
         // Only keep matches with a distance of 3 or less
         matches.1.retain(|m| m.distance.unwrap() <= 3);
-
-        // Try to prioritize good results.
-        sort_results_by(&foxbot_models::Sites::default_order(), &mut matches.1);
-
-        let first = match matches.1.first() {
-            Some(first) => first,
-            _ => {
-                tracing::debug!("Unable to find sources for image");
-
-                return Ok(());
-            }
-        };
 
         let links = extract_links(&message);
 
@@ -357,11 +305,19 @@ impl Handler {
             return Ok(());
         }
 
+        // Keep order of sites consistent.
+        sort_results_by(&foxbot_models::Sites::default_order(), &mut matches.1, true);
+
+        let firsts = first_of_each_site(&matches.1)
+            .into_iter()
+            .map(|(site, file)| (site, file.url()))
+            .collect();
+
         let data = serde_json::to_value(&MessageEdit {
             chat_id: message.chat.id.to_string(),
             message_id: message.message_id,
             media_group_id: message.media_group_id,
-            url: first.url(),
+            firsts,
         })?;
 
         let mut job =
@@ -383,34 +339,46 @@ impl Handler {
             chat_id,
             message_id,
             media_group_id,
-            url,
+            firsts,
         } = serde_json::value::from_value(data.clone()).unwrap();
         let chat_id: &str = &chat_id;
 
         // If this photo was part of a media group, we should set a caption on
         // the image because we can't make an inline keyboard on it.
         let resp = if media_group_id.is_some() {
+            let caption = firsts
+                .into_iter()
+                .map(|(_site, url)| url)
+                .collect::<Vec<_>>()
+                .join("\n");
+
             let edit_caption_markup = EditMessageCaption {
                 chat_id: chat_id.into(),
                 message_id: Some(message_id),
-                caption: Some(url),
+                caption: Some(caption),
                 ..Default::default()
             };
 
             self.telegram.make_request(&edit_caption_markup).await
         // Not a media group, we should create an inline keyboard.
         } else {
-            let text = self
-                .get_fluent_bundle(None, |bundle| get_message(&bundle, "inline-source", None))
-                .await
-                .unwrap();
-
-            let markup = InlineKeyboardMarkup {
-                inline_keyboard: vec![vec![InlineKeyboardButton {
-                    text,
+            let buttons: Vec<_> = firsts
+                .into_iter()
+                .map(|(site, url)| InlineKeyboardButton {
+                    text: site.as_str().to_string(),
                     url: Some(url),
                     ..Default::default()
-                }]],
+                })
+                .collect();
+
+            let buttons = if buttons.len() % 2 == 0 {
+                buttons.chunks(2).map(|chunk| chunk.to_vec()).collect()
+            } else {
+                buttons.chunks(1).map(|chunk| chunk.to_vec()).collect()
+            };
+
+            let markup = InlineKeyboardMarkup {
+                inline_keyboard: buttons,
             };
 
             let edit_reply_markup = EditMessageReplyMarkup {

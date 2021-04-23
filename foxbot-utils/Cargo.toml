@@ -13,7 +13,7 @@ opentelemetry = "0.13"
 tracing-opentelemetry = "0.12"
 opentelemetry-http = "0.2"
 
-sentry = "0.22"
+sentry = { version = "0.22", features = ["anyhow"] }
 
 futures = "0.3"
 tokio = { version = "1", features = ["sync"] }
