@@ -31,6 +31,10 @@ impl Handler for PhotoHandler {
             return Ok(Ignored);
         }
 
+        if matches!(message.via_bot, Some(tgbotapi::User { id, .. }) if id == handler.bot_user.id) {
+            return Ok(Ignored);
+        }
+
         let action = continuous_action(
             handler.bot.clone(),
             12,

@@ -30,6 +30,10 @@ impl Handler for GroupSourceHandler {
         let message = needs_field!(update, message);
         let photo_sizes = needs_field!(message, photo);
 
+        if matches!(message.via_bot, Some(tgbotapi::User { id, .. }) if id == handler.bot_user.id) {
+            return Ok(Ignored);
+        }
+
         match GroupConfig::get(&handler.conn, message.chat.id, GroupConfigKey::GroupAdd)
             .await
             .context("unable to query group add config")?
