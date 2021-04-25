@@ -798,6 +798,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tgbotapi",
+ "thiserror",
  "tokio",
  "tracing",
  "tracing-opentelemetry",
