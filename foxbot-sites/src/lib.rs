@@ -226,7 +226,7 @@ impl Site for Direct {
         {
             tracing::trace!("got result from reverse search");
             if let Some(post) = result {
-                tracing::debug!(id = post.id, "found ID of post matching");
+                tracing::debug!("found matching post");
                 source_link = Some(post.url());
                 source_name = Some(post.site_name());
             } else {

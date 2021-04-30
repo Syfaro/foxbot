@@ -1,3 +1,4 @@
+use anyhow::Context;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use tgbotapi::{requests::*, *};
@@ -125,7 +126,7 @@ impl CommandHandler {
         // This will only remove duplicate items if they are sequential. This
         // will likely fix the most common issue of having a direct and source
         // link next to each other.
-        results.dedup_by(|a, b| a.source_link == b.source_link);
+        results.dedup_by(|a, b| a.source_link == b.source_link && a.url == b.url);
 
         if results.len() == 1 {
             let action = continuous_action(
@@ -380,9 +381,60 @@ impl CommandHandler {
                 (message.message_id, message)
             };
 
-        let sizes = match &message.photo {
-            Some(sizes) => sizes,
-            _ => {
+        let (searched_hash, matches) = if let Some(sizes) = &message.photo {
+            let best_photo = find_best_photo(&sizes).unwrap();
+
+            match_image(
+                &handler.bot,
+                &handler.conn,
+                &handler.fapi,
+                &best_photo,
+                Some(10),
+            )
+            .await?
+        } else {
+            let from = message
+                .from
+                .as_ref()
+                .context("Message was not sent from a user")?;
+
+            let links = extract_links(&message);
+
+            let mut results: Vec<PostInfo> = Vec::with_capacity(links.len());
+            let missing = {
+                let mut sites = handler.sites.lock().await;
+                find_images(&from, links, &mut sites, &mut |info| {
+                    results.extend(info.results);
+                })
+                .await?
+            };
+
+            if results.len() + missing.len() > 1 {
+                drop(action);
+
+                handler
+                    .send_generic_reply(&message, "alternate-multiple-photo")
+                    .await?;
+                return Ok(());
+            } else if missing.len() > 0 {
+                drop(action);
+
+                handler
+                    .send_generic_reply(&message, "alternate-unknown-link")
+                    .await?;
+                return Ok(());
+            } else if let Some(result) = results.first() {
+                let bytes = CheckFileSize::new(&result.url, 20_000_000)
+                    .into_bytes()
+                    .await?;
+                let hash =
+                    tokio::task::spawn_blocking(move || fuzzysearch::hash_bytes(&bytes)).await??;
+
+                (
+                    hash,
+                    lookup_single_hash(&handler.fapi, hash, Some(10)).await?,
+                )
+            } else {
                 drop(action);
 
                 handler
@@ -391,16 +443,6 @@ impl CommandHandler {
                 return Ok(());
             }
         };
-
-        let best_photo = find_best_photo(&sizes).unwrap();
-        let (searched_hash, matches) = match_image(
-            &handler.bot,
-            &handler.conn,
-            &handler.fapi,
-            &best_photo,
-            Some(10),
-        )
-        .await?;
 
         if matches.is_empty() {
             drop(action);

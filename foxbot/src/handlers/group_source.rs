@@ -30,6 +30,10 @@ impl Handler for GroupSourceHandler {
         let message = needs_field!(update, message);
         let photo_sizes = needs_field!(message, photo);
 
+        if matches!(message.via_bot, Some(tgbotapi::User { id, .. }) if id == handler.bot_user.id) {
+            return Ok(Ignored);
+        }
+
         match GroupConfig::get(&handler.conn, message.chat.id, GroupConfigKey::GroupAdd)
             .await
             .context("unable to query group add config")?
@@ -88,10 +92,17 @@ impl Handler for GroupSourceHandler {
 
         drop(sites);
 
+        let twitter_matches = wanted_matches
+            .iter()
+            .filter(|m| matches!(m.site_info, Some(fuzzysearch::SiteInfo::Twitter)))
+            .count();
+        let other_matches = wanted_matches.len() - twitter_matches;
+
         // Prevents memes from getting a million links in chat
-        if wanted_matches.len() >= NOISY_SOURCE_COUNT {
+        if other_matches <= 1 && twitter_matches >= NOISY_SOURCE_COUNT {
             tracing::trace!(
-                count = wanted_matches.len(),
+                twitter_matches,
+                other_matches,
                 "had too many matches, ignoring"
             );
             return Ok(Completed);

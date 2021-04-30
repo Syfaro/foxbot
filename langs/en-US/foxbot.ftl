@@ -87,6 +87,7 @@ alternate-title = Here are some possible alternate versions:
 alternate-posted-by = Posted by { $name }
 alternate-distance = · { $link } ({ $rating }, distance of { $distance })
 alternate-multiple-photo = I can only find alternates for a single photo, sorry.
+alternate-unknown-link = Sorry, I don't understand the provided link.
 
 # Automatic group sourcing
 automatic-single = It looks like this image may have come from here: { $link } ({ $rating })
@@ -115,15 +116,10 @@ settings-site-order =
     Set the order of sites in returned results.
     
     This is especially useful for places where only one result is returned.
-settings-name = If I should say the name of the site instead of just 'Source'
-settings-name-toggled = Toggled using site name
-settings-name-source = Only show Source on keyboard
-settings-name-site = Show site name on keyboard
 settings-unsupported = Sorry, not yet supported.
 settings-move-unable = Unable to move { $name } to that position
 settings-move-updated = Updated position for { $name }
 settings-site-preference = Site Preference
-settings-source-name = Source Name
 
 rating-general = SFW
 rating-adult = NSFW

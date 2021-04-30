@@ -1,21 +1,76 @@
-use anyhow::Context;
-use std::{
-    ops::Add,
-    sync::{Arc, Mutex},
-};
+use std::collections::HashMap;
+use std::ops::Add;
+use std::sync::{Arc, Mutex};
+
+use opentelemetry::propagation::TextMapPropagator;
 use tgbotapi::{
     requests::{EditMessageCaption, EditMessageReplyMarkup, ReplyMarkup},
     InlineKeyboardButton, InlineKeyboardMarkup,
 };
 use tracing::Instrument;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+use foxbot_models::Sites;
 use foxbot_sites::BoxedSite;
 use foxbot_utils::*;
 
 fn main() {
-    tracing_subscriber::fmt::init();
+    use opentelemetry::KeyValue;
+    use tracing_subscriber::layer::SubscriberExt;
 
-    tracing::info!("Starting channel worker");
+    let runtime = Arc::new(
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap(),
+    );
+
+    let env = std::env::var("ENVIRONMENT");
+    let env = if let Ok(env) = env.as_ref() {
+        env.as_str()
+    } else if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+
+    opentelemetry::global::set_text_map_propagator(opentelemetry_jaeger::Propagator::new());
+
+    let tracer = runtime.block_on(async move {
+        opentelemetry_jaeger::new_pipeline()
+            .with_agent_endpoint(std::env::var("JAEGER_COLLECTOR").unwrap())
+            .with_service_name("foxbot_channel_worker")
+            .with_tags(vec![
+                KeyValue::new("environment", env.to_owned()),
+                KeyValue::new("version", env!("CARGO_PKG_VERSION")),
+            ])
+            .install_batch(opentelemetry::runtime::Tokio)
+            .unwrap()
+    });
+
+    let trace = tracing_opentelemetry::layer().with_tracer(tracer);
+    let env_filter = tracing_subscriber::EnvFilter::from_default_env();
+
+    if matches!(std::env::var("LOG_FMT").as_deref(), Ok("json")) {
+        let subscriber = tracing_subscriber::fmt::layer()
+            .json()
+            .with_timer(tracing_subscriber::fmt::time::ChronoUtc::rfc3339())
+            .with_target(true);
+        let subscriber = tracing_subscriber::Registry::default()
+            .with(env_filter)
+            .with(trace)
+            .with(subscriber);
+        tracing::subscriber::set_global_default(subscriber).unwrap();
+    } else {
+        let subscriber = tracing_subscriber::fmt::layer();
+        let subscriber = tracing_subscriber::Registry::default()
+            .with(env_filter)
+            .with(trace)
+            .with(subscriber);
+        tracing::subscriber::set_global_default(subscriber).unwrap();
+    }
+
+    tracing::info!("starting channel worker");
 
     load_env();
     let config = match envy::from_env::<Config>() {
@@ -29,24 +84,17 @@ fn main() {
         .parse()
         .unwrap_or(2);
 
-    tracing::debug!(workers, "Got worker count configuration");
+    tracing::debug!(workers, "got worker count configuration");
 
     let mut faktory = faktory::ConsumerBuilder::default();
     faktory.workers(workers);
-
-    let runtime = Arc::new(
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap(),
-    );
 
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(2)
         .connect(&config.database_url);
     let pool = runtime
         .block_on(pool)
-        .expect("Unable to create database pool");
+        .expect("unable to create database pool");
 
     let sites = runtime.block_on(foxbot_sites::get_all_sites(
         config.fa_a,
@@ -68,16 +116,12 @@ fn main() {
     let redis = redis::Client::open(config.redis_dsn).unwrap();
     let redis = runtime
         .block_on(redis::aio::ConnectionManager::new(redis))
-        .expect("Unable to open Redis connection");
+        .expect("unable to open redis connection");
 
     let producer = faktory::Producer::connect(None).unwrap();
 
-    let langs = load_langs();
-
     let handler = Arc::new(Handler {
         sites: tokio::sync::Mutex::new(sites),
-        langs,
-        best_langs: Default::default(),
         telegram,
         producer: Arc::new(Mutex::new(producer)),
         fuzzysearch,
@@ -85,39 +129,23 @@ fn main() {
         redis,
     });
 
-    {
-        let runtime = runtime.clone();
-        let handler = handler.clone();
-        faktory.register(
-            "foxbot_channel_update",
-            move |job| -> Result<(), tgbotapi::Error> {
-                let err = match runtime.block_on(handler.process_channel_update(job)) {
-                    Ok(_) => return Ok(()),
-                    Err(err) => err,
-                };
+    let runtime_clone = runtime.clone();
+    let handler_clone = handler.clone();
+    faktory.register("foxbot_channel_update", move |job| -> Result<(), Error> {
+        let span = get_custom_span(&job);
 
-                match err.downcast::<tgbotapi::Error>() {
-                    Ok(err) => Err(err),
-                    Err(err) => panic!("{:?}", err),
-                }
-            },
-        );
-    }
+        runtime_clone.block_on(handler_clone.process_channel_update(job).instrument(span))?;
 
-    faktory.register(
-        "foxbot_channel_edit",
-        move |job| -> Result<(), tgbotapi::Error> {
-            let err = match runtime.block_on(handler.process_channel_edit(job)) {
-                Ok(_) => return Ok(()),
-                Err(err) => err,
-            };
+        Ok(())
+    });
 
-            match err.downcast::<tgbotapi::Error>() {
-                Ok(err) => Err(err),
-                Err(err) => panic!("{:?}", err),
-            }
-        },
-    );
+    faktory.register("foxbot_channel_edit", move |job| -> Result<(), Error> {
+        let span = get_custom_span(&job);
+
+        runtime.block_on(handler.process_channel_edit(job).instrument(span))?;
+
+        Ok(())
+    });
 
     let faktory = faktory.connect(None).unwrap();
     faktory.run_to_completion(&["foxbot_channel"]);
@@ -130,6 +158,18 @@ fn load_env() {
 
 #[cfg(not(feature = "env"))]
 fn load_env() {}
+
+#[derive(Debug, thiserror::Error)]
+enum Error {
+    #[error("telegram error: {0}")]
+    Telegram(#[from] tgbotapi::Error),
+    #[error("missing data")]
+    MissingData,
+    #[error("json error")]
+    Json(#[from] serde_json::Error),
+    #[error("other error: {0}")]
+    Other(#[from] anyhow::Error),
+}
 
 #[derive(serde::Deserialize, Debug, Clone)]
 struct Config {
@@ -163,16 +203,11 @@ struct MessageEdit {
     chat_id: String,
     message_id: i32,
     media_group_id: Option<String>,
-    url: String,
+    firsts: Vec<(Sites, String)>,
 }
-
-type BestLangs = std::collections::HashMap<String, LangBundle>;
 
 struct Handler {
     sites: tokio::sync::Mutex<Vec<BoxedSite>>,
-
-    langs: Langs,
-    best_langs: tokio::sync::RwLock<BestLangs>,
 
     producer: Arc<Mutex<faktory::Producer<std::net::TcpStream>>>,
     telegram: tgbotapi::Telegram,
@@ -191,44 +226,18 @@ impl Handler {
         });
     }
 
-    /// Build a fluent language bundle for a specified language and cache the
-    /// result.
-    async fn get_fluent_bundle<C, R>(&self, requested: Option<&str>, callback: C) -> R
-    where
-        C: FnOnce(&fluent::concurrent::FluentBundle<fluent::FluentResource>) -> R,
-    {
-        let requested = requested.unwrap_or(L10N_LANGS[0]);
-
-        tracing::trace!(lang = requested, "Looking up language bundle");
-
-        {
-            let lock = self.best_langs.read().await;
-            if let Some(bundle) = lock.get(requested) {
-                return callback(bundle);
-            }
-        }
-
-        tracing::debug!(lang = requested, "Got new language, building bundle");
-
-        let bundle = get_lang_bundle(&self.langs, requested);
-
-        // Lock for writing for as short as possible.
-        {
-            let mut lock = self.best_langs.write().await;
-            lock.insert(requested.to_string(), bundle);
-        }
-
-        let lock = self.best_langs.read().await;
-        let bundle = lock.get(requested).expect("value just inserted is missing");
-        callback(bundle)
-    }
-
     #[tracing::instrument(skip(self, job), fields(job_id = job.id()))]
-    async fn process_channel_update(&self, job: faktory::Job) -> anyhow::Result<()> {
-        let data = job.args().iter().next().unwrap().to_owned();
-        let message: tgbotapi::Message = serde_json::value::from_value(data).unwrap();
+    #[deny(clippy::unwrap_used)]
+    async fn process_channel_update(&self, job: faktory::Job) -> Result<(), Error> {
+        let data = job
+            .args()
+            .iter()
+            .next()
+            .ok_or(Error::MissingData)?
+            .to_owned();
+        let message: tgbotapi::Message = serde_json::value::from_value(data)?;
 
-        tracing::trace!("Got enqueued message: {:?}", message);
+        tracing::trace!("got enqueued message: {:?}", message);
 
         // Photos should exist for job to be enqueued.
         let sizes = match &message.photo {
@@ -236,28 +245,23 @@ impl Handler {
             _ => return Ok(()),
         };
 
-        let file = find_best_photo(&sizes).unwrap();
-        let mut matches = match_image(
+        let file = find_best_photo(&sizes).ok_or(Error::MissingData)?;
+        let (searched_hash, mut matches) = match_image(
             &self.telegram,
             &self.conn,
             &self.fuzzysearch,
             &file,
             Some(3),
         )
-        .await
-        .context("Unable to get matches")?;
+        .await?;
 
         // Only keep matches with a distance of 3 or less
-        matches.1.retain(|m| m.distance.unwrap() <= 3);
+        matches.retain(|m| m.distance.unwrap_or(10) <= 3);
 
-        let first = match matches.1.first() {
-            Some(first) => first,
-            _ => {
-                tracing::debug!("Unable to find sources for image");
-
-                return Ok(());
-            }
-        };
+        if matches.is_empty() {
+            tracing::debug!("unable to find sources for image");
+            return Ok(());
+        }
 
         let links = extract_links(&message);
 
@@ -266,11 +270,10 @@ impl Handler {
         // If any matches contained a link we found in the message, skip adding
         // a source.
         if matches
-            .1
             .iter()
             .any(|file| link_was_seen(&sites, &links, &file.url()))
         {
-            tracing::trace!("Post already contained valid source URL");
+            tracing::trace!("post already contained valid source url");
             return Ok(());
         }
 
@@ -285,8 +288,8 @@ impl Handler {
                 .iter()
                 .map::<&str, _>(|result| &result.url)
                 .collect();
-            if has_similar_hash(matches.0, &urls).await {
-                tracing::debug!("URL in post contained similar hash");
+            if has_similar_hash(searched_hash, &urls).await {
+                tracing::debug!("url in post contained similar hash");
 
                 return Ok(());
             }
@@ -294,64 +297,91 @@ impl Handler {
 
         drop(sites);
 
-        if already_had_source(&self.redis, &message, &matches.1).await? {
-            tracing::trace!("Post group already contained source URL");
+        if already_had_source(&self.redis, &message, &matches).await? {
+            tracing::trace!("post group already contained source url");
             return Ok(());
         }
+
+        // Keep order of sites consistent.
+        sort_results_by(&foxbot_models::Sites::default_order(), &mut matches, true);
+
+        let firsts = first_of_each_site(&matches)
+            .into_iter()
+            .map(|(site, file)| (site, file.url()))
+            .collect();
 
         let data = serde_json::to_value(&MessageEdit {
             chat_id: message.chat.id.to_string(),
             message_id: message.message_id,
             media_group_id: message.media_group_id,
-            url: first.url(),
+            firsts,
         })?;
 
-        self.enqueue(
-            faktory::Job::new("foxbot_channel_edit", vec![data]).on_queue("foxbot_channel"),
-        )
-        .await;
+        let mut job =
+            faktory::Job::new("foxbot_channel_edit", vec![data]).on_queue("foxbot_channel");
+        job.custom = get_faktory_custom();
+
+        self.enqueue(job).await;
 
         Ok(())
     }
 
     #[tracing::instrument(skip(self, job), fields(job_id = job.id()))]
-    async fn process_channel_edit(&self, job: faktory::Job) -> anyhow::Result<()> {
-        let data: serde_json::Value = job.args().iter().next().unwrap().to_owned();
+    #[deny(clippy::unwrap_used)]
+    async fn process_channel_edit(&self, job: faktory::Job) -> Result<(), Error> {
+        let data: serde_json::Value = job
+            .args()
+            .iter()
+            .next()
+            .ok_or(Error::MissingData)?
+            .to_owned();
 
-        tracing::trace!("Got enqueued edit: {:?}", data);
+        tracing::trace!("got enqueued edit: {:?}", data);
 
         let MessageEdit {
             chat_id,
             message_id,
             media_group_id,
-            url,
-        } = serde_json::value::from_value(data.clone()).unwrap();
+            firsts,
+        } = serde_json::value::from_value(data.clone())?;
         let chat_id: &str = &chat_id;
 
         // If this photo was part of a media group, we should set a caption on
         // the image because we can't make an inline keyboard on it.
         let resp = if media_group_id.is_some() {
+            let caption = firsts
+                .into_iter()
+                .map(|(_site, url)| url)
+                .collect::<Vec<_>>()
+                .join("\n");
+
             let edit_caption_markup = EditMessageCaption {
                 chat_id: chat_id.into(),
                 message_id: Some(message_id),
-                caption: Some(url),
+                caption: Some(caption),
                 ..Default::default()
             };
 
             self.telegram.make_request(&edit_caption_markup).await
         // Not a media group, we should create an inline keyboard.
         } else {
-            let text = self
-                .get_fluent_bundle(None, |bundle| get_message(&bundle, "inline-source", None))
-                .await
-                .unwrap();
-
-            let markup = InlineKeyboardMarkup {
-                inline_keyboard: vec![vec![InlineKeyboardButton {
-                    text,
+            let buttons: Vec<_> = firsts
+                .into_iter()
+                .map(|(site, url)| InlineKeyboardButton {
+                    text: site.as_str().to_string(),
                     url: Some(url),
                     ..Default::default()
-                }]],
+                })
+                .collect();
+
+            let buttons = if buttons.len() % 2 == 0 {
+                buttons.chunks(2).map(|chunk| chunk.to_vec()).collect()
+            } else {
+                buttons.chunks(1).map(|chunk| chunk.to_vec()).collect()
+            };
+
+            let markup = InlineKeyboardMarkup {
+                inline_keyboard: buttons,
             };
 
             let edit_reply_markup = EditMessageReplyMarkup {
@@ -375,13 +405,15 @@ impl Handler {
                     }),
                 ..
             })) => {
-                tracing::warn!(retry_after, "Rate limiting, re-enqueuing");
+                tracing::warn!(retry_after, "rate limiting, re-enqueuing");
 
                 let mut job =
                     faktory::Job::new("foxbot_channel_edit", vec![data]).on_queue("foxbot_channel");
                 let now = chrono::offset::Utc::now();
                 let retry_at = now.add(chrono::Duration::seconds(retry_after as i64));
                 job.at = Some(retry_at);
+                job.custom = get_faktory_custom();
+
                 self.enqueue(job).await;
 
                 Ok(())
@@ -400,7 +432,7 @@ impl Handler {
                 description,
                 ..
             })) => {
-                tracing::warn!("Got 400 error, ignoring: {:?}", description);
+                tracing::warn!("got 400 error, ignoring: {:?}", description);
 
                 Ok(())
             }
@@ -412,12 +444,12 @@ impl Handler {
                 description,
                 ..
             })) => {
-                tracing::warn!("Got 403 error, ignoring: {:?}", description);
+                tracing::warn!("got 403 error, ignoring: {:?}", description);
 
                 Ok(())
             }
             Ok(_) => Ok(()),
-            Err(e) => Err(e).context("Unable to update channel message"),
+            Err(e) => Err(e.into()),
         }
     }
 }
@@ -457,7 +489,7 @@ async fn already_had_source(
     urls.dedup();
     let source_count = urls.len();
 
-    tracing::trace!(%group_id, "Adding new sources: {:?}", urls);
+    tracing::trace!(%group_id, "adding new sources: {:?}", urls);
 
     let mut conn = conn.clone();
     let added_links: usize = conn.sadd(&key, urls).await?;
@@ -466,7 +498,7 @@ async fn already_had_source(
     tracing::debug!(
         source_count,
         added_links,
-        "Determined existing and new source links"
+        "determined existing and new source links"
     );
 
     Ok(source_count > added_links)
@@ -483,7 +515,7 @@ async fn has_similar_hash(to: i64, urls: &[&str]) -> bool {
         let bytes = match check_size.into_bytes().await {
             Ok(bytes) => bytes,
             Err(err) => {
-                tracing::warn!("Unable to download image: {:?}", err);
+                tracing::warn!("unable to download image: {:?}", err);
 
                 continue;
             }
@@ -497,7 +529,7 @@ async fn has_similar_hash(to: i64, urls: &[&str]) -> bool {
             let im = match image::load_from_memory(&bytes) {
                 Ok(im) => im,
                 Err(err) => {
-                    tracing::warn!("Unable to load image: {:?}", err);
+                    tracing::warn!("unable to load image: {:?}", err);
 
                     return None;
                 }
@@ -518,13 +550,31 @@ async fn has_similar_hash(to: i64, urls: &[&str]) -> bool {
         };
 
         if hamming::distance_fast(&to, &hash).unwrap() <= 3 {
-            tracing::debug!(url, hash = i64::from_be_bytes(hash), "Hashes were similar");
+            tracing::debug!(url, hash = i64::from_be_bytes(hash), "hashes were similar");
 
             return true;
         }
     }
 
     false
+}
+
+fn get_custom_span(job: &faktory::Job) -> tracing::Span {
+    let custom: HashMap<String, String> = job
+        .custom
+        .iter()
+        .filter_map(|(key, value)| match value.as_str() {
+            Some(s) => Some((key.to_owned(), s.to_owned())),
+            _ => None,
+        })
+        .collect();
+    let propagator = opentelemetry::sdk::propagation::TraceContextPropagator::new();
+    let context = propagator.extract(&custom);
+
+    let span = tracing::info_span!("faktory_job");
+    span.set_parent(context);
+
+    span
 }
 
 #[cfg(test)]
@@ -534,7 +584,7 @@ mod tests {
             redis::Client::open(std::env::var("REDIS_DSN").expect("Missing REDIS_DSN")).unwrap();
         redis::aio::ConnectionManager::new(redis_client)
             .await
-            .expect("Unable to open Redis connection")
+            .expect("unable to open Redis connection")
     }
 
     #[tokio::test]
