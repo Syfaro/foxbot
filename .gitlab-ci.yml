@@ -1,0 +1,128 @@
+stages:
+    - test
+    - build
+    - misc
+    - image
+
+variables:
+    CARGO_HOME: /root/.cargo
+    SCCACHE_VERSION: v0.2.15
+    SCCACHE_S3_USE_SSL: "true"
+    SCCACHE_BUCKET: "sccache"
+
+    REDIS_DSN: redis://redis:6379/
+    SQLX_OFFLINE: "true"
+
+# Run tests on current stable Rust version
+test:latest: &base_test
+    image: rust:1.51-slim-buster
+    stage: test
+    services:
+        - redis
+    cache:
+        paths:
+            - .cargo/
+        policy: pull-push
+    before_script:
+        # Use proxy for apt, install wget to download sccache and other deps
+        - export http_proxy=$DEBIAN_PROXY
+        - apt-get update -y
+        - apt-get install -y wget libssl-dev pkg-config libavcodec-dev libavformat-dev libavutil-dev libavdevice-dev clang llvm python3 python3-pip
+        - unset http_proxy
+
+        # Download and extract sccache, ensuring it's executable
+        - wget -q -O /tmp/sccache.tar.gz https://github.com/mozilla/sccache/releases/download/$SCCACHE_VERSION/sccache-$SCCACHE_VERSION-x86_64-unknown-linux-musl.tar.gz
+        - tar zxvf /tmp/sccache.tar.gz --strip-components=1 -C /tmp
+        - export RUSTC_WRAPPER=/tmp/sccache
+        - chmod a+x $RUSTC_WRAPPER
+
+        # Move sccache config into place
+        - mkdir -p $HOME/.config/sccache
+        - mv $SCCACHE_CONFIG $HOME/.config/sccache/config
+
+        # Prepare cargo data from cache
+        - rm -rf /root/.cargo || true
+        - mv .cargo /root/.cargo || true
+
+        # Prepare cargo-cache for cleaning data later
+        - cargo install cargo-cache --no-default-features --features ci-autoclean
+
+        # Other application specific config
+        - export RELEASE=$CI_COMMIT_SHA
+    script:
+        # Build, test, and show stats
+        - cargo build --verbose
+        - cargo test --verbose
+        - cargo test --verbose -- --ignored
+        - $RUSTC_WRAPPER --show-stats
+
+        # Clean cargo data, move back into place for caching
+        - $CARGO_HOME/bin/cargo-cache
+        - rm -rf .cargo || true
+        - mv /root/.cargo .cargo || true
+
+# Same as above, but nightly Rust
+test:nightly:
+    <<: *base_test
+    image: rustlang/rust:nightly-slim
+    allow_failure: true
+
+build:bot: &base_build
+    <<: *base_test
+    stage: build
+    cache:
+        policy: pull
+    needs: ['test:latest']
+    services: []
+    artifacts:
+        expire_in: 1 day
+        paths:
+            - ./foxbot/foxbot
+    script:
+        - cargo build --verbose --release --bin foxbot
+        - $RUSTC_WRAPPER --show-stats
+        - mv ./target/release/foxbot ./foxbot/foxbot
+
+build:channel-worker:
+    <<: *base_build
+    artifacts:
+        expire_in: 1 day
+        paths:
+            - ./foxbot-channel-worker/foxbot-channel-worker
+    script:
+        - cargo build --verbose --release --bin foxbot-channel-worker
+        - $RUSTC_WRAPPER --show-stats
+        - mv ./target/release/foxbot-channel-worker ./foxbot-channel-worker/foxbot-channel-worker
+
+misc:base:
+    stage: misc
+    image: docker
+    before_script:
+        - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    needs: []
+    script:
+        - docker pull $CI_REGISTRY_IMAGE/base:latest || true
+        - docker build --build-arg http_proxy=$DEBIAN_PROXY --cache-from $CI_REGISTRY_IMAGE/base:latest --tag $CI_REGISTRY_IMAGE/base:$CI_COMMIT_SHA --tag $CI_REGISTRY_IMAGE/base:latest -f Dockerfile.base .
+        - docker push $CI_REGISTRY_IMAGE/base:$CI_COMMIT_SHA
+        - docker push $CI_REGISTRY_IMAGE/base:latest
+
+image:bot: &base_images
+    stage: image
+    image: docker
+    before_script:
+        - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    needs: ['build:bot', 'misc:base']
+    script:
+        - docker pull $CI_REGISTRY_IMAGE/bot:latest || true
+        - docker build --build-arg http_proxy=$DEBIAN_PROXY --cache-from $CI_REGISTRY_IMAGE/bot:latest --tag $CI_REGISTRY_IMAGE/bot:$CI_COMMIT_SHA --tag $CI_REGISTRY_IMAGE/bot:latest -f Dockerfile .
+        - docker push $CI_REGISTRY_IMAGE/bot:$CI_COMMIT_SHA
+        - docker push $CI_REGISTRY_IMAGE/bot:latest
+
+image:channel-worker:
+    <<: *base_images
+    needs: ['build:channel-worker', 'misc:base']
+    script:
+        - docker pull $CI_REGISTRY_IMAGE/channel-worker:latest || true
+        - docker build --build-arg http_proxy=$DEBIAN_PROXY --cache-from $CI_REGISTRY_IMAGE/channel-worker:latest --tag $CI_REGISTRY_IMAGE/channel-worker:$CI_COMMIT_SHA --tag $CI_REGISTRY_IMAGE/channel-worker:latest -f Dockerfile.channel-worker .
+        - docker push $CI_REGISTRY_IMAGE/channel-worker:$CI_COMMIT_SHA
+        - docker push $CI_REGISTRY_IMAGE/channel-worker:latest
