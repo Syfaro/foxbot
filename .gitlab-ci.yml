@@ -131,8 +131,10 @@ image:channel-worker:
 deploy:
     image: debian:buster-slim
     when: manual
+    stage: deploy
     only:
         - main
+    needs: ['image:bot', 'image:channel-worker']
     before_script:
         - export http_proxy=$DEBIAN_PROXY
         - apt-get update -y && apt-get install -y openssl-client
