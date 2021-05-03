@@ -137,7 +137,7 @@ deploy:
     needs: ['image:bot', 'image:channel-worker']
     before_script:
         - export http_proxy=$DEBIAN_PROXY
-        - apt-get update -y && apt-get install -y openssl-client
+        - apt-get update -y && apt-get install -y openssh-client
         - unset http_proxy
         - eval $(ssh-agent -s)
         - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
