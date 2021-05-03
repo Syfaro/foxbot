@@ -663,7 +663,7 @@ impl FurAffinity {
                 .build()
                 .unwrap(),
             matcher: regex::Regex::new(
-                r#"(?:https?://)?(?:(?:www\.)?furaffinity\.net/(?:view|full)/(?P<id>\d+)/?|(?:d\.furaffinity\.net|d\.facdn\.net)/art/\w+/(?P<file_id>\d+)/\S+)"#,
+                r#"(?:https?://)?(?:(?:www\.)?furaffinity\.net/(?:view|full)/(?P<id>\d+)/?|(?:d\.furaffinity\.net|d\.facdn\.net)/art/\w+/(?P<file_id>\d+)/(?P<file_name>\S+))"#,
             )
             .unwrap(),
         }
@@ -671,8 +671,8 @@ impl FurAffinity {
 
     /// Attempt to resolve a direct image URL into a submission using
     /// FuzzySearch.
-    async fn load_direct_url(&self, file_id: i64, url: &str) -> anyhow::Result<Option<PostInfo>> {
-        let sub: fuzzysearch::File = match self.fapi.lookup_file_id(file_id).await {
+    async fn load_direct_url(&self, filename: &str, url: &str) -> anyhow::Result<Option<PostInfo>> {
+        let sub: fuzzysearch::File = match self.fapi.lookup_filename(&filename).await {
             Ok(mut results) if !results.is_empty() => results.remove(0),
             _ => {
                 return Ok(Some(PostInfo {
@@ -827,9 +827,8 @@ impl Site for FurAffinity {
             .captures(&url)
             .context("Could not capture FurAffinity URL")?;
 
-        let image = if let Some(file_id) = captures.name("file_id") {
-            let file_id: i64 = file_id.as_str().parse().unwrap();
-            self.load_direct_url(file_id, &url).await
+        let image = if let Some(filename) = captures.name("file_name") {
+            self.load_direct_url(filename.as_str(), &url).await
         } else if let Some(id) = captures.name("id") {
             let id: i32 = id.as_str().parse().unwrap();
             self.load_submission(id, &url).await
