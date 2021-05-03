@@ -3,6 +3,7 @@ stages:
     - build
     - misc
     - image
+    - deploy
 
 variables:
     CARGO_HOME: /root/.cargo
@@ -126,3 +127,19 @@ image:channel-worker:
         - docker build --build-arg http_proxy=$DEBIAN_PROXY --cache-from $CI_REGISTRY_IMAGE/channel-worker:latest --tag $CI_REGISTRY_IMAGE/channel-worker:$CI_COMMIT_SHA --tag $CI_REGISTRY_IMAGE/channel-worker:latest -f Dockerfile.channel-worker .
         - docker push $CI_REGISTRY_IMAGE/channel-worker:$CI_COMMIT_SHA
         - docker push $CI_REGISTRY_IMAGE/channel-worker:latest
+
+deploy:
+    image: debian:buster-slim
+    when: manual
+    only:
+        - main
+    before_script:
+        - export http_proxy=$DEBIAN_PROXY
+        - apt-get update -y && apt-get install -y openssl-client
+        - unset http_proxy
+        - eval $(ssh-agent -s)
+        - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
+        - mkdir -p $HOME/.ssh
+        - chmod 700 $HOME/.ssh
+    script:
+        - ssh -p $SSH_PORT $SSH_USER@$SSH_HOST "sh -c 'RELEASE=$CI_COMMIT_SHA /deploy/foxbot.sh'"
