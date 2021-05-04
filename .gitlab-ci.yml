@@ -135,12 +135,13 @@ deploy:
     only:
         - main
     needs: ['image:bot', 'image:channel-worker']
+    resource_group: production
     before_script:
         - export http_proxy=$DEBIAN_PROXY
         - apt-get update -y && apt-get install -y openssh-client
         - unset http_proxy
         - eval $(ssh-agent -s)
-        - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
+        - echo "$SSH_PRIVATE_KEY" | base64 -d | ssh-add -
         - mkdir -p $HOME/.ssh
         - chmod 700 $HOME/.ssh
     script:
