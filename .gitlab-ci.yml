@@ -84,16 +84,16 @@ build:bot: &base_build
         - $RUSTC_WRAPPER --show-stats
         - mv ./target/release/foxbot ./foxbot/foxbot
 
-build:channel-worker:
+build:background-worker:
     <<: *base_build
     artifacts:
         expire_in: 1 day
         paths:
-            - ./foxbot-channel-worker/foxbot-channel-worker
+            - ./foxbot-background-worker/foxbot-background-worker
     script:
-        - cargo build --verbose --release --bin foxbot-channel-worker
+        - cargo build --verbose --release --bin foxbot-background-worker
         - $RUSTC_WRAPPER --show-stats
-        - mv ./target/release/foxbot-channel-worker ./foxbot-channel-worker/foxbot-channel-worker
+        - mv ./target/release/foxbot-background-worker ./foxbot-background-worker/foxbot-background-worker
 
 misc:base:
     stage: misc
@@ -119,14 +119,14 @@ image:bot: &base_images
         - docker push $CI_REGISTRY_IMAGE/bot:$CI_COMMIT_SHA
         - docker push $CI_REGISTRY_IMAGE/bot:latest
 
-image:channel-worker:
+image:background-worker:
     <<: *base_images
-    needs: ['build:channel-worker', 'misc:base']
+    needs: ['build:background-worker', 'misc:base']
     script:
-        - docker pull $CI_REGISTRY_IMAGE/channel-worker:latest || true
-        - docker build --build-arg http_proxy=$DEBIAN_PROXY --cache-from $CI_REGISTRY_IMAGE/channel-worker:latest --tag $CI_REGISTRY_IMAGE/channel-worker:$CI_COMMIT_SHA --tag $CI_REGISTRY_IMAGE/channel-worker:latest -f Dockerfile.channel-worker .
-        - docker push $CI_REGISTRY_IMAGE/channel-worker:$CI_COMMIT_SHA
-        - docker push $CI_REGISTRY_IMAGE/channel-worker:latest
+        - docker pull $CI_REGISTRY_IMAGE/background-worker:latest || true
+        - docker build --build-arg http_proxy=$DEBIAN_PROXY --cache-from $CI_REGISTRY_IMAGE/background-worker:latest --tag $CI_REGISTRY_IMAGE/background-worker:$CI_COMMIT_SHA --tag $CI_REGISTRY_IMAGE/background-worker:latest -f Dockerfile.background-worker .
+        - docker push $CI_REGISTRY_IMAGE/background-worker:$CI_COMMIT_SHA
+        - docker push $CI_REGISTRY_IMAGE/background-worker:latest
 
 deploy:
     image: debian:buster-slim
@@ -134,7 +134,7 @@ deploy:
     stage: deploy
     only:
         - main
-    needs: ['image:bot', 'image:channel-worker']
+    needs: ['image:bot', 'image:background-worker']
     resource_group: production
     before_script:
         - export http_proxy=$DEBIAN_PROXY

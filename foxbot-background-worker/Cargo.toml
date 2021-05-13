@@ -1,5 +1,5 @@
 [package]
-name = "foxbot-channel-worker"
+name = "foxbot-background-worker"
 version = "0.2.0"
 authors = ["Syfaro <syfaro@huefox.com>"]
 edition = "2018"

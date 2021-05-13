@@ -1,8 +1,0 @@
-FROM rust:1.51-slim-buster AS builder
-WORKDIR /src
-COPY ./foxbot-channel-worker/foxbot-channel-worker ./foxbot-channel-worker
-RUN strip ./foxbot-channel-worker
-
-FROM registry.huefox.com/syfaro/foxbot/base
-COPY --from=builder /src/foxbot-channel-worker /bin/foxbot-channel-worker
-CMD ["/bin/foxbot-channel-worker"]

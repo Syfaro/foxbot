@@ -35,8 +35,8 @@ impl Handler for ChannelPhotoHandler {
         tokio::task::spawn_blocking(move || {
             let mut faktory = faktory.lock().unwrap();
             let message = serde_json::to_value(&message).unwrap();
-            let mut job = faktory::Job::new("foxbot_channel_update", vec![message])
-                .on_queue("foxbot_channel");
+            let mut job =
+                faktory::Job::new("channel_update", vec![message]).on_queue("foxbot_background");
             job.custom = custom;
 
             faktory.enqueue(job).unwrap();
