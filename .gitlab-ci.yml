@@ -103,7 +103,7 @@ misc:base:
     needs: []
     script:
         - docker pull $CI_REGISTRY_IMAGE/base:latest || true
-        - docker build --build-arg http_proxy=$DEBIAN_PROXY --cache-from $CI_REGISTRY_IMAGE/base:latest --tag $CI_REGISTRY_IMAGE/base:$CI_COMMIT_SHA --tag $CI_REGISTRY_IMAGE/base:latest -f Dockerfile.base .
+        - docker build --build-arg http_proxy=$DEBIAN_PROXY --cache-from $CI_REGISTRY_IMAGE/base:latest --tag $CI_REGISTRY_IMAGE/base:$CI_COMMIT_SHA --tag $CI_REGISTRY_IMAGE/base:latest -f Dockerfile .
         - docker push $CI_REGISTRY_IMAGE/base:$CI_COMMIT_SHA
         - docker push $CI_REGISTRY_IMAGE/base:latest
 
@@ -115,7 +115,7 @@ image:bot: &base_images
     needs: ['build:bot', 'misc:base']
     script:
         - docker pull $CI_REGISTRY_IMAGE/bot:latest || true
-        - docker build --build-arg http_proxy=$DEBIAN_PROXY --cache-from $CI_REGISTRY_IMAGE/bot:latest --tag $CI_REGISTRY_IMAGE/bot:$CI_COMMIT_SHA --tag $CI_REGISTRY_IMAGE/bot:latest -f Dockerfile .
+        - docker build --build-arg http_proxy=$DEBIAN_PROXY --cache-from $CI_REGISTRY_IMAGE/bot:latest --tag $CI_REGISTRY_IMAGE/bot:$CI_COMMIT_SHA --tag $CI_REGISTRY_IMAGE/bot:latest -f foxbot/Dockerfile .
         - docker push $CI_REGISTRY_IMAGE/bot:$CI_COMMIT_SHA
         - docker push $CI_REGISTRY_IMAGE/bot:latest
 
@@ -124,7 +124,7 @@ image:background-worker:
     needs: ['build:background-worker', 'misc:base']
     script:
         - docker pull $CI_REGISTRY_IMAGE/background-worker:latest || true
-        - docker build --build-arg http_proxy=$DEBIAN_PROXY --cache-from $CI_REGISTRY_IMAGE/background-worker:latest --tag $CI_REGISTRY_IMAGE/background-worker:$CI_COMMIT_SHA --tag $CI_REGISTRY_IMAGE/background-worker:latest -f Dockerfile.background-worker .
+        - docker build --build-arg http_proxy=$DEBIAN_PROXY --cache-from $CI_REGISTRY_IMAGE/background-worker:latest --tag $CI_REGISTRY_IMAGE/background-worker:$CI_COMMIT_SHA --tag $CI_REGISTRY_IMAGE/background-worker:latest -f foxbot-background-worker/Dockerfile .
         - docker push $CI_REGISTRY_IMAGE/background-worker:$CI_COMMIT_SHA
         - docker push $CI_REGISTRY_IMAGE/background-worker:latest
 
