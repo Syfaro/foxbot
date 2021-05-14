@@ -590,11 +590,14 @@ impl Handler {
                     let mut args = fluent::FluentArgs::new();
                     let m = wanted_matches.first().unwrap();
                     args.insert("link", m.url().into());
-                    let rating =
-                        get_message(&bundle, get_rating_bundle_name(&m.rating), None).unwrap();
-                    args.insert("rating", rating.into());
 
-                    get_message(bundle, "automatic-single", Some(args)).unwrap()
+                    if let Some(rating) = get_rating_bundle_name(&m.rating) {
+                        args.insert("rating", rating.into());
+
+                        get_message(bundle, "automatic-single", Some(args)).unwrap()
+                    } else {
+                        get_message(bundle, "automatic-single-unknown", Some(args)).unwrap()
+                    }
                 } else {
                     let mut buf = String::new();
 
@@ -604,14 +607,17 @@ impl Handler {
                     for result in wanted_matches {
                         let mut args = fluent::FluentArgs::new();
                         args.insert("link", result.url().into());
-                        let rating =
-                            get_message(&bundle, get_rating_bundle_name(&result.rating), None)
-                                .unwrap();
-                        args.insert("rating", rating.into());
 
-                        buf.push_str(
-                            &get_message(bundle, "automatic-multiple-result", Some(args)).unwrap(),
-                        );
+                        let message = if let Some(rating) = get_rating_bundle_name(&result.rating) {
+                            let rating = get_message(&bundle, rating, None).unwrap();
+                            args.insert("rating", rating.into());
+                            get_message(bundle, "automatic-multiple-result", Some(args)).unwrap()
+                        } else {
+                            get_message(bundle, "automatic-multiple-result-unknown", Some(args))
+                                .unwrap()
+                        };
+
+                        buf.push_str(&message);
                         buf.push('\n');
                     }
 
