@@ -39,7 +39,7 @@ fn main() {
     let tracer = runtime.block_on(async move {
         opentelemetry_jaeger::new_pipeline()
             .with_agent_endpoint(std::env::var("JAEGER_COLLECTOR").unwrap())
-            .with_service_name("foxbot_channel_worker")
+            .with_service_name("foxbot_background_worker")
             .with_tags(vec![
                 KeyValue::new("environment", env.to_owned()),
                 KeyValue::new("version", env!("CARGO_PKG_VERSION")),
@@ -122,16 +122,18 @@ fn main() {
 
     let handler = Arc::new(Handler {
         sites: tokio::sync::Mutex::new(sites),
-        telegram,
+        telegram: Arc::new(telegram),
         producer: Arc::new(Mutex::new(producer)),
         fuzzysearch,
         conn: pool,
         redis,
+        langs: load_langs(),
+        best_langs: Default::default(),
     });
 
     let runtime_clone = runtime.clone();
     let handler_clone = handler.clone();
-    faktory.register("foxbot_channel_update", move |job| -> Result<(), Error> {
+    faktory.register("channel_update", move |job| -> Result<(), Error> {
         let span = get_custom_span(&job);
 
         runtime_clone.block_on(handler_clone.process_channel_update(job).instrument(span))?;
@@ -139,16 +141,36 @@ fn main() {
         Ok(())
     });
 
-    faktory.register("foxbot_channel_edit", move |job| -> Result<(), Error> {
+    let runtime_clone = runtime.clone();
+    let handler_clone = handler.clone();
+    faktory.register("channel_edit", move |job| -> Result<(), Error> {
         let span = get_custom_span(&job);
 
-        runtime.block_on(handler.process_channel_edit(job).instrument(span))?;
+        runtime_clone.block_on(handler_clone.process_channel_edit(job).instrument(span))?;
+
+        Ok(())
+    });
+
+    let runtime_clone = runtime.clone();
+    let handler_clone = handler.clone();
+    faktory.register("group_photo", move |job| -> Result<(), Error> {
+        let span = get_custom_span(&job);
+
+        runtime_clone.block_on(handler_clone.process_group_photo(job).instrument(span))?;
+
+        Ok(())
+    });
+
+    faktory.register("group_source", move |job| -> Result<(), Error> {
+        let span = get_custom_span(&job);
+
+        runtime.block_on(handler.process_group_source(job).instrument(span))?;
 
         Ok(())
     });
 
     let faktory = faktory.connect(None).unwrap();
-    faktory.run_to_completion(&["foxbot_channel"]);
+    faktory.run_to_completion(&["foxbot_background"]);
 }
 
 #[cfg(feature = "env")]
@@ -170,6 +192,11 @@ enum Error {
     #[error("other error: {0}")]
     Other(#[from] anyhow::Error),
 }
+
+type BestLangs = std::collections::HashMap<String, LangBundle>;
+
+const MAX_SOURCE_DISTANCE: u64 = 3;
+const NOISY_SOURCE_COUNT: usize = 4;
 
 #[derive(serde::Deserialize, Debug, Clone)]
 struct Config {
@@ -206,11 +233,21 @@ struct MessageEdit {
     firsts: Vec<(Sites, String)>,
 }
 
+#[derive(serde::Deserialize, serde::Serialize)]
+struct GroupSource {
+    chat_id: String,
+    reply_to_message_id: i32,
+    text: String,
+}
+
 struct Handler {
     sites: tokio::sync::Mutex<Vec<BoxedSite>>,
 
+    langs: Langs,
+    best_langs: tokio::sync::RwLock<BestLangs>,
+
     producer: Arc<Mutex<faktory::Producer<std::net::TcpStream>>>,
-    telegram: tgbotapi::Telegram,
+    telegram: Arc<tgbotapi::Telegram>,
     fuzzysearch: fuzzysearch::FuzzySearch,
     conn: sqlx::Pool<sqlx::Postgres>,
     redis: redis::aio::ConnectionManager,
@@ -317,8 +354,7 @@ impl Handler {
             firsts,
         })?;
 
-        let mut job =
-            faktory::Job::new("foxbot_channel_edit", vec![data]).on_queue("foxbot_channel");
+        let mut job = faktory::Job::new("channel_edit", vec![data]).on_queue("foxbot_background");
         job.custom = get_faktory_custom();
 
         self.enqueue(job).await;
@@ -345,6 +381,19 @@ impl Handler {
             firsts,
         } = serde_json::value::from_value(data.clone())?;
         let chat_id: &str = &chat_id;
+
+        if let Some(at) = check_more_time(&self.redis, chat_id).await {
+            tracing::trace!("need to wait more time for this chat: {}", at);
+
+            let mut job =
+                faktory::Job::new("channel_edit", vec![data]).on_queue("foxbot_background");
+            job.at = Some(at);
+            job.custom = get_faktory_custom();
+
+            self.enqueue(job).await;
+
+            return Ok(());
+        }
 
         // If this photo was part of a media group, we should set a caption on
         // the image because we can't make an inline keyboard on it.
@@ -407,10 +456,13 @@ impl Handler {
             })) => {
                 tracing::warn!(retry_after, "rate limiting, re-enqueuing");
 
-                let mut job =
-                    faktory::Job::new("foxbot_channel_edit", vec![data]).on_queue("foxbot_channel");
                 let now = chrono::offset::Utc::now();
                 let retry_at = now.add(chrono::Duration::seconds(retry_after as i64));
+
+                needs_more_time(&self.redis, chat_id, retry_at).await;
+
+                let mut job =
+                    faktory::Job::new("channel_edit", vec![data]).on_queue("foxbot_background");
                 job.at = Some(retry_at);
                 job.custom = get_faktory_custom();
 
@@ -450,6 +502,302 @@ impl Handler {
             }
             Ok(_) => Ok(()),
             Err(e) => Err(e.into()),
+        }
+    }
+
+    #[tracing::instrument(skip(self, job), fields(job_id = job.id()))]
+    #[deny(clippy::unwrap_used)]
+    async fn process_group_photo(&self, job: faktory::Job) -> Result<(), Error> {
+        use foxbot_models::{GroupConfig, GroupConfigKey};
+
+        let data: serde_json::Value = job
+            .args()
+            .iter()
+            .next()
+            .ok_or(Error::MissingData)?
+            .to_owned();
+
+        let message: tgbotapi::Message = serde_json::value::from_value(data)?;
+        let photo_sizes = match &message.photo {
+            Some(sizes) => sizes,
+            _ => return Ok(()),
+        };
+
+        tracing::trace!("got enqueued message: {:?}", message);
+
+        match GroupConfig::get(&self.conn, message.chat.id, GroupConfigKey::GroupAdd).await? {
+            Some(val) if val => (),
+            _ => return Ok(()),
+        }
+
+        let best_photo = find_best_photo(&photo_sizes).unwrap();
+        let mut matches = match_image(
+            &self.telegram,
+            &self.conn,
+            &self.fuzzysearch,
+            &best_photo,
+            Some(3),
+        )
+        .await?
+        .1;
+        sort_results(&self.conn, message.from.as_ref().unwrap().id, &mut matches).await?;
+
+        let wanted_matches = matches
+            .iter()
+            .filter(|m| m.distance.unwrap() <= MAX_SOURCE_DISTANCE)
+            .collect::<Vec<_>>();
+
+        if wanted_matches.is_empty() {
+            return Ok(());
+        }
+
+        let links = extract_links(&message);
+        let sites = self.sites.lock().await;
+
+        if wanted_matches
+            .iter()
+            .any(|m| link_was_seen(&sites, &links, &m.url()))
+        {
+            return Ok(());
+        }
+
+        drop(sites);
+
+        let twitter_matches = wanted_matches
+            .iter()
+            .filter(|m| matches!(m.site_info, Some(fuzzysearch::SiteInfo::Twitter)))
+            .count();
+        let other_matches = wanted_matches.len() - twitter_matches;
+
+        // Prevents memes from getting a million links in chat
+        if other_matches <= 1 && twitter_matches >= NOISY_SOURCE_COUNT {
+            tracing::trace!(
+                twitter_matches,
+                other_matches,
+                "had too many matches, ignoring"
+            );
+            return Ok(());
+        }
+
+        let lang = message
+            .from
+            .as_ref()
+            .and_then(|from| from.language_code.as_deref());
+
+        let text = self
+            .get_fluent_bundle(lang, |bundle| {
+                if wanted_matches.len() == 1 {
+                    let mut args = fluent::FluentArgs::new();
+                    let m = wanted_matches.first().unwrap();
+                    args.insert("link", m.url().into());
+                    let rating =
+                        get_message(&bundle, get_rating_bundle_name(&m.rating), None).unwrap();
+                    args.insert("rating", rating.into());
+
+                    get_message(bundle, "automatic-single", Some(args)).unwrap()
+                } else {
+                    let mut buf = String::new();
+
+                    buf.push_str(&get_message(bundle, "automatic-multiple", None).unwrap());
+                    buf.push('\n');
+
+                    for result in wanted_matches {
+                        let mut args = fluent::FluentArgs::new();
+                        args.insert("link", result.url().into());
+                        let rating =
+                            get_message(&bundle, get_rating_bundle_name(&result.rating), None)
+                                .unwrap();
+                        args.insert("rating", rating.into());
+
+                        buf.push_str(
+                            &get_message(bundle, "automatic-multiple-result", Some(args)).unwrap(),
+                        );
+                        buf.push('\n');
+                    }
+
+                    buf
+                }
+            })
+            .await;
+
+        let data = serde_json::to_value(&GroupSource {
+            chat_id: message.chat.id.to_string(),
+            reply_to_message_id: message.message_id,
+            text,
+        })?;
+
+        let mut job = faktory::Job::new("group_source", vec![data]).on_queue("foxbot_background");
+        job.custom = get_faktory_custom();
+
+        self.enqueue(job).await;
+
+        Ok(())
+    }
+
+    #[tracing::instrument(skip(self, job), fields(job_id = job.id()))]
+    #[deny(clippy::unwrap_used)]
+    async fn process_group_source(&self, job: faktory::Job) -> Result<(), Error> {
+        use tgbotapi::requests::SendMessage;
+
+        let data: serde_json::Value = job
+            .args()
+            .iter()
+            .next()
+            .ok_or(Error::MissingData)?
+            .to_owned();
+
+        tracing::trace!("got enqueued group source: {:?}", data);
+
+        let GroupSource {
+            chat_id,
+            reply_to_message_id,
+            text,
+        } = serde_json::value::from_value(data.clone())?;
+        let chat_id: &str = &chat_id;
+
+        if let Some(at) = check_more_time(&self.redis, chat_id).await {
+            tracing::trace!("need to wait more time for this chat: {}", at);
+
+            let mut job =
+                faktory::Job::new("group_source", vec![data]).on_queue("foxbot_background");
+            job.at = Some(at);
+            job.custom = get_faktory_custom();
+
+            self.enqueue(job).await;
+
+            return Ok(());
+        }
+
+        let message = SendMessage {
+            chat_id: chat_id.into(),
+            reply_to_message_id: Some(reply_to_message_id),
+            disable_web_page_preview: Some(true),
+            disable_notification: Some(true),
+            text,
+            ..Default::default()
+        };
+
+        match self.telegram.make_request(&message).await {
+            Err(tgbotapi::Error::Telegram(tgbotapi::TelegramError {
+                parameters:
+                    Some(tgbotapi::ResponseParameters {
+                        retry_after: Some(retry_after),
+                        ..
+                    }),
+                ..
+            })) => {
+                tracing::warn!(retry_after, "rate limiting, re-enqueuing");
+
+                let now = chrono::offset::Utc::now();
+                let retry_at = now.add(chrono::Duration::seconds(retry_after as i64));
+
+                needs_more_time(&self.redis, chat_id, retry_at).await;
+
+                let mut job =
+                    faktory::Job::new("group_source", vec![data]).on_queue("foxbot_background");
+                job.at = Some(retry_at);
+                job.custom = get_faktory_custom();
+
+                self.enqueue(job).await;
+
+                Ok(())
+            }
+            Ok(_)
+            | Err(tgbotapi::Error::Telegram(tgbotapi::TelegramError {
+                error_code: Some(400),
+                ..
+            })) => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    /// Build a fluent language bundle for a specified language and cache the
+    /// result.
+    async fn get_fluent_bundle<C, R>(&self, requested: Option<&str>, callback: C) -> R
+    where
+        C: FnOnce(&fluent::concurrent::FluentBundle<fluent::FluentResource>) -> R,
+    {
+        let requested = requested.unwrap_or(L10N_LANGS[0]);
+
+        tracing::trace!(lang = requested, "Looking up language bundle");
+
+        {
+            let lock = self.best_langs.read().await;
+            if let Some(bundle) = lock.get(requested) {
+                return callback(bundle);
+            }
+        }
+
+        tracing::debug!(lang = requested, "Got new language, building bundle");
+
+        let bundle = get_lang_bundle(&self.langs, requested);
+
+        // Lock for writing for as short as possible.
+        {
+            let mut lock = self.best_langs.write().await;
+            lock.insert(requested.to_string(), bundle);
+        }
+
+        let lock = self.best_langs.read().await;
+        let bundle = lock.get(requested).expect("value just inserted is missing");
+        callback(bundle)
+    }
+}
+
+/// Set that chat needs additional time before another message can be sent.
+#[tracing::instrument(skip(conn))]
+async fn needs_more_time(
+    conn: &redis::aio::ConnectionManager,
+    chat_id: &str,
+    at: chrono::DateTime<chrono::Utc>,
+) {
+    use redis::AsyncCommands;
+
+    let mut conn = conn.clone();
+
+    let now = chrono::Utc::now();
+    let seconds = (at - now).num_seconds();
+
+    if seconds <= 0 {
+        tracing::warn!(seconds, "needed time already happened");
+    }
+
+    let key = format!("retry-at:{}", chat_id);
+    if let Err(err) = conn
+        .set_ex::<_, _, ()>(&key, at.timestamp(), seconds as usize)
+        .await
+    {
+        tracing::error!("unable to set retry-at: {:?}", err);
+    }
+}
+
+/// Check if a chat needs more time before a message can be sent.
+#[tracing::instrument(skip(conn))]
+async fn check_more_time(
+    conn: &redis::aio::ConnectionManager,
+    chat_id: &str,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    use chrono::TimeZone;
+    use redis::AsyncCommands;
+
+    let mut conn = conn.clone();
+
+    let key = format!("retry-at:{}", chat_id);
+    match conn.get::<_, Option<i64>>(&key).await {
+        Ok(Some(timestamp)) => {
+            let after = chrono::Utc.timestamp(timestamp, 0);
+            if after <= chrono::Utc::now() {
+                tracing::trace!("retry-at was in past, ignoring");
+                None
+            } else {
+                Some(after)
+            }
+        }
+        Ok(None) => None,
+        Err(err) => {
+            tracing::error!("unable to get retry-at: {:?}", err);
+
+            None
         }
     }
 }
