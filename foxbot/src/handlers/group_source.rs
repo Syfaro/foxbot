@@ -29,7 +29,7 @@ impl Handler for GroupSourceHandler {
             return Ok(Ignored);
         }
 
-        tracing::debug!("passing channel photo to background worker");
+        tracing::debug!("passing group photo to background worker");
 
         let custom = get_faktory_custom();
 
