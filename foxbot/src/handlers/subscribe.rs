@@ -9,10 +9,6 @@ use crate::{MessageHandler, ServiceData};
 use foxbot_models::Subscriptions;
 use foxbot_utils::*;
 
-lazy_static::lazy_static! {
-    static ref SUBSCRIBE_DURATION: prometheus::Histogram = prometheus::register_histogram!("foxbot_subscribe_handling_seconds", "Time to process subscriptions").unwrap();
-}
-
 pub struct SubscribeHandler;
 
 #[async_trait]
