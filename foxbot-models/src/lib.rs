@@ -566,3 +566,65 @@ impl Permissions {
         Ok(())
     }
 }
+
+pub struct Subscriptions;
+
+pub struct Subscription {
+    pub user_id: i64,
+    pub hash: i64,
+    pub message_id: Option<i32>,
+    pub photo_id: Option<String>,
+}
+
+impl Subscriptions {
+    pub async fn add_subscription(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        user_id: i64,
+        hash: i64,
+        message_id: Option<i32>,
+        photo_id: Option<&str>,
+    ) -> anyhow::Result<()> {
+        sqlx::query!(
+            "INSERT INTO source_notification (user_id, hash, message_id, photo_id) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+            user_id,
+            hash,
+            message_id,
+            photo_id,
+        )
+        .execute(conn)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn remove_subscription(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        user_id: i64,
+        hash: i64,
+    ) -> anyhow::Result<()> {
+        sqlx::query!(
+            "DELETE FROM source_notification WHERE user_id = $1 AND hash <@ ($2, 0)",
+            user_id,
+            hash
+        )
+        .execute(conn)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn search_subscriptions(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        hash: i64,
+    ) -> anyhow::Result<Vec<Subscription>> {
+        let subscriptions = sqlx::query_as!(
+            Subscription,
+            "SELECT user_id, hash, message_id, photo_id FROM source_notification WHERE hash <@ ($1, 3)",
+            hash
+        )
+        .fetch_all(conn)
+        .await?;
+
+        Ok(subscriptions)
+    }
+}

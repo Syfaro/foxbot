@@ -60,6 +60,7 @@ reverse-result-unknown = I found this: { $link }
 reverse-multiple-results = I found multiple sources:
 reverse-multiple-item = · { $link } ({ $rating })
 reverse-multiple-item-unknown = · { $link }
+reverse-subscribe = Notify Me
 
 # Twitter Onboarding
 twitter-callback = Please follow this link to add your Twitter account: { $link }
@@ -129,3 +130,12 @@ settings-site-preference = Site Preference
 rating-general = SFW
 rating-adult = NSFW
 rating-unknown = Unknown
+
+subscribe-error = Unable to subscribe to notifications
+subscribe-success = I'll let you know if I find this later!
+subscribe-found-single =
+    I found a match to an image you were looking for!
+    
+    You can see it here: { $link }
+subscribe-found-multiple = I found matches for an image you were looking for!
+subscribe-found-multiple-item = · { $link }
