@@ -479,6 +479,7 @@ async fn handle_request(
     update_tx: tokio::sync::mpsc::Sender<(HandlerUpdate, tracing::Span)>,
     inline_tx: tokio::sync::mpsc::Sender<(HandlerUpdate, tracing::Span)>,
     secret: &str,
+    fuzzysearch_secret: &str,
     video_secret: &str,
     templates: Arc<handlebars::Handlebars<'_>>,
 ) -> hyper::Result<hyper::Response<hyper::Body>> {
@@ -523,7 +524,7 @@ async fn handle_request(
 
             Ok(Response::new(Body::from("✓")))
         }
-        (&hyper::Method::POST, "/hash") => {
+        (&hyper::Method::POST, path) if path == fuzzysearch_secret => {
             let body = req.into_body();
             let bytes = hyper::body::to_bytes(body).await.unwrap();
 
@@ -700,6 +701,8 @@ async fn receive_webhook(
 
     let secret_path = format!("/{}", config.http_secret.unwrap());
     let secret_path: &'static str = Box::leak(secret_path.into_boxed_str());
+    let fuzzysearch_secret = format!("/{}", config.fautil_apitoken);
+    let fuzzysearch_secret: &'static str = Box::leak(fuzzysearch_secret.into_boxed_str());
     let video_secret = format!("/{}", config.coconut_secret);
     let video_secret: &'static str = Box::leak(video_secret.into_boxed_str());
 
@@ -730,6 +733,7 @@ async fn receive_webhook(
                     update_tx.clone(),
                     inline_tx.clone(),
                     secret_path,
+                    fuzzysearch_secret,
                     video_secret,
                     templates.clone(),
                 )
