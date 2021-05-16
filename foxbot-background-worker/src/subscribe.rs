@@ -142,6 +142,7 @@ pub async fn process_hash_notify(handler: Arc<Handler>, job: faktory::Job) -> Re
             photo: tgbotapi::FileType::FileID(photo_id),
             chat_id: notify.user_id.into(),
             reply_to_message_id: notify.message_id,
+            allow_sending_without_reply: Some(true),
             caption: Some(notify.text.clone()),
             ..Default::default()
         };
@@ -156,6 +157,7 @@ pub async fn process_hash_notify(handler: Arc<Handler>, job: faktory::Job) -> Re
             chat_id: notify.user_id.into(),
             reply_to_message_id: notify.message_id,
             text: notify.text,
+            allow_sending_without_reply: Some(true),
             ..Default::default()
         };
         handler.telegram.make_request(&send_message).await?;

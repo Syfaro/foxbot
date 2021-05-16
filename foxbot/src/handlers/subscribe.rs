@@ -135,6 +135,23 @@ impl SubscribeHandler {
         // when the message was originally sent and the user subscribed. Check
         // if the hash exists now.
 
+        if let Some(tgbotapi::Message {
+            message_id,
+            chat: tgbotapi::Chat { id, .. },
+            ..
+        }) = callback_query.message.as_deref()
+        {
+            let _ = handler
+                .bot
+                .make_request(&EditMessageReplyMarkup {
+                    chat_id: (*id).into(),
+                    message_id: Some(*message_id),
+                    reply_markup: None,
+                    ..Default::default()
+                })
+                .await;
+        }
+
         let text = handler
             .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
                 get_message(&bundle, "subscribe-success", None).unwrap()
