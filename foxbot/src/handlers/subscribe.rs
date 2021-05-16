@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use fluent::fluent_args;
 use tgbotapi::requests::*;
 
 use super::{
@@ -55,90 +54,18 @@ impl Handler for SubscribeHandler {
             _ => return Ok(()),
         };
 
-        let hist = SUBSCRIBE_DURATION.start_timer();
-        let subscriptions = Subscriptions::search_subscriptions(&handler.conn, hash).await?;
-        if subscriptions.is_empty() {
-            hist.stop_and_record();
-            tracing::trace!("got hash with no subscriptions");
-            return Ok(());
-        }
-        hist.stop_and_record();
+        let custom = get_faktory_custom();
 
-        tracing::debug!("found hash with subscriptions, loading full information");
+        let faktory = handler.faktory.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut faktory = faktory.lock().unwrap();
+            let message = serde_json::to_value(hash.to_string()).unwrap();
+            let mut job =
+                faktory::Job::new("hash_new", vec![message]).on_queue("foxbot_background");
+            job.custom = custom;
 
-        let matches = lookup_single_hash(&handler.fapi, hash, Some(3)).await?;
-        if matches.is_empty() {
-            tracing::warn!("got hash notification but found no matches");
-            return Ok(());
-        }
-
-        let text = if matches.len() == 1 {
-            let file = matches.first().unwrap();
-
-            let args = fluent_args![
-                "link" => file.url()
-            ];
-
-            handler
-                .get_fluent_bundle(None, |bundle| {
-                    get_message(&bundle, "subscribe-found-single", Some(args)).unwrap()
-                })
-                .await
-        } else {
-            handler
-                .get_fluent_bundle(None, |bundle| {
-                    let mut buf = String::new();
-
-                    buf.push_str(&get_message(bundle, "subscribe-found-multiple", None).unwrap());
-                    buf.push('\n');
-
-                    for result in matches {
-                        let args = fluent_args![
-                            "link" => result.url()
-                        ];
-
-                        let message =
-                            get_message(bundle, "subscribe-found-multiple-item", Some(args))
-                                .unwrap();
-
-                        buf.push_str(&message);
-                        buf.push('\n');
-                    }
-
-                    buf
-                })
-                .await
-        };
-
-        for sub in subscriptions {
-            let mut was_sent = false;
-
-            if let Some(photo_id) = sub.photo_id {
-                let send_photo = SendPhoto {
-                    photo: tgbotapi::FileType::FileID(photo_id),
-                    chat_id: sub.user_id.into(),
-                    reply_to_message_id: sub.message_id,
-                    caption: Some(text.clone()),
-                    ..Default::default()
-                };
-
-                if handler.bot.make_request(&send_photo).await.is_ok() {
-                    was_sent = true;
-                }
-            }
-
-            if !was_sent {
-                let send_message = SendMessage {
-                    chat_id: sub.user_id.into(),
-                    reply_to_message_id: sub.message_id,
-                    text: text.clone(),
-                    ..Default::default()
-                };
-                handler.bot.make_request(&send_message).await?;
-            }
-
-            Subscriptions::remove_subscription(&handler.conn, sub.user_id, sub.hash).await?;
-        }
+            faktory.enqueue(job).unwrap();
+        });
 
         Ok(())
     }
@@ -203,6 +130,10 @@ impl SubscribeHandler {
 
             return Err(err);
         }
+
+        // TODO: it's possible FuzzySearch sent the hash in the time between
+        // when the message was originally sent and the user subscribed. Check
+        // if the hash exists now.
 
         let text = handler
             .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
