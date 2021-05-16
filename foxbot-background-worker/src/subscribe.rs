@@ -12,7 +12,7 @@ struct HashNotify {
     message_id: Option<i32>,
     photo_id: Option<String>,
     #[serde(with = "string")]
-    hash: i64,
+    searched_hash: i64,
 }
 
 mod string {
@@ -108,7 +108,7 @@ pub async fn process_hash_new(handler: Arc<Handler>, job: faktory::Job) -> Resul
         let data = serde_json::to_value(&HashNotify {
             user_id: sub.user_id,
             text: text.clone(),
-            hash,
+            searched_hash: sub.hash,
             message_id: sub.message_id,
             photo_id: sub.photo_id,
         })?;
@@ -163,7 +163,7 @@ pub async fn process_hash_notify(handler: Arc<Handler>, job: faktory::Job) -> Re
         handler.telegram.make_request(&send_message).await?;
     }
 
-    Subscriptions::remove_subscription(&handler.conn, notify.user_id, notify.hash).await?;
+    Subscriptions::remove_subscription(&handler.conn, notify.user_id, notify.searched_hash).await?;
 
     Ok(())
 }
