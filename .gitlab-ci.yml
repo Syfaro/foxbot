@@ -16,7 +16,7 @@ variables:
 
 # Run tests on current stable Rust version
 test:latest: &base_test
-    image: rust:1.51-slim-buster
+    image: rust:1.52-slim-buster
     stage: test
     services:
         - redis

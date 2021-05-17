@@ -1,4 +1,4 @@
-FROM rust:1.51-slim-buster AS builder
+FROM rust:1.52-slim-buster AS builder
 WORKDIR /src
 COPY ./foxbot-background-worker/foxbot-background-worker ./foxbot-background-worker
 RUN strip ./foxbot-background-worker
