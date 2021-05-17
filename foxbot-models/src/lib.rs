@@ -642,6 +642,88 @@ impl Permissions {
     }
 }
 
+pub struct ChatAdmin;
+
+impl ChatAdmin {
+    /// Update a chat's known administrators from a ChatMemberUpdated event.
+    ///
+    /// Will discard updates that are older than the newest item in the
+    /// database. Returns if the value was updated, and if it was, if the user
+    /// is currently an admin.
+    pub async fn update_chat(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        status: &tgbotapi::ChatMemberStatus,
+        user_id: i64,
+        chat_id: i64,
+        date: i32,
+    ) -> anyhow::Result<Option<bool>> {
+        use tgbotapi::ChatMemberStatus::*;
+
+        let is_admin = matches!(status, Administrator | Creator);
+
+        // It's possible updates get processed out of order. We only want to
+        // update the table when the update occured more recently than the value
+        // in the database.
+        let is_admin = sqlx::query_scalar!(
+            "WITH data (account_id, chat_id, is_admin, last_update) AS (
+                VALUES (lookup_account_by_telegram_id($1::bigint), lookup_chat_by_telegram_id($2::bigint), $3::boolean, to_timestamp($4::int))
+            )
+            INSERT INTO chat_administrator
+            SELECT data.account_id, data.chat_id, data.is_admin, data.last_update FROM data
+            LEFT JOIN chat_administrator ON data.account_id = chat_administrator.account_id AND data.chat_id = chat_administrator.chat_id
+            WHERE chat_administrator.last_update IS NULL OR data.last_update > chat_administrator.last_update
+            ON CONFLICT (account_id, chat_id) DO UPDATE SET is_admin = EXCLUDED.is_admin, last_update = EXCLUDED.last_update
+            RETURNING is_admin",
+            user_id,
+            chat_id,
+            is_admin,
+            date,
+        )
+        .fetch_optional(conn)
+        .await?;
+
+        Ok(is_admin)
+    }
+
+    /// Check if a user is currently an admin.
+    pub async fn is_admin(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        user_id: i64,
+        chat_id: i64,
+    ) -> anyhow::Result<Option<bool>> {
+        let is_admin = sqlx::query_scalar!(
+            "SELECT is_admin
+            FROM chat_administrator
+            WHERE account_id = lookup_account_by_telegram_id($1) AND chat_id = lookup_chat_by_telegram_id($2)",
+            user_id,
+            chat_id
+        )
+        .fetch_optional(conn)
+        .await?;
+
+        Ok(is_admin)
+    }
+
+    /// Remove all known administrators from a group, except for the bot. We
+    /// always get updates for our own user, so it's safe to keep.
+    pub async fn flush(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        bot_user_id: i64,
+        chat_id: i64,
+    ) -> anyhow::Result<()> {
+        sqlx::query!(
+            "DELETE FROM chat_administrator
+            WHERE chat_id = lookup_chat_by_telegram_id($1) AND account_id <> lookup_account_by_telegram_id($2)",
+            chat_id,
+            bot_user_id
+        )
+        .execute(conn)
+        .await?;
+
+        Ok(())
+    }
+}
+
 pub struct Subscriptions;
 
 pub struct Subscription {

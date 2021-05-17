@@ -408,7 +408,15 @@ async fn main() {
             .expect("Missing WEBHOOK_ENDPOINT");
         let set_webhook = SetWebhook {
             url: webhook_endpoint.to_owned(),
-            ..Default::default()
+            allowed_updates: Some(vec![
+                "message".into(),
+                "channel_post".into(),
+                "inline_query".into(),
+                "chosen_inline_result".into(),
+                "callback_query".into(),
+                "my_chat_member".into(),
+                "chat_member".into(),
+            ]),
         };
         if let Err(e) = bot.make_request(&set_webhook).await {
             panic!("unable to set webhook: {:?}", e);
@@ -807,6 +815,15 @@ async fn poll_updates(
 ) {
     let mut update_req = GetUpdates {
         timeout: Some(30),
+        allowed_updates: Some(vec![
+            "message".into(),
+            "channel_post".into(),
+            "inline_query".into(),
+            "chosen_inline_result".into(),
+            "callback_query".into(),
+            "my_chat_member".into(),
+            "chat_member".into(),
+        ]),
         ..Default::default()
     };
 
@@ -1148,20 +1165,27 @@ impl MessageHandler {
             .and_then(|message| message.get_command());
 
         for handler in &self.handlers {
-            tracing::trace!(handler = handler.name(), "running handler");
             let hist = HANDLER_DURATION
                 .get_metric_with_label_values(&[handler.name()])
                 .unwrap()
                 .start_timer();
 
-            match handler.handle(&self, &update, command.as_ref()).await {
+            match handler
+                .handle(&self, &update, command.as_ref())
+                .instrument(tracing::info_span!(
+                    "handler_handle",
+                    handler = handler.name()
+                ))
+                .await
+            {
                 Ok(status) if status == handlers::Status::Completed => {
-                    tracing::debug!(handler = handler.name(), "handled update");
+                    tracing::debug!(handled_by = handler.name(), "Completed update");
                     hist.stop_and_record();
+
                     break;
                 }
-                Err(e) => {
-                    tracing::error!("error handling update: {:?}", e);
+                Err(err) => {
+                    tracing::error!(handled_by = handler.name(), "Handler error: {:?}", err);
                     hist.stop_and_record();
 
                     let mut tags = vec![("handler", handler.name().to_string())];
@@ -1176,10 +1200,10 @@ impl MessageHandler {
                     }
 
                     if let Some(msg) = &update.message {
-                        self.report_error(&msg, Some(tags), || capture_anyhow(&e))
+                        self.report_error(&msg, Some(tags), || capture_anyhow(&err))
                             .await;
                     } else {
-                        capture_anyhow(&e);
+                        capture_anyhow(&err);
                     }
 
                     break;

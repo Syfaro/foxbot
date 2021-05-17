@@ -82,6 +82,50 @@
       ]
     }
   },
+  "32eca86c3a6bd40ccb096ba34b0a3fd506743dc9cfbd969c5579765b8ec1e362": {
+    "query": "SELECT is_admin\n            FROM chat_administrator\n            WHERE account_id = lookup_account_by_telegram_id($1) AND chat_id = lookup_chat_by_telegram_id($2)",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "is_admin",
+          "type_info": "Bool"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Int8"
+        ]
+      },
+      "nullable": [
+        false
+      ]
+    }
+  },
+  "334c929495dbaa02c9d19aa7b8994b27e72f186b6c9a4692c67b738e14d90778": {
+    "query": "WITH data (account_id, chat_id, is_admin, last_update) AS (\n                VALUES (lookup_account_by_telegram_id($1::bigint), lookup_chat_by_telegram_id($2::bigint), $3::boolean, to_timestamp($4::int))\n            )\n            INSERT INTO chat_administrator\n            SELECT data.account_id, data.chat_id, data.is_admin, data.last_update FROM data\n            LEFT JOIN chat_administrator ON data.account_id = chat_administrator.account_id AND data.chat_id = chat_administrator.chat_id\n            WHERE chat_administrator.last_update IS NULL OR data.last_update > chat_administrator.last_update\n            ON CONFLICT (account_id, chat_id) DO UPDATE SET is_admin = EXCLUDED.is_admin, last_update = EXCLUDED.last_update\n            RETURNING is_admin",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "is_admin",
+          "type_info": "Bool"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Int8",
+          "Bool",
+          "Int4"
+        ]
+      },
+      "nullable": [
+        false
+      ]
+    }
+  },
   "38a3fbffae225644f875826d08afdaba40e98c45616cedc21cd26314b6f44725": {
     "query": "INSERT INTO twitter_account (account_id, consumer_key, consumer_secret) VALUES\n                (lookup_account_by_telegram_id($1), $2, $3)",
     "describe": {
@@ -297,6 +341,19 @@
         false,
         false
       ]
+    }
+  },
+  "6960bf8689597c72138beb25b305d60cd2e28cd6818667debc7c56e2ba0af970": {
+    "query": "DELETE FROM chat_administrator\n            WHERE chat_id = lookup_chat_by_telegram_id($1) AND account_id <> lookup_account_by_telegram_id($2)",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Int8"
+        ]
+      },
+      "nullable": []
     }
   },
   "73729c4a327de3c763025f0f61d50c9bfd356f7b9b6e6c636d6885cb78c97eee": {
