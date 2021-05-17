@@ -4,7 +4,7 @@ use super::{
     Handler,
     Status::{self, *},
 };
-use crate::{Config, MessageHandler};
+use crate::{Config, MessageHandler, ServiceData};
 use foxbot_models::{Twitter, TwitterAccount};
 use foxbot_utils::*;
 
@@ -30,10 +30,6 @@ impl Handler for TwitterHandler {
                     .await
                     .map(|_| Completed);
             }
-            Some(cmd) if cmd.name == "/twitterverify" => {
-                let message = needs_field!(update, message);
-                return verify_account(&handler, &message).await.map(|_| Completed);
-            }
             Some(_) => return Ok(Ignored),
             _ => (),
         }
@@ -58,6 +54,18 @@ impl Handler for TwitterHandler {
                     .map(|_| Completed)
             }
             _ => Ok(Ignored),
+        }
+    }
+
+    async fn handle_service(
+        &self,
+        handler: &MessageHandler,
+        service: &ServiceData,
+    ) -> anyhow::Result<()> {
+        if let ServiceData::TwitterVerified { token, verifier } = service {
+            verify_account(&handler, &token, &verifier).await
+        } else {
+            Ok(())
         }
     }
 }
@@ -141,20 +149,9 @@ async fn handle_command(
 
 async fn verify_account(
     handler: &MessageHandler,
-    message: &tgbotapi::Message,
+    token: &str,
+    verifier: &str,
 ) -> anyhow::Result<()> {
-    if message.message_id != 0 {
-        handler
-            .send_generic_reply(&message, "twitter-not-for-you")
-            .await?;
-        return Ok(());
-    }
-
-    let text = message.text.clone().unwrap();
-    let mut args = text.split(' ').skip(1);
-    let token = args.next().unwrap();
-    let verifier = args.next().unwrap();
-
     let row = match Twitter::get_request(&handler.conn, &token).await? {
         Some(row) => row,
         _ => return Ok(()),
@@ -192,7 +189,6 @@ async fn verify_account(
     let message = tgbotapi::requests::SendMessage {
         chat_id: row.user_id.into(),
         text,
-        reply_to_message_id: Some(message.message_id),
         ..Default::default()
     };
 

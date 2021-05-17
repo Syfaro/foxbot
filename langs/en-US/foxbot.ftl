@@ -56,8 +56,11 @@ video-unknown = Sorry, something went wrong.
 # Reverse Search
 reverse-no-results = I was unable to find anything, sorry.
 reverse-result = I found this: { $link } ({ $rating })
+reverse-result-unknown = I found this: { $link }
 reverse-multiple-results = I found multiple sources:
 reverse-multiple-item = · { $link } ({ $rating })
+reverse-multiple-item-unknown = · { $link }
+reverse-subscribe = Notify Me
 
 # Twitter Onboarding
 twitter-callback = Please follow this link to add your Twitter account: { $link }
@@ -86,12 +89,16 @@ source-no-photo = Sorry, I can't seem to find the photo here.
 alternate-title = Here are some possible alternate versions:
 alternate-posted-by = Posted by { $name }
 alternate-distance = · { $link } ({ $rating }, distance of { $distance })
+alternate-distance-unknown = · { $link } (distance of { $distance })
 alternate-multiple-photo = I can only find alternates for a single photo, sorry.
+alternate-unknown-link = Sorry, I don't understand the provided link.
 
 # Automatic group sourcing
 automatic-single = It looks like this image may have come from here: { $link } ({ $rating })
+automatic-single-unknown = It looks like this image may have come from here: { $link }
 automatic-multiple = I found a few places this image may have come from:
 automatic-multiple-result = · { $link } ({ $rating })
+automatic-multiple-result-unknown = · { $link }
 automatic-enable-not-admin = Sorry, you must be a group admin to enable this.
 automatic-enable-bot-not-admin = Sorry, you must give me admin permissions due to a Telegram limitation.
 automatic-enable-success = Automatic group sourcing is now enabled!
@@ -115,16 +122,20 @@ settings-site-order =
     Set the order of sites in returned results.
     
     This is especially useful for places where only one result is returned.
-settings-name = If I should say the name of the site instead of just 'Source'
-settings-name-toggled = Toggled using site name
-settings-name-source = Only show Source on keyboard
-settings-name-site = Show site name on keyboard
 settings-unsupported = Sorry, not yet supported.
 settings-move-unable = Unable to move { $name } to that position
 settings-move-updated = Updated position for { $name }
 settings-site-preference = Site Preference
-settings-source-name = Source Name
 
 rating-general = SFW
 rating-adult = NSFW
 rating-unknown = Unknown
+
+subscribe-error = Unable to subscribe to notifications
+subscribe-success = I'll let you know if I find this later!
+subscribe-found-single =
+    I found a match to an image you were looking for!
+    
+    You can see it here: { $link }
+subscribe-found-multiple = I found matches for an image you were looking for!
+subscribe-found-multiple-item = · { $link }

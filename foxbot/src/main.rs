@@ -104,12 +104,8 @@ pub struct Config {
 
 /// Configure tracing with Jaeger.
 fn configure_tracing(collector: String) {
-    use opentelemetry::{
-        api::{KeyValue, Provider},
-        sdk::{Config as TelemConfig, Sampler},
-    };
+    use opentelemetry::KeyValue;
     use tracing_subscriber::layer::SubscriberExt;
-    use tracing_subscriber::prelude::*;
 
     let env = std::env::var("ENVIRONMENT");
     let env = if let Ok(env) = env.as_ref() {
@@ -120,44 +116,39 @@ fn configure_tracing(collector: String) {
         "release"
     };
 
-    let fmt_layer = tracing_subscriber::fmt::layer();
-    let filter_layer = tracing_subscriber::EnvFilter::try_from_default_env()
-        .or_else(|_| tracing_subscriber::EnvFilter::try_new("info"))
-        .unwrap();
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .finish();
-    let registry = tracing_subscriber::registry()
-        .with(filter_layer)
-        .with(fmt_layer);
+    opentelemetry::global::set_text_map_propagator(opentelemetry_jaeger::Propagator::new());
 
-    let exporter = opentelemetry_jaeger::Exporter::builder()
+    let tracer = opentelemetry_jaeger::new_pipeline()
         .with_agent_endpoint(collector)
-        .with_process(opentelemetry_jaeger::Process {
-            service_name: "foxbot".to_string(),
-            tags: vec![
-                KeyValue::new("environment", env),
-                KeyValue::new("version", env!("CARGO_PKG_VERSION")),
-            ],
-        })
-        .init()
-        .expect("Unable to create jaeger exporter");
+        .with_service_name("foxbot")
+        .with_tags(vec![
+            KeyValue::new("environment", env.to_owned()),
+            KeyValue::new("version", env!("CARGO_PKG_VERSION")),
+        ])
+        .install_batch(opentelemetry::runtime::Tokio)
+        .unwrap();
 
-    let provider = opentelemetry::sdk::Provider::builder()
-        .with_simple_exporter(exporter)
-        .with_config(TelemConfig {
-            default_sampler: Box::new(Sampler::Always),
-            ..Default::default()
-        })
-        .build();
+    let trace = tracing_opentelemetry::layer().with_tracer(tracer);
+    let env_filter = tracing_subscriber::EnvFilter::from_default_env();
 
-    opentelemetry::global::set_provider(provider);
-
-    let tracer = opentelemetry::global::trace_provider().get_tracer("foxbot");
-    let telem_layer = tracing_opentelemetry::layer().with_tracer(tracer);
-    let registry = registry.with(telem_layer);
-
-    registry.init();
+    if matches!(std::env::var("LOG_FMT").as_deref(), Ok("json")) {
+        let subscriber = tracing_subscriber::fmt::layer()
+            .json()
+            .with_timer(tracing_subscriber::fmt::time::ChronoUtc::rfc3339())
+            .with_target(true);
+        let subscriber = tracing_subscriber::Registry::default()
+            .with(env_filter)
+            .with(trace)
+            .with(subscriber);
+        tracing::subscriber::set_global_default(subscriber).unwrap();
+    } else {
+        let subscriber = tracing_subscriber::fmt::layer();
+        let subscriber = tracing_subscriber::Registry::default()
+            .with(env_filter)
+            .with(trace)
+            .with(subscriber);
+        tracing::subscriber::set_global_default(subscriber).unwrap();
+    }
 }
 
 fn setup_shutdown() -> tokio::sync::mpsc::Receiver<bool> {
@@ -197,6 +188,38 @@ fn load_env() {
 
 #[cfg(not(feature = "env"))]
 fn load_env() {}
+
+#[derive(Debug)]
+pub enum ServiceData {
+    VideoProgress {
+        display_name: String,
+        progress: String,
+    },
+    VideoComplete {
+        display_name: String,
+        video_url: String,
+        thumb_url: String,
+    },
+    TwitterVerified {
+        token: String,
+        verifier: String,
+    },
+    NewHash {
+        hash: i64,
+    },
+}
+
+#[derive(Debug)]
+pub enum HandlerUpdate {
+    Telegram(Box<tgbotapi::Update>),
+    Service(ServiceData),
+}
+
+impl From<Box<tgbotapi::Update>> for HandlerUpdate {
+    fn from(update: Box<tgbotapi::Update>) -> Self {
+        HandlerUpdate::Telegram(update)
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -291,6 +314,7 @@ async fn main() {
         Box::new(handlers::ErrorReplyHandler::new()),
         Box::new(handlers::SettingsHandler),
         Box::new(handlers::TwitterHandler),
+        Box::new(handlers::SubscribeHandler),
         Box::new(handlers::ErrorCleanup),
         Box::new(handlers::PermissionHandler),
     ];
@@ -423,12 +447,12 @@ async fn main() {
     let h = handler.clone();
     tokio::spawn(async move {
         ReceiverStream::new(inline_rx)
-            .for_each_concurrent(INLINE_HANDLERS, |inline_query| {
+            .for_each_concurrent(INLINE_HANDLERS, |(inline_query, span)| {
                 let handler = h.clone();
 
                 async move {
                     tokio::spawn(async move {
-                        handler.handle_update(*inline_query).await;
+                        handler.handle_update(inline_query).instrument(span).await;
                     })
                     .await
                     .unwrap();
@@ -439,18 +463,20 @@ async fn main() {
 
     // Process all other updates, limited by `CONCURRENT_HANDLERS`.
     ReceiverStream::new(update_rx)
-        .for_each_concurrent(CONCURRENT_HANDLERS, |update| {
+        .for_each_concurrent(CONCURRENT_HANDLERS, |(update, span)| {
             let handler = handler.clone();
 
             async move {
                 tokio::spawn(async move {
-                    handler.handle_update(*update).await;
+                    handler.handle_update(update).instrument(span).await;
                 })
                 .await
                 .unwrap();
             }
         })
         .await;
+
+    opentelemetry::global::shutdown_tracer_provider();
 }
 
 /// Handle an incoming HTTP POST request to /{token}.
@@ -458,9 +484,10 @@ async fn main() {
 /// It spawns a handler for each request.
 async fn handle_request(
     req: hyper::Request<hyper::Body>,
-    update_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
-    inline_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    update_tx: tokio::sync::mpsc::Sender<(HandlerUpdate, tracing::Span)>,
+    inline_tx: tokio::sync::mpsc::Sender<(HandlerUpdate, tracing::Span)>,
     secret: &str,
+    fuzzysearch_secret: &str,
     video_secret: &str,
     templates: Arc<handlebars::Handlebars<'_>>,
 ) -> hyper::Result<hyper::Response<hyper::Body>> {
@@ -492,10 +519,55 @@ async fn handle_request(
 
             let update = Box::new(update);
             if update.inline_query.is_some() {
-                inline_tx.send(update).await.unwrap();
+                inline_tx
+                    .send((update.into(), tracing::Span::current()))
+                    .await
+                    .unwrap();
             } else {
-                update_tx.send(update).await.unwrap();
+                update_tx
+                    .send((update.into(), tracing::Span::current()))
+                    .await
+                    .unwrap();
             }
+
+            Ok(Response::new(Body::from("✓")))
+        }
+        (&hyper::Method::POST, path) if path == fuzzysearch_secret => {
+            let body = req.into_body();
+            let bytes = hyper::body::to_bytes(body).await.unwrap();
+
+            let data: serde_json::Value = match serde_json::from_slice(&bytes) {
+                Ok(data) => data,
+                Err(err) => {
+                    tracing::error!("error decoding incoming hash data: {:?}", err);
+                    let mut resp = Response::default();
+                    *resp.status_mut() = StatusCode::BAD_REQUEST;
+                    return Ok(resp);
+                }
+            };
+
+            let hash = if let Some(hash) = data
+                .as_object()
+                .and_then(|obj| obj.get("hash"))
+                .and_then(|hash| hash.as_str())
+                .and_then(|hash| {
+                    let mut data = [0u8; 8];
+                    base64::decode_config_slice(&hash, base64::STANDARD, &mut data).ok();
+                    Some(data)
+                }) {
+                i64::from_be_bytes(hash)
+            } else {
+                tracing::error!("incoming hash was missing data: {:?}", data);
+                return Ok(Response::new(Body::from("x")));
+            };
+
+            update_tx
+                .send((
+                    HandlerUpdate::Service(ServiceData::NewHash { hash }),
+                    tracing::Span::current(),
+                ))
+                .await
+                .unwrap();
 
             Ok(Response::new(Body::from("✓")))
         }
@@ -518,20 +590,13 @@ async fn handle_request(
                 tracing::debug!("Got video progress, {}", progress);
 
                 update_tx
-                    .send(Box::new(tgbotapi::Update {
-                        message: Some(tgbotapi::Message {
-                            text: Some(format!("/videoprogress {} {}", display_name, progress)),
-                            entities: Some(vec![tgbotapi::MessageEntity {
-                                entity_type: tgbotapi::MessageEntityType::BotCommand,
-                                offset: 0,
-                                length: 14,
-                                url: None,
-                                user: None,
-                            }]),
-                            ..Default::default()
+                    .send((
+                        HandlerUpdate::Service(ServiceData::VideoProgress {
+                            display_name: display_name.to_owned(),
+                            progress: progress.to_owned(),
                         }),
-                        ..Default::default()
-                    }))
+                        tracing::Span::current(),
+                    ))
                     .await
                     .unwrap();
             } else {
@@ -560,23 +625,14 @@ async fn handle_request(
                     .unwrap();
 
                 update_tx
-                    .send(Box::new(tgbotapi::Update {
-                        message: Some(tgbotapi::Message {
-                            text: Some(format!(
-                                "/videocomplete {} {} {}",
-                                display_name, video_url, thumb_url
-                            )),
-                            entities: Some(vec![tgbotapi::MessageEntity {
-                                entity_type: tgbotapi::MessageEntityType::BotCommand,
-                                offset: 0,
-                                length: 14,
-                                url: None,
-                                user: None,
-                            }]),
-                            ..Default::default()
+                    .send((
+                        HandlerUpdate::Service(ServiceData::VideoComplete {
+                            display_name: display_name.to_owned(),
+                            video_url: video_url.to_owned(),
+                            thumb_url: thumb_url.to_owned(),
                         }),
-                        ..Default::default()
-                    }))
+                        tracing::Span::current(),
+                    ))
                     .await
                     .unwrap();
             }
@@ -611,23 +667,14 @@ async fn handle_request(
                 }
             };
 
-            // This is extremely stupid but it works without having to pull
-            // a handler into HTTP requests
             update_tx
-                .send(Box::new(tgbotapi::Update {
-                    message: Some(tgbotapi::Message {
-                        text: Some(format!("/twitterverify {} {}", token, verifier)),
-                        entities: Some(vec![tgbotapi::MessageEntity {
-                            entity_type: tgbotapi::MessageEntityType::BotCommand,
-                            offset: 0,
-                            length: 14,
-                            url: None,
-                            user: None,
-                        }]),
-                        ..Default::default()
+                .send((
+                    HandlerUpdate::Service(ServiceData::TwitterVerified {
+                        token: token.to_owned(),
+                        verifier: verifier.to_owned(),
                     }),
-                    ..Default::default()
-                }))
+                    tracing::Span::current(),
+                ))
                 .await
                 .unwrap();
 
@@ -649,8 +696,8 @@ async fn handle_request(
 
 /// Start a web server to handle webhooks and pass updates to [handle_request].
 async fn receive_webhook(
-    update_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
-    inline_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    update_tx: tokio::sync::mpsc::Sender<(HandlerUpdate, tracing::Span)>,
+    inline_tx: tokio::sync::mpsc::Sender<(HandlerUpdate, tracing::Span)>,
     mut shutdown: tokio::sync::mpsc::Receiver<bool>,
     config: Config,
 ) {
@@ -662,6 +709,8 @@ async fn receive_webhook(
 
     let secret_path = format!("/{}", config.http_secret.unwrap());
     let secret_path: &'static str = Box::leak(secret_path.into_boxed_str());
+    let fuzzysearch_secret = format!("/{}", config.fautil_apitoken);
+    let fuzzysearch_secret: &'static str = Box::leak(fuzzysearch_secret.into_boxed_str());
     let video_secret = format!("/{}", config.coconut_secret);
     let video_secret: &'static str = Box::leak(video_secret.into_boxed_str());
 
@@ -678,14 +727,25 @@ async fn receive_webhook(
         let templates = templates.clone();
         async move {
             Ok::<_, hyper::Error>(hyper::service::service_fn(move |req| {
+                use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+                let parent_cx = opentelemetry::global::get_text_map_propagator(|propagator| {
+                    propagator.extract(&opentelemetry_http::HeaderExtractor(req.headers()))
+                });
+
+                let span = tracing::info_span!("handle_request");
+                span.set_parent(parent_cx);
+
                 handle_request(
                     req,
                     update_tx.clone(),
                     inline_tx.clone(),
                     secret_path,
+                    fuzzysearch_secret,
                     video_secret,
                     templates.clone(),
                 )
+                .instrument(span)
             }))
         }
     });
@@ -748,8 +808,8 @@ async fn serve_metrics(config: Config) {
 
 /// Start polling updates using Bot API long polling.
 async fn poll_updates(
-    update_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
-    inline_tx: tokio::sync::mpsc::Sender<Box<tgbotapi::Update>>,
+    update_tx: tokio::sync::mpsc::Sender<(HandlerUpdate, tracing::Span)>,
+    inline_tx: tokio::sync::mpsc::Sender<(HandlerUpdate, tracing::Span)>,
     mut shutdown: tokio::sync::mpsc::Receiver<bool>,
     bot: Arc<Telegram>,
 ) {
@@ -790,12 +850,13 @@ async fn poll_updates(
 
             for update in updates {
                 let id = update.update_id;
+                let span = tracing::info_span!("poll_update");
 
                 let update = Box::new(update);
                 if update.inline_query.is_some() {
-                    inline_tx.send(update).await.unwrap();
+                    inline_tx.send((update.into(), span)).await.unwrap();
                 } else {
-                    update_tx.send(update).await.unwrap();
+                    update_tx.send((update.into(), span)).await.unwrap();
                 }
 
                 update_req.offset = Some(id + 1);
@@ -1061,15 +1122,31 @@ impl MessageHandler {
         self.make_request(&send_message).await.map_err(Into::into)
     }
 
-    #[tracing::instrument(skip(self, update), fields(user_id, chat_id))]
-    async fn handle_update(&self, update: Update) {
+    #[tracing::instrument(skip(self, handler_update), fields(user_id, chat_id))]
+    async fn handle_update(&self, handler_update: HandlerUpdate) {
         let _hist = HANDLING_DURATION.start_timer();
 
-        tracing::trace!(?update, "handling update");
+        tracing::trace!(?handler_update, "handling update");
 
         sentry::configure_scope(|mut scope| {
             add_sentry_tracing(&mut scope);
         });
+
+        let update = match handler_update {
+            HandlerUpdate::Service(service_data) => {
+                tracing::debug!("got service update: {:?}", service_data);
+
+                for handler in &self.handlers {
+                    if let Err(err) = handler.handle_service(&self, &service_data).await {
+                        tracing::error!("unable to handle service update: {:?}", err);
+                        capture_anyhow(&err);
+                    }
+                }
+
+                return;
+            }
+            HandlerUpdate::Telegram(update) => update,
+        };
 
         let user = user_from_update(&update);
         let chat = chat_from_update(&update);

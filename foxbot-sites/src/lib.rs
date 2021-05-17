@@ -85,7 +85,12 @@ pub async fn get_all_sites(
     pool: sqlx::Pool<sqlx::Postgres>,
 ) -> Vec<BoxedSite> {
     vec![
-        Box::new(E621::new(e621_login, e621_api_key)),
+        Box::new(E621::new(
+            E621Host::E621,
+            e621_login.clone(),
+            e621_api_key.clone(),
+        )),
+        Box::new(E621::new(E621Host::E926, e621_login, e621_api_key)),
         Box::new(FurAffinity::new((fa_a, fa_b), fuzzysearch_apitoken.clone())),
         Box::new(Weasyl::new(weasyl_apitoken)),
         Box::new(Twitter::new(twitter_consumer_key, twitter_consumer_secret, pool).await),
@@ -226,7 +231,7 @@ impl Site for Direct {
         {
             tracing::trace!("got result from reverse search");
             if let Some(post) = result {
-                tracing::debug!(id = post.id, "found ID of post matching");
+                tracing::debug!("found matching post");
                 source_link = Some(post.url());
                 source_name = Some(post.site_name());
             } else {
@@ -246,6 +251,27 @@ impl Site for Direct {
     }
 }
 
+pub enum E621Host {
+    E621,
+    E926,
+}
+
+impl E621Host {
+    pub fn name(&self) -> &'static str {
+        match self {
+            E621Host::E621 => "e621",
+            E621Host::E926 => "e926",
+        }
+    }
+
+    pub fn host(&self) -> &'static str {
+        match self {
+            E621Host::E621 => "e621.net",
+            E621Host::E926 => "e926.net",
+        }
+    }
+}
+
 /// A loader for e621 posts and pools.
 ///
 /// It can convert direct image links back into post URLs. It will only load the
@@ -257,6 +283,7 @@ pub struct E621 {
 
     client: reqwest::Client,
 
+    site: E621Host,
     auth: (String, String),
 }
 
@@ -298,14 +325,15 @@ struct E621Data {
 }
 
 impl E621 {
-    pub fn new(login: String, api_key: String) -> Self {
+    pub fn new(host: E621Host, login: String, api_key: String) -> Self {
         Self {
-            show: regex::Regex::new(r"(?:https?://)?(?P<host>e(?:621|926)\.net)/(?:post/show/|posts/)(?P<id>\d+)(?:/(?P<tags>.+))?").unwrap(),
-            data: regex::Regex::new(r"(?:https?://)?(?P<host>static\d+\.e(?:621|926)\.net)/data/(?:(?P<modifier>sample|preview)/)?[0-9a-f]{2}/[0-9a-f]{2}/(?P<md5>[0-9a-f]{32})\.(?P<ext>.+)").unwrap(),
-            pool: regex::Regex::new(r"(?:https?://)?(?P<host>e(?:621|926)\.net)/pools/(?P<id>\d+)(?:/(?P<tags>.+))?").unwrap(),
+            show: regex::Regex::new(&format!(r"(?:https?://)?{}/(?:post/show/|posts/)(?P<id>\d+)(?:/(?P<tags>.+))?", host.host())).unwrap(),
+            data: regex::Regex::new(&format!(r"(?:https?://)?(?:static\d+\.{})/data/(?:(?P<modifier>sample|preview)/)?[0-9a-f]{{2}}/[0-9a-f]{{2}}/(?P<md5>[0-9a-f]{{32}})\.(?P<ext>.+)", host.host())).unwrap(),
+            pool: regex::Regex::new(&format!(r"(?:https?://)?{}/pools/(?P<id>\d+)(?:/(?P<tags>.+))?", host.host())).unwrap(),
 
             client: reqwest::Client::builder().user_agent(USER_AGENT).build().unwrap(),
 
+            site: host,
             auth: (login, api_key),
         }
     }
@@ -347,7 +375,7 @@ impl E621 {
 
         tracing::trace!("Loading e621 pool");
 
-        let endpoint = format!("https://e621.net/pools/{}.json", id);
+        let endpoint = format!("https://{}/pools/{}.json", self.site.host(), id);
         let resp: E621Pool = self.load(&endpoint).await?;
 
         tracing::trace!(count = resp.post_count, "Discovered e621 pool items");
@@ -357,7 +385,7 @@ impl E621 {
         for post_id in resp.post_ids.iter().rev().take(10).rev() {
             tracing::trace!(post_id, "Loading e621 post as part of pool");
 
-            let url = format!("https://e621.net/posts/{}.json", post_id);
+            let url = format!("https://{}/posts/{}.json", self.site.host(), post_id);
             let resp: E621Resp = self.load(&url).await?;
 
             let E621Data {
@@ -374,7 +402,7 @@ impl E621 {
                 file_type: file_ext,
                 url: file_url,
                 thumb: Some(preview_url),
-                source_link: Some(format!("https://e621.net/posts/{}", id)),
+                source_link: Some(format!("https://{}/posts/{}", self.site.host(), id)),
                 site_name: self.name(),
                 ..Default::default()
             });
@@ -410,7 +438,7 @@ impl E621 {
 #[async_trait]
 impl Site for E621 {
     fn name(&self) -> &'static str {
-        "e621"
+        self.site.name()
     }
 
     fn url_id(&self, url: &str) -> Option<String> {
@@ -421,7 +449,7 @@ impl Site for E621 {
 
         let sub_id = &captures["id"];
 
-        Some(format!("e621-{}", sub_id))
+        Some(format!("{}-{}", self.site.name(), sub_id))
     }
 
     async fn url_supported(&mut self, url: &str) -> bool {
@@ -437,12 +465,12 @@ impl Site for E621 {
             let captures = self.show.captures(url).unwrap();
             let id = &captures["id"];
 
-            format!("https://e621.net/posts/{}.json", id)
+            format!("https://{}/posts/{}.json", self.site.host(), id)
         } else if self.data.is_match(url) {
             let captures = self.data.captures(url).unwrap();
             let md5 = &captures["md5"];
 
-            format!("https://e621.net/posts.json?md5={}", md5)
+            format!("https://{}/posts.json?md5={}", self.site.host(), md5)
         } else {
             return self.get_pool(&url).await;
         };
@@ -463,7 +491,7 @@ impl Site for E621 {
             file_type: file_ext,
             url: file_url,
             thumb: Some(preview_url),
-            source_link: Some(format!("https://e621.net/posts/{}", id)),
+            source_link: Some(format!("https://{}/posts/{}", self.site.host(), id)),
             site_name: self.name(),
             ..Default::default()
         }]))
@@ -663,7 +691,7 @@ impl FurAffinity {
                 .build()
                 .unwrap(),
             matcher: regex::Regex::new(
-                r#"(?:https?://)?(?:(?:www\.)?furaffinity\.net/(?:view|full)/(?P<id>\d+)/?|(?:d\.furaffinity\.net|d\.facdn\.net)/art/\w+/(?P<file_id>\d+)/\S+)"#,
+                r#"(?:https?://)?(?:(?:www\.)?furaffinity\.net/(?:view|full)/(?P<id>\d+)/?|(?:d\.furaffinity\.net|d\.facdn\.net)/art/\w+/(?P<file_id>\d+)/(?P<file_name>\S+))"#,
             )
             .unwrap(),
         }
@@ -671,8 +699,8 @@ impl FurAffinity {
 
     /// Attempt to resolve a direct image URL into a submission using
     /// FuzzySearch.
-    async fn load_direct_url(&self, file_id: i64, url: &str) -> anyhow::Result<Option<PostInfo>> {
-        let sub: fuzzysearch::File = match self.fapi.lookup_file_id(file_id).await {
+    async fn load_direct_url(&self, filename: &str, url: &str) -> anyhow::Result<Option<PostInfo>> {
+        let sub: fuzzysearch::File = match self.fapi.lookup_filename(&filename).await {
             Ok(mut results) if !results.is_empty() => results.remove(0),
             _ => {
                 return Ok(Some(PostInfo {
@@ -827,9 +855,8 @@ impl Site for FurAffinity {
             .captures(&url)
             .context("Could not capture FurAffinity URL")?;
 
-        let image = if let Some(file_id) = captures.name("file_id") {
-            let file_id: i64 = file_id.as_str().parse().unwrap();
-            self.load_direct_url(file_id, &url).await
+        let image = if let Some(filename) = captures.name("file_name") {
+            self.load_direct_url(filename.as_str(), &url).await
         } else if let Some(id) = captures.name("id") {
             let id: i32 = id.as_str().parse().unwrap();
             self.load_submission(id, &url).await

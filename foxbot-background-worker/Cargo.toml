@@ -1,13 +1,17 @@
 [package]
-name = "foxbot-channel-worker"
-version = "0.1.0"
+name = "foxbot-background-worker"
+version = "0.2.0"
 authors = ["Syfaro <syfaro@huefox.com>"]
 edition = "2018"
 
 [dependencies]
 anyhow = "1"
+thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = "0.2"
+opentelemetry = { version = "0.13", features = ["rt-tokio"] }
+opentelemetry-jaeger = { version = "0.12", features = ["tokio"] }
+tracing-opentelemetry = "0.12"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -32,6 +36,7 @@ fuzzysearch = { git = "https://github.com/Syfaro/fuzzysearch-rs", features = ["t
 
 foxbot-sites = { path = "../foxbot-sites" }
 foxbot-utils = { path = "../foxbot-utils"}
+foxbot-models = { path = "../foxbot-models" }
 
 [features]
 env = ["dotenv"]

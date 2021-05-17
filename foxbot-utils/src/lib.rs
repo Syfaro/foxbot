@@ -1,6 +1,7 @@
 use anyhow::Context;
-use std::sync::Arc;
+use fuzzysearch::SiteInfo;
 use std::time::Instant;
+use std::{collections::HashSet, str::FromStr, sync::Arc};
 use tgbotapi::FileType;
 use tracing_futures::Instrument;
 
@@ -296,8 +297,11 @@ pub fn get_message(
     name: &str,
     args: Option<fluent::FluentArgs>,
 ) -> Result<String, Vec<fluent::FluentError>> {
-    let msg = bundle.get_message(name).expect("Message doesn't exist");
-    let pattern = msg.value.expect("Message has no value");
+    let msg = bundle
+        .get_message(name)
+        .with_context(|| format!("attempting to get message bundle: {}", name))
+        .expect("message doesn't exist");
+    let pattern = msg.value.expect("message has no value");
     let mut errors = vec![];
     let value = bundle.format_pattern(&pattern, args.as_ref(), &mut errors);
     if errors.is_empty() {
@@ -309,17 +313,21 @@ pub fn get_message(
 
 /// Add current opentelemetry span to a Sentry scope.
 pub fn add_sentry_tracing(scope: &mut sentry::Scope) {
-    use opentelemetry::api::HttpTextFormat;
     use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-    let current_context = tracing::Span::current().context();
+    let context = tracing::Span::current().context();
 
-    let mut carrier = std::collections::HashMap::new();
-    let propagator = opentelemetry::api::B3Propagator::new(true);
-    propagator.inject_context(&current_context, &mut carrier);
+    let mut headers: reqwest::header::HeaderMap = Default::default();
+    opentelemetry::global::get_text_map_propagator(|propagator| {
+        propagator.inject_context(
+            &context,
+            &mut opentelemetry_http::HeaderInjector(&mut headers),
+        )
+    });
 
-    let data: &str = carrier.get("X-B3").unwrap();
-    scope.set_extra("x-b3", data.to_owned().into());
+    let header_value = headers.get("uber-trace-id").unwrap();
+    let trace_id = header_value.to_str().unwrap();
+    scope.set_extra("uber-trace-id", trace_id.to_owned().into());
 }
 
 /// Tags to add to a sentry event.
@@ -395,17 +403,22 @@ pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (S
         s.push_str(&get_message(&bundle, "alternate-posted-by", Some(args)).unwrap());
         s.push('\n');
         let mut subs: Vec<fuzzysearch::File> = item.1.to_vec();
-        subs.sort_by(|a, b| a.id.partial_cmp(&b.id).unwrap());
-        subs.dedup_by(|a, b| a.id == b.id);
+        subs.sort_by(|a, b| a.id().partial_cmp(&b.id()).unwrap());
+        subs.dedup_by(|a, b| a.id() == b.id());
         subs.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
         for sub in subs {
-            tracing::trace!(site = sub.site_name(), id = sub.id, "looking at submission");
+            tracing::trace!(site = sub.site_name(), id = %sub.id(), "looking at submission");
             let mut args = fluent::FluentArgs::new();
             args.insert("link", sub.url().into());
             args.insert("distance", sub.distance.unwrap_or(10).into());
-            let rating = get_message(&bundle, get_rating_bundle_name(&sub.rating), None).unwrap();
-            args.insert("rating", rating.into());
-            s.push_str(&get_message(&bundle, "alternate-distance", Some(args)).unwrap());
+            let message = if let Some(rating) = get_rating_bundle_name(&sub.rating) {
+                let rating = get_message(&bundle, rating, None).unwrap();
+                args.insert("rating", rating.into());
+                get_message(&bundle, "alternate-distance", Some(args)).unwrap()
+            } else {
+                get_message(&bundle, "alternate-distance-unknown", Some(args)).unwrap()
+            };
+            s.push_str(&message);
             s.push('\n');
             used_hashes.push(sub.hash.unwrap());
         }
@@ -539,7 +552,7 @@ pub async fn match_image(
 
 /// Lookup a single hash from FuzzySearch, ensuring that the distance has been
 /// calculated from the provided hash.
-async fn lookup_single_hash(
+pub async fn lookup_single_hash(
     fapi: &fuzzysearch::FuzzySearch,
     hash: i64,
     distance: Option<i64>,
@@ -559,6 +572,17 @@ async fn lookup_single_hash(
             .unwrap()
             .partial_cmp(&b.distance.unwrap())
             .unwrap()
+    });
+
+    // Twitter general rating is probably bad, remove it.
+    matches.iter_mut().for_each(|m| {
+        if !matches!(m.site_info, Some(SiteInfo::Twitter)) {
+            return;
+        }
+
+        if matches!(m.rating, Some(fuzzysearch::Rating::General)) {
+            m.rating = None;
+        }
     });
 
     Ok(matches)
@@ -583,27 +607,69 @@ pub async fn sort_results(
         None => Sites::default_order(),
     };
 
+    sort_results_by(&sites, results, false);
+
+    Ok(())
+}
+
+/// Sort match results with a given order.
+///
+/// This expects that undesired results have already been filtered.
+///
+/// If `site_first` is true, results will be sorted by site order preference
+/// then by distance. If it is false, results will be sorted by distance then
+/// site order.
+pub fn sort_results_by(order: &[Sites], results: &mut [fuzzysearch::File], site_first: bool) {
     results.sort_unstable_by(|a, b| {
         let a_dist = a.distance.unwrap();
         let b_dist = b.distance.unwrap();
 
-        if a_dist != b_dist {
-            return a_dist.cmp(&b_dist);
-        }
-
-        let a_idx = sites
+        let a_idx = order
             .iter()
             .position(|s| s.as_str() == a.site_name())
-            .unwrap();
-        let b_idx = sites
+            .unwrap_or_default();
+        let b_idx = order
             .iter()
             .position(|s| s.as_str() == b.site_name())
-            .unwrap();
+            .unwrap_or_default();
 
-        a_idx.cmp(&b_idx)
+        if !site_first && a_dist != b_dist {
+            return a_dist.cmp(&b_dist);
+        } else if site_first && a_idx != b_idx {
+            return a_idx.cmp(&b_idx);
+        }
+
+        if !site_first {
+            a_idx.cmp(&b_idx)
+        } else {
+            a_dist.cmp(&b_dist)
+        }
     });
+}
 
-    Ok(())
+/// Get the first match for each site.
+///
+/// This expects that the results have already been sorted based on distance and
+/// filtered for undesired results.
+pub fn first_of_each_site(results: &[fuzzysearch::File]) -> Vec<(Sites, fuzzysearch::File)> {
+    let mut firsts = Vec::with_capacity(Sites::default_order().len());
+    let mut seen = HashSet::new();
+
+    for result in results {
+        let site = match Sites::from_str(result.site_name()) {
+            Ok(site) => site,
+            _ => continue,
+        };
+
+        if seen.contains(&site) {
+            continue;
+        }
+
+        seen.insert(site.clone());
+        firsts.push((site, result.to_owned()));
+    }
+
+    firsts
 }
 
 /// Extract all possible links from a Message. It looks at the text,
@@ -831,11 +897,13 @@ pub async fn can_delete_in_chat(
 }
 
 /// Get the name of the localization for a given rating, or if it's unknown.
-pub fn get_rating_bundle_name(rating: &Option<fuzzysearch::Rating>) -> &'static str {
+pub fn get_rating_bundle_name(rating: &Option<fuzzysearch::Rating>) -> Option<&'static str> {
     match rating {
-        Some(fuzzysearch::Rating::General) => "rating-general",
-        Some(fuzzysearch::Rating::Mature) | Some(fuzzysearch::Rating::Adult) => "rating-adult",
-        None => "rating-unknown",
+        Some(fuzzysearch::Rating::General) => Some("rating-general"),
+        Some(fuzzysearch::Rating::Mature) | Some(fuzzysearch::Rating::Adult) => {
+            Some("rating-adult")
+        }
+        None => None,
     }
 }
 
@@ -860,11 +928,14 @@ pub fn source_reply(matches: &[fuzzysearch::File], bundle: Bundle<'_>) -> String
         let mut args = fluent::FluentArgs::new();
         args.insert("link", first.url().into());
 
-        let rating = get_rating_bundle_name(&first.rating);
-        let rating = get_message(&bundle, rating, None).unwrap();
-        args.insert("rating", rating.into());
+        if let Some(rating) = get_rating_bundle_name(&first.rating) {
+            let rating = get_message(&bundle, rating, None).unwrap();
+            args.insert("rating", rating.into());
 
-        get_message(&bundle, "reverse-result", Some(args)).unwrap()
+            get_message(&bundle, "reverse-result", Some(args)).unwrap()
+        } else {
+            get_message(&bundle, "reverse-result-unknown", Some(args)).unwrap()
+        }
     } else {
         let mut items = Vec::with_capacity(2 + similar.len());
 
@@ -875,11 +946,15 @@ pub fn source_reply(matches: &[fuzzysearch::File], bundle: Bundle<'_>) -> String
             let mut args = fluent::FluentArgs::new();
             args.insert("link", file.url().into());
 
-            let rating = get_rating_bundle_name(&file.rating);
-            let rating = get_message(&bundle, rating, None).unwrap();
-            args.insert("rating", rating.into());
+            let result = if let Some(rating) = get_rating_bundle_name(&file.rating) {
+                let rating = get_message(&bundle, rating, None).unwrap();
+                args.insert("rating", rating.into());
 
-            let result = get_message(&bundle, "reverse-multiple-item", Some(args)).unwrap();
+                get_message(&bundle, "reverse-multiple-item", Some(args)).unwrap()
+            } else {
+                get_message(&bundle, "reverse-multiple-item-unknown", Some(args)).unwrap()
+            };
+
             items.push(result);
         }
 
@@ -1109,6 +1184,25 @@ pub fn get_lang_bundle(langs: &Langs, requested: &str) -> LangBundle {
     bundle
 }
 
+pub fn get_faktory_custom() -> std::collections::HashMap<String, serde_json::Value> {
+    use opentelemetry::propagation::TextMapPropagator;
+    use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+    let context = tracing::Span::current().context();
+
+    let mut extra: std::collections::HashMap<String, String> = Default::default();
+    let propagator = opentelemetry::sdk::propagation::TraceContextPropagator::new();
+    propagator.inject_context(&context, &mut extra);
+
+    extra
+        .into_iter()
+        .filter_map(|(key, value)| match serde_json::to_value(value) {
+            Ok(val) => Some((key, val)),
+            _ => None,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     fn get_finder() -> linkify::LinkFinder {
@@ -1234,7 +1328,11 @@ mod tests {
         let links: Vec<&str> = links.into_iter().map(|link| link.as_str()).collect();
 
         let sites: Vec<foxbot_sites::BoxedSite> = vec![
-            Box::new(foxbot_sites::E621::new("".into(), "".into())),
+            Box::new(foxbot_sites::E621::new(
+                foxbot_sites::E621Host::E621,
+                "".into(),
+                "".into(),
+            )),
             Box::new(foxbot_sites::Mastodon::default()),
         ];
 
@@ -1250,5 +1348,63 @@ mod tests {
             !super::link_was_seen(&lock, &links, "furaffinity.net/view/37137966"),
             "unseen link was found"
         );
+    }
+
+    fn matches_are_sorted(matches: &[fuzzysearch::File]) -> bool {
+        matches.windows(2).all(|w| w[0].site_id <= w[1].site_id)
+    }
+
+    #[test]
+    fn test_sort_results_by() {
+        use super::sort_results_by;
+        use foxbot_models::Sites;
+
+        let order = Sites::default_order();
+
+        let mut results = vec![
+            fuzzysearch::File {
+                site_id: 3,
+                distance: Some(2),
+                site_info: Some(fuzzysearch::SiteInfo::Twitter),
+                ..Default::default()
+            },
+            fuzzysearch::File {
+                site_id: 2,
+                distance: Some(0),
+                site_info: Some(fuzzysearch::SiteInfo::Twitter),
+                ..Default::default()
+            },
+            fuzzysearch::File {
+                site_id: 1,
+                distance: Some(0),
+                site_info: Some(fuzzysearch::SiteInfo::Weasyl),
+                ..Default::default()
+            },
+        ];
+        sort_results_by(&order, &mut results, false);
+        assert!(matches_are_sorted(&results));
+
+        let mut results = vec![
+            fuzzysearch::File {
+                site_id: 3,
+                distance: Some(2),
+                site_info: Some(fuzzysearch::SiteInfo::Twitter),
+                ..Default::default()
+            },
+            fuzzysearch::File {
+                site_id: 2,
+                distance: Some(0),
+                site_info: Some(fuzzysearch::SiteInfo::Twitter),
+                ..Default::default()
+            },
+            fuzzysearch::File {
+                site_id: 1,
+                distance: Some(2),
+                site_info: Some(fuzzysearch::SiteInfo::Weasyl),
+                ..Default::default()
+            },
+        ];
+        sort_results_by(&order, &mut results, true);
+        assert!(matches_are_sorted(&results));
     }
 }

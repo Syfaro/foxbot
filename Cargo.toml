@@ -5,8 +5,11 @@ members = [
     "foxbot-sites",
     "foxbot-models",
     "foxbot-utils",
-    "foxbot-channel-worker"
+    "foxbot-background-worker"
 ]
+
+[profile.dev.package."*"]
+opt-level = 2
 
 [profile.release]
 lto = true

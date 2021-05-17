@@ -11,9 +11,10 @@ mod inline_handler;
 mod permissions;
 mod photo;
 pub mod settings;
+mod subscribe;
 mod twitter;
 
-use crate::MessageHandler;
+use crate::{MessageHandler, ServiceData};
 pub use channel_photo::ChannelPhotoHandler;
 pub use chosen_inline_handler::ChosenInlineHandler;
 pub use commands::CommandHandler;
@@ -25,6 +26,7 @@ pub use inline_handler::InlineHandler;
 pub use permissions::PermissionHandler;
 pub use photo::PhotoHandler;
 pub use settings::SettingsHandler;
+pub use subscribe::SubscribeHandler;
 pub use twitter::TwitterHandler;
 
 #[derive(Debug, PartialEq)]
@@ -48,4 +50,13 @@ pub trait Handler: Send + Sync {
         update: &tgbotapi::Update,
         command: Option<&tgbotapi::Command>,
     ) -> anyhow::Result<Status>;
+
+    /// Method called for every service update.
+    async fn handle_service(
+        &self,
+        _handler: &MessageHandler,
+        _service: &ServiceData,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
