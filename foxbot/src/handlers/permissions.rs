@@ -90,7 +90,7 @@ async fn handle_chat_member(
     )
     .await
     {
-        Ok(Some(is_admin)) => {
+        Ok(is_admin) => {
             tracing::debug!(
                 user_id = chat_member.new_chat_member.user.id,
                 is_admin,
@@ -104,12 +104,6 @@ async fn handle_chat_member(
                     tracing::error!("Unable to update requested data: {:?}", err);
                 }
             }
-        }
-        Ok(None) => {
-            tracing::warn!(
-                user_id = chat_member.new_chat_member.user.id,
-                "Update was out of date, ignoring"
-            );
         }
         Err(err) => {
             tracing::error!("Unable to save permission change: {:?}", err);

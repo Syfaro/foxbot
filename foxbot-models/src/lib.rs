@@ -88,7 +88,8 @@ impl UserConfig {
         sqlx::query!(
             "SELECT value
             FROM user_config
-            WHERE user_config.account_id = lookup_account_by_telegram_id($1) AND name = $2",
+            WHERE user_config.account_id = lookup_account_by_telegram_id($1) AND name = $2
+            ORDER BY updated_at DESC LIMIT 1",
             user_id,
             key.as_str()
         )
@@ -109,9 +110,7 @@ impl UserConfig {
 
         sqlx::query!(
             "INSERT INTO user_config (account_id, name, value)
-            VALUES (lookup_account_by_telegram_id($1), $2, $3)
-            ON CONFLICT (account_id, name)
-            DO UPDATE SET value = EXCLUDED.value",
+            VALUES (lookup_account_by_telegram_id($1), $2, $3)",
             user_id,
             key,
             value
@@ -150,7 +149,8 @@ impl GroupConfig {
         sqlx::query!(
             "SELECT value
             FROM group_config
-            WHERE group_config.chat_id = lookup_chat_by_telegram_id($1) AND name = $2",
+            WHERE group_config.chat_id = lookup_chat_by_telegram_id($1) AND name = $2
+            ORDER BY updated_at DESC LIMIT 1",
             chat_id,
             name.as_str()
         )
@@ -170,29 +170,10 @@ impl GroupConfig {
 
         sqlx::query!(
             "INSERT INTO group_config (chat_id, name, value) VALUES
-                (lookup_chat_by_telegram_id($1), $2, $3)
-            ON CONFLICT (chat_id, name)
-                DO UPDATE SET value = EXCLUDED.value",
+                (lookup_chat_by_telegram_id($1), $2, $3)",
             chat_id,
             key.as_str(),
             value
-        )
-        .execute(conn)
-        .await?;
-
-        Ok(())
-    }
-
-    pub async fn delete(
-        conn: &sqlx::Pool<sqlx::Postgres>,
-        key: GroupConfigKey,
-        chat_id: i64,
-    ) -> anyhow::Result<()> {
-        sqlx::query!(
-            "DELETE FROM group_config
-            WHERE chat_id = lookup_chat_by_telegram_id($1) AND name = $2",
-            chat_id,
-            key.as_str()
         )
         .execute(conn)
         .await?;
@@ -648,15 +629,14 @@ impl ChatAdmin {
     /// Update a chat's known administrators from a ChatMemberUpdated event.
     ///
     /// Will discard updates that are older than the newest item in the
-    /// database. Returns if the value was updated, and if it was, if the user
-    /// is currently an admin.
+    /// database. Returns if the user is currently an admin.
     pub async fn update_chat(
         conn: &sqlx::Pool<sqlx::Postgres>,
         status: &tgbotapi::ChatMemberStatus,
         user_id: i64,
         chat_id: i64,
         date: i32,
-    ) -> anyhow::Result<Option<bool>> {
+    ) -> anyhow::Result<bool> {
         use tgbotapi::ChatMemberStatus::*;
 
         let is_admin = matches!(status, Administrator | Creator);
@@ -664,22 +644,15 @@ impl ChatAdmin {
         // It's possible updates get processed out of order. We only want to
         // update the table when the update occured more recently than the value
         // in the database.
-        let is_admin = sqlx::query_scalar!(
-            "WITH data (account_id, chat_id, is_admin, last_update) AS (
-                VALUES (lookup_account_by_telegram_id($1::bigint), lookup_chat_by_telegram_id($2::bigint), $3::boolean, to_timestamp($4::int))
-            )
-            INSERT INTO chat_administrator
-            SELECT data.account_id, data.chat_id, data.is_admin, data.last_update FROM data
-            LEFT JOIN chat_administrator ON data.account_id = chat_administrator.account_id AND data.chat_id = chat_administrator.chat_id
-            WHERE chat_administrator.last_update IS NULL OR data.last_update > chat_administrator.last_update
-            ON CONFLICT (account_id, chat_id) DO UPDATE SET is_admin = EXCLUDED.is_admin, last_update = EXCLUDED.last_update
-            RETURNING is_admin",
+        sqlx::query!(
+            "INSERT INTO chat_administrator (account_id, chat_id, is_admin, updated_at)
+                VALUES (lookup_account_by_telegram_id($1), lookup_chat_by_telegram_id($2), $3, to_timestamp($4::int))",
             user_id,
             chat_id,
             is_admin,
             date,
         )
-        .fetch_optional(conn)
+        .execute(conn)
         .await?;
 
         Ok(is_admin)
@@ -694,7 +667,8 @@ impl ChatAdmin {
         let is_admin = sqlx::query_scalar!(
             "SELECT is_admin
             FROM chat_administrator
-            WHERE account_id = lookup_account_by_telegram_id($1) AND chat_id = lookup_chat_by_telegram_id($2)",
+            WHERE account_id = lookup_account_by_telegram_id($1) AND chat_id = lookup_chat_by_telegram_id($2)
+            ORDER BY updated_at DESC LIMIT 1",
             user_id,
             chat_id
         )
