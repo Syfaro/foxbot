@@ -62,50 +62,6 @@ impl Sites {
     }
 }
 
-struct Chat;
-
-impl Chat {
-    async fn get(conn: &sqlx::Pool<sqlx::Postgres>, telegram_id: i64) -> anyhow::Result<i32> {
-        if let Some(id) =
-            sqlx::query_scalar!("SELECT id FROM chat WHERE telegram_id = $1", telegram_id)
-                .fetch_optional(conn)
-                .await?
-        {
-            return Ok(id);
-        }
-
-        let id = sqlx::query_scalar!(
-            "INSERT INTO chat (telegram_id) VALUES ($1) RETURNING id",
-            telegram_id
-        )
-        .fetch_one(conn)
-        .await?;
-        Ok(id)
-    }
-}
-
-struct Account;
-
-impl Account {
-    async fn get(conn: &sqlx::Pool<sqlx::Postgres>, telegram_id: i64) -> anyhow::Result<i32> {
-        if let Some(id) =
-            sqlx::query_scalar!("SELECT id FROM account WHERE telegram_id = $1", telegram_id)
-                .fetch_optional(conn)
-                .await?
-        {
-            return Ok(id);
-        }
-
-        let id = sqlx::query_scalar!(
-            "INSERT INTO account (telegram_id) VALUES ($1) RETURNING id",
-            telegram_id
-        )
-        .fetch_one(conn)
-        .await?;
-        Ok(id)
-    }
-}
-
 pub struct UserConfig;
 
 pub enum UserConfigKey {
@@ -132,8 +88,7 @@ impl UserConfig {
         sqlx::query!(
             "SELECT value
             FROM user_config
-            JOIN account ON account.id = user_config.user_id
-            WHERE account.telegram_id = $1 AND name = $2",
+            WHERE user_config.account_id = lookup_account_by_telegram_id($1) AND name = $2",
             user_id,
             key.as_str()
         )
@@ -152,14 +107,11 @@ impl UserConfig {
     ) -> anyhow::Result<()> {
         let value = serde_json::to_value(&data)?;
 
-        let user_id = Account::get(&conn, user_id).await?;
-
         sqlx::query!(
-            "INSERT INTO user_config (user_id, name, value)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (user_id, name)
-            DO
-                UPDATE SET value = EXCLUDED.value",
+            "INSERT INTO user_config (account_id, name, value)
+            VALUES (lookup_account_by_telegram_id($1), $2, $3)
+            ON CONFLICT (account_id, name)
+            DO UPDATE SET value = EXCLUDED.value",
             user_id,
             key,
             value
@@ -198,8 +150,7 @@ impl GroupConfig {
         sqlx::query!(
             "SELECT value
             FROM group_config
-            JOIN chat ON chat.id = group_config.chat_id
-            WHERE chat.telegram_id = $1 AND name = $2",
+            WHERE group_config.chat_id = lookup_chat_by_telegram_id($1) AND name = $2",
             chat_id,
             name.as_str()
         )
@@ -217,11 +168,9 @@ impl GroupConfig {
     ) -> anyhow::Result<()> {
         let value = serde_json::to_value(data)?;
 
-        let chat_id = Chat::get(&conn, chat_id).await?;
-
         sqlx::query!(
             "INSERT INTO group_config (chat_id, name, value) VALUES
-                ($1, $2, $3)
+                (lookup_chat_by_telegram_id($1), $2, $3)
             ON CONFLICT (chat_id, name)
                 DO UPDATE SET value = EXCLUDED.value",
             chat_id,
@@ -239,11 +188,9 @@ impl GroupConfig {
         key: GroupConfigKey,
         chat_id: i64,
     ) -> anyhow::Result<()> {
-        let chat_id = Chat::get(&conn, chat_id).await?;
-
         sqlx::query!(
             "DELETE FROM group_config
-            WHERE chat_id = $1 AND name = $2",
+            WHERE chat_id = lookup_chat_by_telegram_id($1) AND name = $2",
             chat_id,
             key.as_str()
         )
@@ -280,8 +227,7 @@ impl Twitter {
             TwitterAccount,
             "SELECT consumer_key, consumer_secret
             FROM twitter_account
-            JOIN account ON account.id = twitter_account.user_id
-            WHERE account.telegram_id = $1",
+            WHERE twitter_account.account_id = lookup_account_by_telegram_id($1)",
             user_id
         )
         .fetch_optional(conn)
@@ -299,7 +245,7 @@ impl Twitter {
             TwitterRequest,
             "SELECT account.telegram_id user_id, request_key, request_secret
             FROM twitter_auth
-            JOIN account ON account.id = twitter_auth.user_id
+            JOIN account ON account.id = twitter_auth.account_id
             WHERE request_key = $1",
             request_key
         )
@@ -322,25 +268,23 @@ impl Twitter {
     ) -> anyhow::Result<()> {
         let mut tx = conn.begin().await?;
 
-        let user_id = Account::get(&conn, user_id).await?;
-
         sqlx::query!(
             "DELETE FROM twitter_account
-            WHERE user_id = $1",
+            WHERE account_id = lookup_account_by_telegram_id($1)",
             user_id
         )
         .execute(&mut tx)
         .await?;
         sqlx::query!(
             "DELETE FROM twitter_auth
-            WHERE user_id = $1",
+            WHERE account_id = lookup_account_by_telegram_id($1)",
             user_id
         )
         .execute(&mut tx)
         .await?;
         sqlx::query!(
-            "INSERT INTO twitter_account (user_id, consumer_key, consumer_secret) VALUES
-                ($1, $2, $3)",
+            "INSERT INTO twitter_account (account_id, consumer_key, consumer_secret) VALUES
+                (lookup_account_by_telegram_id($1), $2, $3)",
             user_id,
             creds.consumer_key,
             creds.consumer_secret
@@ -361,18 +305,16 @@ impl Twitter {
     ) -> anyhow::Result<()> {
         let mut tx = conn.begin().await?;
 
-        let user_id = Account::get(&conn, user_id).await?;
-
         sqlx::query!(
             "DELETE FROM twitter_auth
-            WHERE user_id = $1",
+            WHERE account_id = lookup_account_by_telegram_id($1)",
             &user_id
         )
         .execute(&mut tx)
         .await?;
         sqlx::query!(
-            "INSERT INTO twitter_auth (user_id, request_key, request_secret) VALUES
-                ($1, $2, $3)",
+            "INSERT INTO twitter_auth (account_id, request_key, request_secret) VALUES
+                (lookup_account_by_telegram_id($1), $2, $3)",
             user_id,
             request_key,
             request_secret
@@ -389,11 +331,9 @@ impl Twitter {
         conn: &sqlx::Pool<sqlx::Postgres>,
         user_id: i64,
     ) -> anyhow::Result<()> {
-        let user_id = Account::get(&conn, user_id).await?;
-
         sqlx::query!(
             "DELETE FROM twitter_account
-            WHERE user_id = $1",
+            WHERE account_id = lookup_account_by_telegram_id($1)",
             user_id
         )
         .execute(conn)
@@ -571,11 +511,9 @@ impl Video {
         chat_id: i64,
         message_id: i32,
     ) -> anyhow::Result<()> {
-        let chat_id = Chat::get(&conn, chat_id).await?;
-
         sqlx::query!(
             "INSERT INTO video_job_message (video_id, chat_id, message_id) VALUES
-                ($1, $2, $3)",
+                ($1, lookup_chat_by_telegram_id($2), $3)",
             id,
             chat_id,
             message_id
@@ -591,14 +529,28 @@ impl Video {
         conn: &sqlx::Pool<sqlx::Postgres>,
         id: i32,
     ) -> anyhow::Result<Vec<(i64, i32)>> {
+        // Dirty hack for making a best guess which chat ID is the latest.
+        // Telegram's supergroups always seem to have higher IDs than the group
+        // they were migrated from. This should have no impact on chats that
+        // have never been migrated.
+        // I don't think this actually matters because associated messages
+        // should always be private messages.
+        let chat_id = sqlx::query_scalar!(
+            "SELECT chat_telegram.telegram_id
+            FROM chat_telegram
+            ORDER BY abs(chat_telegram.telegram_id) DESC
+            LIMIT 1"
+        )
+        .fetch_one(conn)
+        .await?;
+
         let ids = sqlx::query!(
-            "SELECT chat.telegram_id chat_id, message_id
+            "SELECT message_id
             FROM video_job_message
-            JOIN chat ON chat.id = video_job_message.chat_id
             WHERE video_id = $1",
             id
         )
-        .map(|row| (row.chat_id, row.message_id))
+        .map(|row| (chat_id, row.message_id))
         .fetch_all(conn)
         .await?;
 
@@ -676,12 +628,10 @@ impl Permissions {
     ) -> anyhow::Result<()> {
         let data = serde_json::to_value(&my_chat_member.new_chat_member).unwrap();
 
-        let chat_id = Chat::get(&conn, my_chat_member.chat.id).await?;
-
         sqlx::query!(
             "INSERT INTO permission (chat_id, updated_at, permissions) VALUES
-                ($1, to_timestamp($2::int), $3)",
-            chat_id,
+                (lookup_chat_by_telegram_id($1), to_timestamp($2::int), $3)",
+            my_chat_member.chat.id,
             my_chat_member.date,
             data
         )
@@ -710,7 +660,8 @@ impl Subscriptions {
         photo_id: Option<&str>,
     ) -> anyhow::Result<()> {
         sqlx::query!(
-            "INSERT INTO source_notification (user_id, hash, message_id, photo_id) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+            "INSERT INTO source_notification (account_id, hash, message_id, photo_id)
+                VALUES (lookup_account_by_telegram_id($1), $2, $3, $4) ON CONFLICT DO NOTHING",
             user_id,
             hash,
             message_id,
@@ -728,7 +679,8 @@ impl Subscriptions {
         hash: i64,
     ) -> anyhow::Result<()> {
         sqlx::query!(
-            "DELETE FROM source_notification WHERE user_id = $1 AND hash <@ ($2, 0)",
+            "DELETE FROM source_notification
+            WHERE account_id = lookup_account_by_telegram_id($1) AND hash <@ ($2, 0)",
             user_id,
             hash
         )
@@ -742,11 +694,21 @@ impl Subscriptions {
         conn: &sqlx::Pool<sqlx::Postgres>,
         hash: i64,
     ) -> anyhow::Result<Vec<Subscription>> {
-        let subscriptions = sqlx::query_as!(
-            Subscription,
-            "SELECT user_id, hash, message_id, photo_id FROM source_notification WHERE hash <@ ($1, 3)",
+        let subscriptions = sqlx::query!(
+            "SELECT account.telegram_id user_id, hash, message_id, photo_id
+            FROM source_notification
+            JOIN account ON account.id = lookup_account_by_telegram_id(source_notification.account_id)
+            WHERE hash <@ ($1, 3)",
             hash
         )
+        .map(|row| {
+            Subscription {
+                user_id: row.user_id.unwrap(),
+                hash: row.hash.unwrap(),
+                message_id: row.message_id,
+                photo_id: row.photo_id,
+            }
+        })
         .fetch_all(conn)
         .await?;
 
