@@ -1,4 +1,5 @@
 use anyhow::Context;
+use fuzzysearch::SiteInfo;
 use std::time::Instant;
 use std::{collections::HashSet, str::FromStr, sync::Arc};
 use tgbotapi::FileType;
@@ -296,8 +297,11 @@ pub fn get_message(
     name: &str,
     args: Option<fluent::FluentArgs>,
 ) -> Result<String, Vec<fluent::FluentError>> {
-    let msg = bundle.get_message(name).expect("Message doesn't exist");
-    let pattern = msg.value.expect("Message has no value");
+    let msg = bundle
+        .get_message(name)
+        .with_context(|| format!("attempting to get message bundle: {}", name))
+        .expect("message doesn't exist");
+    let pattern = msg.value.expect("message has no value");
     let mut errors = vec![];
     let value = bundle.format_pattern(&pattern, args.as_ref(), &mut errors);
     if errors.is_empty() {
@@ -407,9 +411,14 @@ pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (S
             let mut args = fluent::FluentArgs::new();
             args.insert("link", sub.url().into());
             args.insert("distance", sub.distance.unwrap_or(10).into());
-            let rating = get_message(&bundle, get_rating_bundle_name(&sub.rating), None).unwrap();
-            args.insert("rating", rating.into());
-            s.push_str(&get_message(&bundle, "alternate-distance", Some(args)).unwrap());
+            let message = if let Some(rating) = get_rating_bundle_name(&sub.rating) {
+                let rating = get_message(&bundle, rating, None).unwrap();
+                args.insert("rating", rating.into());
+                get_message(&bundle, "alternate-distance", Some(args)).unwrap()
+            } else {
+                get_message(&bundle, "alternate-distance-unknown", Some(args)).unwrap()
+            };
+            s.push_str(&message);
             s.push('\n');
             used_hashes.push(sub.hash.unwrap());
         }
@@ -563,6 +572,17 @@ pub async fn lookup_single_hash(
             .unwrap()
             .partial_cmp(&b.distance.unwrap())
             .unwrap()
+    });
+
+    // Twitter general rating is probably bad, remove it.
+    matches.iter_mut().for_each(|m| {
+        if !matches!(m.site_info, Some(SiteInfo::Twitter)) {
+            return;
+        }
+
+        if matches!(m.rating, Some(fuzzysearch::Rating::General)) {
+            m.rating = None;
+        }
     });
 
     Ok(matches)
@@ -877,11 +897,13 @@ pub async fn can_delete_in_chat(
 }
 
 /// Get the name of the localization for a given rating, or if it's unknown.
-pub fn get_rating_bundle_name(rating: &Option<fuzzysearch::Rating>) -> &'static str {
+pub fn get_rating_bundle_name(rating: &Option<fuzzysearch::Rating>) -> Option<&'static str> {
     match rating {
-        Some(fuzzysearch::Rating::General) => "rating-general",
-        Some(fuzzysearch::Rating::Mature) | Some(fuzzysearch::Rating::Adult) => "rating-adult",
-        None => "rating-unknown",
+        Some(fuzzysearch::Rating::General) => Some("rating-general"),
+        Some(fuzzysearch::Rating::Mature) | Some(fuzzysearch::Rating::Adult) => {
+            Some("rating-adult")
+        }
+        None => None,
     }
 }
 
@@ -906,11 +928,14 @@ pub fn source_reply(matches: &[fuzzysearch::File], bundle: Bundle<'_>) -> String
         let mut args = fluent::FluentArgs::new();
         args.insert("link", first.url().into());
 
-        let rating = get_rating_bundle_name(&first.rating);
-        let rating = get_message(&bundle, rating, None).unwrap();
-        args.insert("rating", rating.into());
+        if let Some(rating) = get_rating_bundle_name(&first.rating) {
+            let rating = get_message(&bundle, rating, None).unwrap();
+            args.insert("rating", rating.into());
 
-        get_message(&bundle, "reverse-result", Some(args)).unwrap()
+            get_message(&bundle, "reverse-result", Some(args)).unwrap()
+        } else {
+            get_message(&bundle, "reverse-result-unknown", Some(args)).unwrap()
+        }
     } else {
         let mut items = Vec::with_capacity(2 + similar.len());
 
@@ -921,11 +946,15 @@ pub fn source_reply(matches: &[fuzzysearch::File], bundle: Bundle<'_>) -> String
             let mut args = fluent::FluentArgs::new();
             args.insert("link", file.url().into());
 
-            let rating = get_rating_bundle_name(&file.rating);
-            let rating = get_message(&bundle, rating, None).unwrap();
-            args.insert("rating", rating.into());
+            let result = if let Some(rating) = get_rating_bundle_name(&file.rating) {
+                let rating = get_message(&bundle, rating, None).unwrap();
+                args.insert("rating", rating.into());
 
-            let result = get_message(&bundle, "reverse-multiple-item", Some(args)).unwrap();
+                get_message(&bundle, "reverse-multiple-item", Some(args)).unwrap()
+            } else {
+                get_message(&bundle, "reverse-multiple-item-unknown", Some(args)).unwrap()
+            };
+
             items.push(result);
         }
 
@@ -1299,7 +1328,11 @@ mod tests {
         let links: Vec<&str> = links.into_iter().map(|link| link.as_str()).collect();
 
         let sites: Vec<foxbot_sites::BoxedSite> = vec![
-            Box::new(foxbot_sites::E621::new("".into(), "".into())),
+            Box::new(foxbot_sites::E621::new(
+                foxbot_sites::E621Host::E621,
+                "".into(),
+                "".into(),
+            )),
             Box::new(foxbot_sites::Mastodon::default()),
         ];
 

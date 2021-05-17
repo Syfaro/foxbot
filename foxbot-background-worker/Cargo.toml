@@ -1,11 +1,12 @@
 [package]
-name = "foxbot-channel-worker"
+name = "foxbot-background-worker"
 version = "0.2.0"
 authors = ["Syfaro <syfaro@huefox.com>"]
 edition = "2018"
 
 [dependencies]
 anyhow = "1"
+thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = "0.2"
 opentelemetry = { version = "0.13", features = ["rt-tokio"] }

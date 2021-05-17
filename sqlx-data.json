@@ -1,5 +1,18 @@
 {
   "db": "PostgreSQL",
+  "025d1324dfb3c20961a5407d1d55fd66e56f87cda3424e7290d4b77ea577ffa1": {
+    "query": "DELETE FROM source_notification WHERE user_id = $1 AND hash <@ ($2, 0)",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Int8"
+        ]
+      },
+      "nullable": []
+    }
+  },
   "2d0eb75f282ed83d99e5ef77e8344bb6727742454c9f42b9cf1a9ceab5988e90": {
     "query": "SELECT id, processed, source, url, mp4_url, thumb_url, display_url, display_name, job_id\n            FROM videos\n            WHERE source = $1",
     "describe": {
@@ -123,6 +136,44 @@
       "nullable": [
         false,
         false
+      ]
+    }
+  },
+  "43d65de2bdb6dd755608567b899f48a1d0cc67b4dfaed9800e6545b4092785a5": {
+    "query": "SELECT user_id, hash, message_id, photo_id FROM source_notification WHERE hash <@ ($1, 3)",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "user_id",
+          "type_info": "Int8"
+        },
+        {
+          "ordinal": 1,
+          "name": "hash",
+          "type_info": "Int8"
+        },
+        {
+          "ordinal": 2,
+          "name": "message_id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 3,
+          "name": "photo_id",
+          "type_info": "Text"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Int8"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        true,
+        true
       ]
     }
   },
@@ -568,6 +619,21 @@
         "Left": [
           "Text",
           "Int8"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "eac42feff999babcef24e0a71405adf63be44bf6a14f7bdbda7a093d285b7df1": {
+    "query": "INSERT INTO source_notification (user_id, hash, message_id, photo_id) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Int8",
+          "Int4",
+          "Text"
         ]
       },
       "nullable": []
