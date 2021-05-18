@@ -44,21 +44,58 @@ impl Handler for PhotoHandler {
         );
 
         let best_photo = find_best_photo(&photos).unwrap();
-        let mut matches = match_image(
+        let (hash, mut matches) = match_image(
             &handler.bot,
             &handler.conn,
             &handler.fapi,
             &best_photo,
             Some(3),
         )
-        .await?
-        .1;
+        .await?;
         sort_results(
             &handler.conn,
             message.from.as_ref().unwrap().id,
             &mut matches,
         )
         .await?;
+
+        // Typically the response for no sources is handled by the source_reply
+        // function, but we need custom handling to allow for subscribing to
+        // updates on this hash.
+
+        if matches.is_empty() {
+            let (text, subscribe) = handler
+                .get_fluent_bundle(
+                    message.from.as_ref().unwrap().language_code.as_deref(),
+                    |bundle| {
+                        (
+                            get_message(&bundle, "reverse-no-results", None).unwrap(),
+                            get_message(&bundle, "reverse-subscribe", None).unwrap(),
+                        )
+                    },
+                )
+                .await;
+
+            handler
+                .make_request(&SendMessage {
+                    chat_id: message.chat_id(),
+                    text,
+                    reply_to_message_id: Some(message.message_id),
+                    reply_markup: Some(tgbotapi::requests::ReplyMarkup::InlineKeyboardMarkup(
+                        tgbotapi::InlineKeyboardMarkup {
+                            inline_keyboard: vec![vec![tgbotapi::InlineKeyboardButton {
+                                text: subscribe,
+                                callback_data: Some(format!("notify-{}", hash)),
+                                ..Default::default()
+                            }]],
+                        },
+                    )),
+                    ..Default::default()
+                })
+                .await?;
+
+            return Ok(Completed);
+        }
 
         let text = handler
             .get_fluent_bundle(

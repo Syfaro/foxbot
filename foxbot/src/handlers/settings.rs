@@ -138,7 +138,7 @@ async fn order(
 
         UserConfig::set(
             &handler.conn,
-            "site-sort-order",
+            UserConfigKey::SiteSortOrder,
             callback_query.from.id,
             sites,
         )
@@ -264,12 +264,18 @@ async fn sort_order_keyboard(
     let row: Option<Vec<String>> = UserConfig::get(&conn, UserConfigKey::SiteSortOrder, user_id)
         .await
         .context("unable to query user sort order")?;
-    let sites = match row {
+    let mut sites = match row {
         Some(row) => row.iter().map(|item| item.parse().unwrap()).collect(),
         None => Sites::default_order(),
     };
 
     let mut buttons = vec![];
+
+    // If the available sites has changed, reset ordering to add new items.
+    if sites.len() != foxbot_models::Sites::len() {
+        sites = foxbot_models::Sites::default_order();
+        UserConfig::delete(&conn, UserConfigKey::SiteSortOrder, user_id).await?;
+    }
 
     for (idx, site) in sites.iter().enumerate() {
         let up = if idx == 0 {

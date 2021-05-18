@@ -189,6 +189,38 @@ fn load_env() {
 #[cfg(not(feature = "env"))]
 fn load_env() {}
 
+#[derive(Debug)]
+pub enum ServiceData {
+    VideoProgress {
+        display_name: String,
+        progress: String,
+    },
+    VideoComplete {
+        display_name: String,
+        video_url: String,
+        thumb_url: String,
+    },
+    TwitterVerified {
+        token: String,
+        verifier: String,
+    },
+    NewHash {
+        hash: i64,
+    },
+}
+
+#[derive(Debug)]
+pub enum HandlerUpdate {
+    Telegram(Box<tgbotapi::Update>),
+    Service(ServiceData),
+}
+
+impl From<Box<tgbotapi::Update>> for HandlerUpdate {
+    fn from(update: Box<tgbotapi::Update>) -> Self {
+        HandlerUpdate::Telegram(update)
+    }
+}
+
 #[tokio::main]
 async fn main() {
     load_env();
@@ -282,6 +314,7 @@ async fn main() {
         Box::new(handlers::ErrorReplyHandler::new()),
         Box::new(handlers::SettingsHandler),
         Box::new(handlers::TwitterHandler),
+        Box::new(handlers::SubscribeHandler),
         Box::new(handlers::ErrorCleanup),
         Box::new(handlers::PermissionHandler),
     ];
@@ -375,7 +408,15 @@ async fn main() {
             .expect("Missing WEBHOOK_ENDPOINT");
         let set_webhook = SetWebhook {
             url: webhook_endpoint.to_owned(),
-            ..Default::default()
+            allowed_updates: Some(vec![
+                "message".into(),
+                "channel_post".into(),
+                "inline_query".into(),
+                "chosen_inline_result".into(),
+                "callback_query".into(),
+                "my_chat_member".into(),
+                "chat_member".into(),
+            ]),
         };
         if let Err(e) = bot.make_request(&set_webhook).await {
             panic!("unable to set webhook: {:?}", e);
@@ -411,7 +452,7 @@ async fn main() {
 
                 async move {
                     tokio::spawn(async move {
-                        handler.handle_update(*inline_query).instrument(span).await;
+                        handler.handle_update(inline_query).instrument(span).await;
                     })
                     .await
                     .unwrap();
@@ -427,7 +468,7 @@ async fn main() {
 
             async move {
                 tokio::spawn(async move {
-                    handler.handle_update(*update).instrument(span).await;
+                    handler.handle_update(update).instrument(span).await;
                 })
                 .await
                 .unwrap();
@@ -443,9 +484,10 @@ async fn main() {
 /// It spawns a handler for each request.
 async fn handle_request(
     req: hyper::Request<hyper::Body>,
-    update_tx: tokio::sync::mpsc::Sender<(Box<tgbotapi::Update>, tracing::Span)>,
-    inline_tx: tokio::sync::mpsc::Sender<(Box<tgbotapi::Update>, tracing::Span)>,
+    update_tx: tokio::sync::mpsc::Sender<(HandlerUpdate, tracing::Span)>,
+    inline_tx: tokio::sync::mpsc::Sender<(HandlerUpdate, tracing::Span)>,
     secret: &str,
+    fuzzysearch_secret: &str,
     video_secret: &str,
     templates: Arc<handlebars::Handlebars<'_>>,
 ) -> hyper::Result<hyper::Response<hyper::Body>> {
@@ -478,15 +520,54 @@ async fn handle_request(
             let update = Box::new(update);
             if update.inline_query.is_some() {
                 inline_tx
-                    .send((update, tracing::Span::current()))
+                    .send((update.into(), tracing::Span::current()))
                     .await
                     .unwrap();
             } else {
                 update_tx
-                    .send((update, tracing::Span::current()))
+                    .send((update.into(), tracing::Span::current()))
                     .await
                     .unwrap();
             }
+
+            Ok(Response::new(Body::from("✓")))
+        }
+        (&hyper::Method::POST, path) if path == fuzzysearch_secret => {
+            let body = req.into_body();
+            let bytes = hyper::body::to_bytes(body).await.unwrap();
+
+            let data: serde_json::Value = match serde_json::from_slice(&bytes) {
+                Ok(data) => data,
+                Err(err) => {
+                    tracing::error!("error decoding incoming hash data: {:?}", err);
+                    let mut resp = Response::default();
+                    *resp.status_mut() = StatusCode::BAD_REQUEST;
+                    return Ok(resp);
+                }
+            };
+
+            let hash = if let Some(hash) = data
+                .as_object()
+                .and_then(|obj| obj.get("hash"))
+                .and_then(|hash| hash.as_str())
+                .and_then(|hash| {
+                    let mut data = [0u8; 8];
+                    base64::decode_config_slice(&hash, base64::STANDARD, &mut data).ok();
+                    Some(data)
+                }) {
+                i64::from_be_bytes(hash)
+            } else {
+                tracing::error!("incoming hash was missing data: {:?}", data);
+                return Ok(Response::new(Body::from("x")));
+            };
+
+            update_tx
+                .send((
+                    HandlerUpdate::Service(ServiceData::NewHash { hash }),
+                    tracing::Span::current(),
+                ))
+                .await
+                .unwrap();
 
             Ok(Response::new(Body::from("✓")))
         }
@@ -510,19 +591,9 @@ async fn handle_request(
 
                 update_tx
                     .send((
-                        Box::new(tgbotapi::Update {
-                            message: Some(tgbotapi::Message {
-                                text: Some(format!("/videoprogress {} {}", display_name, progress)),
-                                entities: Some(vec![tgbotapi::MessageEntity {
-                                    entity_type: tgbotapi::MessageEntityType::BotCommand,
-                                    offset: 0,
-                                    length: 14,
-                                    url: None,
-                                    user: None,
-                                }]),
-                                ..Default::default()
-                            }),
-                            ..Default::default()
+                        HandlerUpdate::Service(ServiceData::VideoProgress {
+                            display_name: display_name.to_owned(),
+                            progress: progress.to_owned(),
                         }),
                         tracing::Span::current(),
                     ))
@@ -555,22 +626,10 @@ async fn handle_request(
 
                 update_tx
                     .send((
-                        Box::new(tgbotapi::Update {
-                            message: Some(tgbotapi::Message {
-                                text: Some(format!(
-                                    "/videocomplete {} {} {}",
-                                    display_name, video_url, thumb_url
-                                )),
-                                entities: Some(vec![tgbotapi::MessageEntity {
-                                    entity_type: tgbotapi::MessageEntityType::BotCommand,
-                                    offset: 0,
-                                    length: 14,
-                                    url: None,
-                                    user: None,
-                                }]),
-                                ..Default::default()
-                            }),
-                            ..Default::default()
+                        HandlerUpdate::Service(ServiceData::VideoComplete {
+                            display_name: display_name.to_owned(),
+                            video_url: video_url.to_owned(),
+                            thumb_url: thumb_url.to_owned(),
                         }),
                         tracing::Span::current(),
                     ))
@@ -608,23 +667,11 @@ async fn handle_request(
                 }
             };
 
-            // This is extremely stupid but it works without having to pull
-            // a handler into HTTP requests
             update_tx
                 .send((
-                    Box::new(tgbotapi::Update {
-                        message: Some(tgbotapi::Message {
-                            text: Some(format!("/twitterverify {} {}", token, verifier)),
-                            entities: Some(vec![tgbotapi::MessageEntity {
-                                entity_type: tgbotapi::MessageEntityType::BotCommand,
-                                offset: 0,
-                                length: 14,
-                                url: None,
-                                user: None,
-                            }]),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
+                    HandlerUpdate::Service(ServiceData::TwitterVerified {
+                        token: token.to_owned(),
+                        verifier: verifier.to_owned(),
                     }),
                     tracing::Span::current(),
                 ))
@@ -649,8 +696,8 @@ async fn handle_request(
 
 /// Start a web server to handle webhooks and pass updates to [handle_request].
 async fn receive_webhook(
-    update_tx: tokio::sync::mpsc::Sender<(Box<tgbotapi::Update>, tracing::Span)>,
-    inline_tx: tokio::sync::mpsc::Sender<(Box<tgbotapi::Update>, tracing::Span)>,
+    update_tx: tokio::sync::mpsc::Sender<(HandlerUpdate, tracing::Span)>,
+    inline_tx: tokio::sync::mpsc::Sender<(HandlerUpdate, tracing::Span)>,
     mut shutdown: tokio::sync::mpsc::Receiver<bool>,
     config: Config,
 ) {
@@ -662,6 +709,8 @@ async fn receive_webhook(
 
     let secret_path = format!("/{}", config.http_secret.unwrap());
     let secret_path: &'static str = Box::leak(secret_path.into_boxed_str());
+    let fuzzysearch_secret = format!("/{}", config.fautil_apitoken);
+    let fuzzysearch_secret: &'static str = Box::leak(fuzzysearch_secret.into_boxed_str());
     let video_secret = format!("/{}", config.coconut_secret);
     let video_secret: &'static str = Box::leak(video_secret.into_boxed_str());
 
@@ -692,6 +741,7 @@ async fn receive_webhook(
                     update_tx.clone(),
                     inline_tx.clone(),
                     secret_path,
+                    fuzzysearch_secret,
                     video_secret,
                     templates.clone(),
                 )
@@ -758,13 +808,22 @@ async fn serve_metrics(config: Config) {
 
 /// Start polling updates using Bot API long polling.
 async fn poll_updates(
-    update_tx: tokio::sync::mpsc::Sender<(Box<tgbotapi::Update>, tracing::Span)>,
-    inline_tx: tokio::sync::mpsc::Sender<(Box<tgbotapi::Update>, tracing::Span)>,
+    update_tx: tokio::sync::mpsc::Sender<(HandlerUpdate, tracing::Span)>,
+    inline_tx: tokio::sync::mpsc::Sender<(HandlerUpdate, tracing::Span)>,
     mut shutdown: tokio::sync::mpsc::Receiver<bool>,
     bot: Arc<Telegram>,
 ) {
     let mut update_req = GetUpdates {
         timeout: Some(30),
+        allowed_updates: Some(vec![
+            "message".into(),
+            "channel_post".into(),
+            "inline_query".into(),
+            "chosen_inline_result".into(),
+            "callback_query".into(),
+            "my_chat_member".into(),
+            "chat_member".into(),
+        ]),
         ..Default::default()
     };
 
@@ -795,9 +854,9 @@ async fn poll_updates(
 
                 let update = Box::new(update);
                 if update.inline_query.is_some() {
-                    inline_tx.send((update, span)).await.unwrap();
+                    inline_tx.send((update.into(), span)).await.unwrap();
                 } else {
-                    update_tx.send((update, span)).await.unwrap();
+                    update_tx.send((update.into(), span)).await.unwrap();
                 }
 
                 update_req.offset = Some(id + 1);
@@ -1063,15 +1122,31 @@ impl MessageHandler {
         self.make_request(&send_message).await.map_err(Into::into)
     }
 
-    #[tracing::instrument(skip(self, update), fields(user_id, chat_id))]
-    async fn handle_update(&self, update: Update) {
+    #[tracing::instrument(skip(self, handler_update), fields(user_id, chat_id))]
+    async fn handle_update(&self, handler_update: HandlerUpdate) {
         let _hist = HANDLING_DURATION.start_timer();
 
-        tracing::trace!(?update, "handling update");
+        tracing::trace!(?handler_update, "handling update");
 
         sentry::configure_scope(|mut scope| {
             add_sentry_tracing(&mut scope);
         });
+
+        let update = match handler_update {
+            HandlerUpdate::Service(service_data) => {
+                tracing::debug!("got service update: {:?}", service_data);
+
+                for handler in &self.handlers {
+                    if let Err(err) = handler.handle_service(&self, &service_data).await {
+                        tracing::error!("unable to handle service update: {:?}", err);
+                        capture_anyhow(&err);
+                    }
+                }
+
+                return;
+            }
+            HandlerUpdate::Telegram(update) => update,
+        };
 
         let user = user_from_update(&update);
         let chat = chat_from_update(&update);
@@ -1090,20 +1165,27 @@ impl MessageHandler {
             .and_then(|message| message.get_command());
 
         for handler in &self.handlers {
-            tracing::trace!(handler = handler.name(), "running handler");
             let hist = HANDLER_DURATION
                 .get_metric_with_label_values(&[handler.name()])
                 .unwrap()
                 .start_timer();
 
-            match handler.handle(&self, &update, command.as_ref()).await {
+            match handler
+                .handle(&self, &update, command.as_ref())
+                .instrument(tracing::info_span!(
+                    "handler_handle",
+                    handler = handler.name()
+                ))
+                .await
+            {
                 Ok(status) if status == handlers::Status::Completed => {
-                    tracing::debug!(handler = handler.name(), "handled update");
+                    tracing::debug!(handled_by = handler.name(), "Completed update");
                     hist.stop_and_record();
+
                     break;
                 }
-                Err(e) => {
-                    tracing::error!("error handling update: {:?}", e);
+                Err(err) => {
+                    tracing::error!(handled_by = handler.name(), "Handler error: {:?}", err);
                     hist.stop_and_record();
 
                     let mut tags = vec![("handler", handler.name().to_string())];
@@ -1118,10 +1200,10 @@ impl MessageHandler {
                     }
 
                     if let Some(msg) = &update.message {
-                        self.report_error(&msg, Some(tags), || capture_anyhow(&e))
+                        self.report_error(&msg, Some(tags), || capture_anyhow(&err))
                             .await;
                     } else {
-                        capture_anyhow(&e);
+                        capture_anyhow(&err);
                     }
 
                     break;

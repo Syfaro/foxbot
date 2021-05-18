@@ -7,7 +7,7 @@ use super::{
     Handler,
     Status::{self, *},
 };
-use crate::MessageHandler;
+use crate::{MessageHandler, ServiceData};
 use foxbot_models::Video;
 use foxbot_sites::PostInfo;
 use foxbot_utils::*;
@@ -78,21 +78,14 @@ impl InlineHandler {
         Ok(())
     }
 
-    #[tracing::instrument(skip(self, handler, message), fields(video_id, progress))]
+    #[tracing::instrument(skip(self, handler), fields(video_id))]
     async fn video_progress(
         &self,
         handler: &MessageHandler,
-        message: &Message,
-    ) -> anyhow::Result<Status> {
-        tracing::info!("Got video progress: {:?}", message.text);
-
-        let text = message.text.clone().context("Progress was missing text")?;
-        let args: Vec<_> = text.split(' ').collect();
-        let display_name = args.get(1).context("Progress was missing ID")?;
-        let progress = args
-            .get(2)
-            .context("Progress was missing progress percentage")?;
-        tracing::Span::current().record("progress", &progress);
+        display_name: &str,
+        progress: &str,
+    ) -> anyhow::Result<()> {
+        tracing::info!("got video progress");
 
         let video = Video::lookup_display_name(&handler.conn, &display_name)
             .await?
@@ -101,17 +94,11 @@ impl InlineHandler {
         let messages = Video::associated_messages(&handler.conn, video.id).await?;
 
         let msg = handler
-            .get_fluent_bundle(
-                message
-                    .from
-                    .as_ref()
-                    .and_then(|from| from.language_code.as_deref()),
-                |bundle| {
-                    let mut args = fluent::FluentArgs::new();
-                    args.insert("percent", progress.to_string().into());
-                    get_message(&bundle, "video-progress", Some(args)).unwrap()
-                },
-            )
+            .get_fluent_bundle(None, |bundle| {
+                let mut args = fluent::FluentArgs::new();
+                args.insert("percent", progress.to_string().into());
+                get_message(&bundle, "video-progress", Some(args)).unwrap()
+            })
             .await;
 
         for message in messages {
@@ -124,26 +111,24 @@ impl InlineHandler {
             handler.make_request(&edit_message).await?;
         }
 
-        Ok(Completed)
+        Ok(())
     }
 
-    #[tracing::instrument(skip(self, handler, message), fields(video_id))]
+    #[tracing::instrument(skip(self, handler), fields(video_id))]
     async fn video_complete(
         &self,
         handler: &MessageHandler,
-        message: &Message,
-    ) -> anyhow::Result<Status> {
-        let text = message.text.clone().unwrap_or_default();
-        let args: Vec<_> = text.split(' ').collect();
-        let display_name = args.get(1).context("Progress was missing ID")?;
-        let mp4_url = *args.get(2).context("Complete was missing MP4 URL")?;
-        let thumb_url = args.get(3).context("Complete was missing thumb URL")?;
+        display_name: &str,
+        video_url: &str,
+        thumb_url: &str,
+    ) -> anyhow::Result<()> {
+        tracing::info!("video completed");
 
         let video = Video::lookup_display_name(&handler.conn, &display_name)
             .await?
             .context("Video was missing")?;
         tracing::Span::current().record("video_id", &video.id);
-        Video::set_processed_url(&handler.conn, video.id, &mp4_url, &thumb_url).await?;
+        Video::set_processed_url(&handler.conn, video.id, &video_url, &thumb_url).await?;
 
         let mut messages = Video::associated_messages(&handler.conn, video.id).await?;
 
@@ -151,7 +136,7 @@ impl InlineHandler {
 
         let first = match messages.pop() {
             Some(msg) => msg,
-            None => return Ok(Completed),
+            None => return Ok(()),
         };
 
         let video_return_button = handler
@@ -168,13 +153,13 @@ impl InlineHandler {
             handler.bot.clone(),
             6,
             first.0.into(),
-            message.from.clone(),
+            None,
             ChatAction::UploadVideo,
         );
 
         let send_video = SendVideo {
             chat_id: first.0.into(),
-            video: FileType::Url(mp4_url.to_owned()),
+            video: FileType::Url(video_url.to_owned()),
             reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
                 inline_keyboard: vec![vec![InlineKeyboardButton {
                     text: video_return_button.clone(),
@@ -190,7 +175,7 @@ impl InlineHandler {
         drop(action);
 
         if messages.is_empty() {
-            return Ok(Completed);
+            return Ok(());
         }
 
         // Now that we've sent the first message, send each additional message
@@ -255,7 +240,7 @@ impl InlineHandler {
 
         tracing::debug!("Finished handling video");
 
-        Ok(Completed)
+        Ok(())
     }
 }
 
@@ -280,12 +265,6 @@ impl Handler for InlineHandler {
                             return Ok(Completed);
                         }
                     }
-                }
-                Some(cmd) if cmd.name == "/videoprogress" && message.message_id == 0 => {
-                    return self.video_progress(&handler, &message).await;
-                }
-                Some(cmd) if cmd.name == "/videocomplete" && message.message_id == 0 => {
-                    return self.video_complete(&handler, &message).await;
                 }
                 _ => (),
             }
@@ -397,6 +376,31 @@ impl Handler for InlineHandler {
             .context("unable to answer inline query")?;
 
         Ok(Completed)
+    }
+
+    async fn handle_service(
+        &self,
+        handler: &MessageHandler,
+        service: &ServiceData,
+    ) -> anyhow::Result<()> {
+        match service {
+            ServiceData::VideoProgress {
+                display_name,
+                progress,
+            } => {
+                self.video_progress(&handler, &display_name, &progress)
+                    .await
+            }
+            ServiceData::VideoComplete {
+                display_name,
+                video_url,
+                thumb_url,
+            } => {
+                self.video_complete(&handler, &display_name, &video_url, &thumb_url)
+                    .await
+            }
+            _ => Ok(()),
+        }
     }
 }
 
