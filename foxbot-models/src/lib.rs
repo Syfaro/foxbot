@@ -658,7 +658,7 @@ impl ChatAdmin {
         status: &tgbotapi::ChatMemberStatus,
         user_id: i64,
         chat_id: i64,
-        date: i32,
+        date: Option<i32>,
     ) -> anyhow::Result<bool> {
         use tgbotapi::ChatMemberStatus::*;
 
@@ -669,11 +669,11 @@ impl ChatAdmin {
         // in the database.
         sqlx::query!(
             "INSERT INTO chat_administrator (account_id, chat_id, is_admin, updated_at)
-                VALUES (lookup_account_by_telegram_id($1), lookup_chat_by_telegram_id($2), $3, to_timestamp($4::int))",
+                VALUES (lookup_account_by_telegram_id($1), lookup_chat_by_telegram_id($2), $3, to_timestamp($4::bigint))",
             user_id,
             chat_id,
             is_admin,
-            date,
+            date.map(|time| time as i64).unwrap_or_else(|| chrono::Utc::now().timestamp()),
         )
         .execute(conn)
         .await?;
