@@ -1,5 +1,26 @@
 {
   "db": "PostgreSQL",
+  "04f264317ab6180a39bf2733b43f40e61a2c3b0add97be42d474e3fa1d03af04": {
+    "query": "SELECT value\n            FROM group_config\n            WHERE group_config.chat_id = lookup_chat_by_telegram_id($1) AND name = $2\n            ORDER BY updated_at DESC LIMIT 1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "value",
+          "type_info": "Jsonb"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Text"
+        ]
+      },
+      "nullable": [
+        false
+      ]
+    }
+  },
   "1aacdd98f714b8e1f589859dca9ef2ad3bff73fdeb912fe849a3f4e51263b0c1": {
     "query": "INSERT INTO video_job_message (video_id, chat_id, message_id) VALUES\n                ($1, lookup_chat_by_telegram_id($2), $3)",
     "describe": {
@@ -79,50 +100,6 @@
         false,
         false,
         true
-      ]
-    }
-  },
-  "32eca86c3a6bd40ccb096ba34b0a3fd506743dc9cfbd969c5579765b8ec1e362": {
-    "query": "SELECT is_admin\n            FROM chat_administrator\n            WHERE account_id = lookup_account_by_telegram_id($1) AND chat_id = lookup_chat_by_telegram_id($2)",
-    "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "is_admin",
-          "type_info": "Bool"
-        }
-      ],
-      "parameters": {
-        "Left": [
-          "Int8",
-          "Int8"
-        ]
-      },
-      "nullable": [
-        false
-      ]
-    }
-  },
-  "334c929495dbaa02c9d19aa7b8994b27e72f186b6c9a4692c67b738e14d90778": {
-    "query": "WITH data (account_id, chat_id, is_admin, last_update) AS (\n                VALUES (lookup_account_by_telegram_id($1::bigint), lookup_chat_by_telegram_id($2::bigint), $3::boolean, to_timestamp($4::int))\n            )\n            INSERT INTO chat_administrator\n            SELECT data.account_id, data.chat_id, data.is_admin, data.last_update FROM data\n            LEFT JOIN chat_administrator ON data.account_id = chat_administrator.account_id AND data.chat_id = chat_administrator.chat_id\n            WHERE chat_administrator.last_update IS NULL OR data.last_update > chat_administrator.last_update\n            ON CONFLICT (account_id, chat_id) DO UPDATE SET is_admin = EXCLUDED.is_admin, last_update = EXCLUDED.last_update\n            RETURNING is_admin",
-    "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "is_admin",
-          "type_info": "Bool"
-        }
-      ],
-      "parameters": {
-        "Left": [
-          "Int8",
-          "Int8",
-          "Bool",
-          "Int4"
-        ]
-      },
-      "nullable": [
-        false
       ]
     }
   },
@@ -255,14 +232,15 @@
       ]
     }
   },
-  "5af31c7841058d18575d9bebeda71c5c509ce169a39d1a8b415a2b7ca521a8b7": {
-    "query": "DELETE FROM group_config\n            WHERE chat_id = lookup_chat_by_telegram_id($1) AND name = $2",
+  "5af4076aa90de9643172ba3f12f731ee09a43843232a3369c81ec48346ec5e55": {
+    "query": "INSERT INTO user_config (account_id, name, value)\n            VALUES (lookup_account_by_telegram_id($1), $2, $3)",
     "describe": {
       "columns": [],
       "parameters": {
         "Left": [
           "Int8",
-          "Text"
+          "Text",
+          "Jsonb"
         ]
       },
       "nullable": []
@@ -394,6 +372,19 @@
       ]
     }
   },
+  "737ea3245f4fb679de13f733b4ccf1b81adc59390176a9169c91e85bcf0c4538": {
+    "query": "DELETE FROM user_config\n            WHERE account_id = lookup_account_by_telegram_id($1) AND name = $2",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Text"
+        ]
+      },
+      "nullable": []
+    }
+  },
   "7676c2d336dca998f8513860d58ac394b7e6340cf18b0ca1395a3dac7d8609aa": {
     "query": "DELETE FROM twitter_account\n            WHERE account_id = lookup_account_by_telegram_id($1)",
     "describe": {
@@ -419,6 +410,27 @@
       "nullable": []
     }
   },
+  "85de52f6850d5eb3adfc19467a43ee693a063c088ffb2bc32f336ae8f1e1f1c1": {
+    "query": "SELECT value\n            FROM user_config\n            WHERE user_config.account_id = lookup_account_by_telegram_id($1) AND name = $2\n            ORDER BY updated_at DESC LIMIT 1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "value",
+          "type_info": "Jsonb"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Text"
+        ]
+      },
+      "nullable": [
+        false
+      ]
+    }
+  },
   "86d9f856585958d5a3980996fd2a3f04a21f60ac7a2a759537284947ae57588f": {
     "query": "SELECT message_id\n            FROM video_job_message\n            WHERE video_id = $1",
     "describe": {
@@ -432,27 +444,6 @@
       "parameters": {
         "Left": [
           "Int4"
-        ]
-      },
-      "nullable": [
-        false
-      ]
-    }
-  },
-  "87d231e20984c3634ca89e9927c1e7b7fffea1045a9e26e5d2c70d52eacb4049": {
-    "query": "SELECT value\n            FROM user_config\n            WHERE user_config.account_id = lookup_account_by_telegram_id($1) AND name = $2",
-    "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "value",
-          "type_info": "Jsonb"
-        }
-      ],
-      "parameters": {
-        "Left": [
-          "Int8",
-          "Text"
         ]
       },
       "nullable": [
@@ -492,6 +483,20 @@
       ]
     }
   },
+  "8bac1a20c07f94bbbdc4292f66683677934f92c5a9a44d7fa2b4d81d94336dac": {
+    "query": "INSERT INTO group_config (chat_id, name, value) VALUES\n                (lookup_chat_by_telegram_id($1), $2, $3)",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Text",
+          "Jsonb"
+        ]
+      },
+      "nullable": []
+    }
+  },
   "8c56e3f05f3efa027c2db1b3225d2df695fbfb1a265de29e3adebba0788b27c2": {
     "query": "SELECT consumer_key, consumer_secret\n            FROM twitter_account\n            WHERE twitter_account.account_id = lookup_account_by_telegram_id($1)",
     "describe": {
@@ -518,25 +523,19 @@
       ]
     }
   },
-  "90015ede32e40c1a544287f33b62da1566d7912410f1f1fcaee0bbca8821fdf3": {
-    "query": "SELECT value\n            FROM group_config\n            WHERE group_config.chat_id = lookup_chat_by_telegram_id($1) AND name = $2",
+  "a74906a8ac0eecc8f0138d62cd819af4a1488eb1425f5966a72e5ae3e914b222": {
+    "query": "INSERT INTO chat_administrator (account_id, chat_id, is_admin, updated_at)\n                VALUES (lookup_account_by_telegram_id($1), lookup_chat_by_telegram_id($2), $3, to_timestamp($4::int))",
     "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "value",
-          "type_info": "Jsonb"
-        }
-      ],
+      "columns": [],
       "parameters": {
         "Left": [
           "Int8",
-          "Text"
+          "Int8",
+          "Bool",
+          "Int4"
         ]
       },
-      "nullable": [
-        false
-      ]
+      "nullable": []
     }
   },
   "abc8fe7876be76ec0835a9e32d99caa5761a46d6e628200e4bfda7e9ffc60f4c": {
@@ -561,20 +560,6 @@
         "Left": [
           "Int8",
           "Int4",
-          "Jsonb"
-        ]
-      },
-      "nullable": []
-    }
-  },
-  "ac8ee8a3289007e10c77b15d5a7983a9aa46602c7bafa9c1da77c94343a4a475": {
-    "query": "INSERT INTO user_config (account_id, name, value)\n            VALUES (lookup_account_by_telegram_id($1), $2, $3)\n            ON CONFLICT (account_id, name)\n            DO UPDATE SET value = EXCLUDED.value",
-    "describe": {
-      "columns": [],
-      "parameters": {
-        "Left": [
-          "Int8",
-          "Text",
           "Jsonb"
         ]
       },
@@ -649,18 +634,25 @@
       "nullable": []
     }
   },
-  "e8fd0283d6b8946a2eade66b5ef16320e0df170e09607d63b90611cff6db85e0": {
-    "query": "INSERT INTO group_config (chat_id, name, value) VALUES\n                (lookup_chat_by_telegram_id($1), $2, $3)\n            ON CONFLICT (chat_id, name)\n                DO UPDATE SET value = EXCLUDED.value",
+  "f78fdca94944e40d61b918c5db894566061ea7ac380c3475bc7cc67471edabf7": {
+    "query": "SELECT is_admin\n            FROM chat_administrator\n            WHERE account_id = lookup_account_by_telegram_id($1) AND chat_id = lookup_chat_by_telegram_id($2)\n            ORDER BY updated_at DESC LIMIT 1",
     "describe": {
-      "columns": [],
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "is_admin",
+          "type_info": "Bool"
+        }
+      ],
       "parameters": {
         "Left": [
           "Int8",
-          "Text",
-          "Jsonb"
+          "Int8"
         ]
       },
-      "nullable": []
+      "nullable": [
+        false
+      ]
     }
   },
   "ff63c318a1efa4f22bfe50fcdbe467ef14d37f04aaafc02bda89d85b2929fd08": {
