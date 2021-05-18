@@ -21,6 +21,34 @@
       ]
     }
   },
+  "072f943d0d5ded261ee897034ca49d9e119c66e494dc9097b667bc4e1b099dc3": {
+    "query": "UPDATE chat_administrator SET chat_id = $1 WHERE chat_id = $2",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int4",
+          "Int4"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "178a4d8008c057c86538a8044044426e9923eda22d1f8a4f6084ad7afb5c1ed8": {
+    "query": "INSERT INTO chat_administrator (account_id, chat_id, is_admin, updated_at)\n                VALUES (lookup_account_by_telegram_id($1), lookup_chat_by_telegram_id($2), $3, to_timestamp($4::bigint))",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Int8",
+          "Bool",
+          "Int8"
+        ]
+      },
+      "nullable": []
+    }
+  },
   "1aacdd98f714b8e1f589859dca9ef2ad3bff73fdeb912fe849a3f4e51263b0c1": {
     "query": "INSERT INTO video_job_message (video_id, chat_id, message_id) VALUES\n                ($1, lookup_chat_by_telegram_id($2), $3)",
     "describe": {
@@ -103,6 +131,19 @@
       ]
     }
   },
+  "363ba13615df3a63979c903648af4bd50feafed57a20b804a23e4050864fe958": {
+    "query": "UPDATE permission SET chat_id = $1 WHERE chat_id = $2",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int4",
+          "Int4"
+        ]
+      },
+      "nullable": []
+    }
+  },
   "38a3fbffae225644f875826d08afdaba40e98c45616cedc21cd26314b6f44725": {
     "query": "INSERT INTO twitter_account (account_id, consumer_key, consumer_secret) VALUES\n                (lookup_account_by_telegram_id($1), $2, $3)",
     "describe": {
@@ -142,6 +183,26 @@
         ]
       },
       "nullable": []
+    }
+  },
+  "44a12bda2ea72251b38421caf0c07382b0cc0a95a869e2c3c6f818949f9c5195": {
+    "query": "SELECT 1 FROM chat_telegram WHERE telegram_id = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "?column?",
+          "type_info": "Int4"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Int8"
+        ]
+      },
+      "nullable": [
+        null
+      ]
     }
   },
   "4bf1e2603910e4ef6f67ad369260e0dc3b903787e0f95bfaf84a74123c652132": {
@@ -385,6 +446,26 @@
       "nullable": []
     }
   },
+  "75985cf51c1bb1bebe3ea396bf65c9968c5040c2434f0a8e9d889b3f07ed532a": {
+    "query": "SELECT lookup_chat_by_telegram_id($1)",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "lookup_chat_by_telegram_id",
+          "type_info": "Int4"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Int8"
+        ]
+      },
+      "nullable": [
+        null
+      ]
+    }
+  },
   "7676c2d336dca998f8513860d58ac394b7e6340cf18b0ca1395a3dac7d8609aa": {
     "query": "DELETE FROM twitter_account\n            WHERE account_id = lookup_account_by_telegram_id($1)",
     "describe": {
@@ -397,8 +478,33 @@
       "nullable": []
     }
   },
+  "7728b3eb516d6a4154c225b889b9d74079232e36c2be022dbd955a4f5cebcada": {
+    "query": "DELETE FROM chat WHERE id = $1",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int4"
+        ]
+      },
+      "nullable": []
+    }
+  },
   "7f9bdd51e9430d93edebd6180a5ac2ad0d7172ebaf5bab5bffd44d447771518a": {
     "query": "UPDATE videos SET job_id = $1 WHERE id = $2",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int4",
+          "Int4"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "82f6e2f376c7d0a86b5489b320831fb1ac15bb8a766a574bd51439e7acba8a83": {
+    "query": "UPDATE video_job_message SET chat_id = $1 WHERE chat_id = $2",
     "describe": {
       "columns": [],
       "parameters": {
@@ -523,21 +629,6 @@
       ]
     }
   },
-  "a74906a8ac0eecc8f0138d62cd819af4a1488eb1425f5966a72e5ae3e914b222": {
-    "query": "INSERT INTO chat_administrator (account_id, chat_id, is_admin, updated_at)\n                VALUES (lookup_account_by_telegram_id($1), lookup_chat_by_telegram_id($2), $3, to_timestamp($4::int))",
-    "describe": {
-      "columns": [],
-      "parameters": {
-        "Left": [
-          "Int8",
-          "Int8",
-          "Bool",
-          "Int4"
-        ]
-      },
-      "nullable": []
-    }
-  },
   "abc8fe7876be76ec0835a9e32d99caa5761a46d6e628200e4bfda7e9ffc60f4c": {
     "query": "UPDATE videos SET processed = true, mp4_url = $1, thumb_url = $2 WHERE id = $3",
     "describe": {
@@ -561,6 +652,42 @@
           "Int8",
           "Int4",
           "Jsonb"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "be823b9738decf3ac8c9f0574a984a5ee07829a4b67241a567687d92a2f0b76e": {
+    "query": "LOCK TABLE chat, chat_telegram IN EXCLUSIVE MODE",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": []
+      },
+      "nullable": []
+    }
+  },
+  "bf86e6ddb9c7b28c7c5a196003d5cb4ea53fe8ae6ee52b0865c765bebdc0bda1": {
+    "query": "INSERT INTO chat_telegram (chat_id, telegram_id) VALUES ($1, $2)",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int4",
+          "Int8"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "bfba897adbca6cade6202ee3b47a646c01c2183118760ddcca95362e0aa6b925": {
+    "query": "UPDATE chat_telegram SET chat_id = $1 WHERE telegram_id = $2",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int4",
+          "Int8"
         ]
       },
       "nullable": []
@@ -629,6 +756,19 @@
         "Left": [
           "Text",
           "Int8"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "eff9bed64058278d5a47ae4714f620406d140d3c58f68c7a974e970aff946628": {
+    "query": "UPDATE group_config SET chat_id = $1 WHERE chat_id = $2",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int4",
+          "Int4"
         ]
       },
       "nullable": []
