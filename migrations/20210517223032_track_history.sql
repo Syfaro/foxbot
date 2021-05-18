@@ -13,8 +13,7 @@ CREATE INDEX chat_administrator_updated_at_idx ON chat_administrator (updated_at
 
 ALTER TABLE group_config
     ADD COLUMN updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT current_timestamp;
-DROP INDEX IF EXISTS group_config_chat_id_name_idx;
-DROP INDEX IF EXISTS group_config_chat_id_name_idx1;
+DROP INDEX group_config_chat_id_name_idx;
 CREATE INDEX group_config_updated_at_idx ON group_config (updated_at);
 CREATE INDEX group_config_chat_id_name_idx ON group_config (chat_id, name);
 
@@ -28,3 +27,6 @@ CREATE INDEX permission_updated_at_idx ON permission (updated_at);
 
 ALTER TABLE user_config
     ADD COLUMN updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT current_timestamp;
+DROP INDEX user_config_user_id_name_idx;
+CREATE INDEX user_config_update_at_idx ON user_config (updated_at);
+CREATE INDEX user_config_account_id_name_idx ON user_config (account_id, name);
