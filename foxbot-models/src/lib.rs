@@ -41,6 +41,11 @@ impl std::str::FromStr for Sites {
 }
 
 impl Sites {
+    /// Get the number of known sites.
+    pub fn len() -> usize {
+        4
+    }
+
     /// Get the user-understandable name of the site.
     pub fn as_str(&self) -> &'static str {
         match *self {
@@ -102,7 +107,7 @@ impl UserConfig {
     /// Set a configuration value for the user_config table.
     pub async fn set<T: serde::Serialize>(
         conn: &sqlx::Pool<sqlx::Postgres>,
-        key: &str,
+        key: UserConfigKey,
         user_id: i64,
         data: T,
     ) -> anyhow::Result<()> {
@@ -112,11 +117,22 @@ impl UserConfig {
             "INSERT INTO user_config (account_id, name, value)
             VALUES (lookup_account_by_telegram_id($1), $2, $3)",
             user_id,
-            key,
+            key.as_str(),
             value
         )
         .execute(conn)
         .await?;
+
+        Ok(())
+    }
+
+    /// Delete a config item.
+    pub async fn delete(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        key: UserConfigKey,
+        user_id: i64,
+    ) -> anyhow::Result<()> {
+        sqlx::query!("DELETE FROM user_config WHERE account_id = lookup_account_by_telegram_id($1) AND name = $2", user_id, key.as_str()).execute(conn).await?;
 
         Ok(())
     }
