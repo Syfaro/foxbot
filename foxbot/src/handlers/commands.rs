@@ -108,7 +108,7 @@ impl CommandHandler {
 
         let mut missing = {
             let mut sites = handler.sites.lock().await;
-            find_images(&from, links, &mut sites, &mut |info| {
+            find_images(from, links, &mut sites, &mut |info| {
                 results.extend(info.results);
             })
             .await?
@@ -256,8 +256,8 @@ impl CommandHandler {
         let can_delete = can_delete_in_chat(
             &handler.bot,
             &handler.conn,
-            message.chat.id,
-            handler.bot_user.id,
+            &message.chat,
+            &handler.bot_user,
             false,
         )
         .await?;
@@ -305,8 +305,8 @@ impl CommandHandler {
                         can_delete_in_chat(
                             &handler.bot,
                             &handler.conn,
-                            message.chat.id,
-                            handler.bot_user.id,
+                            &message.chat,
+                            &handler.bot_user,
                             true,
                         )
                         .await?;
@@ -326,12 +326,7 @@ impl CommandHandler {
         )
         .await?
         .1;
-        sort_results(
-            &handler.conn,
-            message.from.as_ref().unwrap().id,
-            &mut matches,
-        )
-        .await?;
+        sort_results(&handler.conn, message.from.as_ref().unwrap(), &mut matches).await?;
 
         let text = handler
             .get_fluent_bundle(
@@ -340,9 +335,9 @@ impl CommandHandler {
             )
             .await;
 
-        let disable_preview = GroupConfig::get::<bool>(
+        let disable_preview = GroupConfig::get::<bool, _>(
             &handler.conn,
-            message.chat.id,
+            &message.chat,
             GroupConfigKey::GroupNoPreviews,
         )
         .await?
@@ -403,7 +398,7 @@ impl CommandHandler {
             let mut results: Vec<PostInfo> = Vec::with_capacity(links.len());
             let missing = {
                 let mut sites = handler.sites.lock().await;
-                find_images(&from, links, &mut sites, &mut |info| {
+                find_images(from, links, &mut sites, &mut |info| {
                     results.extend(info.results);
                 })
                 .await?
@@ -582,19 +577,18 @@ impl CommandHandler {
         // these changes and saves them to the database. When possible we should
         // use these saved values instead of making more requests.
 
-        let user_is_admin =
-            match ChatAdmin::is_admin(&handler.conn, user.id, message.chat.id).await? {
-                Some(is_admin) => is_admin,
-                _ => {
-                    let get_chat_member = GetChatMember {
-                        chat_id: message.chat_id(),
-                        user_id: user.id,
-                    };
-                    let chat_member = handler.make_request(&get_chat_member).await?;
+        let user_is_admin = match ChatAdmin::is_admin(&handler.conn, user, &message.chat).await? {
+            Some(is_admin) => is_admin,
+            _ => {
+                let get_chat_member = GetChatMember {
+                    chat_id: message.chat_id(),
+                    user_id: user.id,
+                };
+                let chat_member = handler.make_request(&get_chat_member).await?;
 
-                    matches!(chat_member.status, Administrator | Creator)
-                }
-            };
+                matches!(chat_member.status, Administrator | Creator)
+            }
+        };
 
         if !user_is_admin {
             handler
@@ -608,7 +602,7 @@ impl CommandHandler {
         }
 
         let bot_is_admin =
-            match ChatAdmin::is_admin(&handler.conn, handler.bot_user.id, message.chat.id).await? {
+            match ChatAdmin::is_admin(&handler.conn, &handler.bot_user, &message.chat).await? {
                 Some(is_admin) => is_admin,
                 _ => {
                     let get_chat_member = GetChatMember {
@@ -622,7 +616,7 @@ impl CommandHandler {
                     GroupConfig::set(
                         &handler.conn,
                         GroupConfigKey::HasDeletePermission,
-                        message.chat.id,
+                        &message.chat,
                         bot_member.can_delete_messages.unwrap_or(false),
                     )
                     .await?;
@@ -650,14 +644,14 @@ impl CommandHandler {
             return Ok(());
         }
 
-        let result = GroupConfig::get(&handler.conn, message.chat.id, GroupConfigKey::GroupAdd)
+        let result = GroupConfig::get(&handler.conn, &message.chat, GroupConfigKey::GroupAdd)
             .await?
             .unwrap_or(false);
 
         GroupConfig::set(
             &handler.conn,
             GroupConfigKey::GroupAdd,
-            message.chat.id,
+            &message.chat,
             !result,
         )
         .await?;
@@ -684,7 +678,7 @@ impl CommandHandler {
 
         let result = GroupConfig::get(
             &handler.conn,
-            message.chat.id,
+            &message.chat,
             GroupConfigKey::GroupNoPreviews,
         )
         .await?
@@ -693,7 +687,7 @@ impl CommandHandler {
         GroupConfig::set(
             &handler.conn,
             GroupConfigKey::GroupNoPreviews,
-            message.chat.id,
+            &message.chat,
             !result,
         )
         .await?;

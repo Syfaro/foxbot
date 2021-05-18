@@ -1,19 +1,29 @@
 [package]
-name = "foxbot-models"
-version = "0.1.0"
 authors = ["Syfaro <syfaro@huefox.com>"]
 edition = "2018"
+name = "foxbot-models"
+version = "0.1.0"
+
+[features]
+default = []
+discord = ["twilight-model"]
 
 [dependencies]
 anyhow = "1"
-prometheus = "0.12"
+bigdecimal = "0.2"
 chrono = "0.4"
+prometheus = "0.12"
 
 lazy_static = "1"
 
 serde = "1"
 serde_json = "1"
 
-sqlx = { version = "0.5", default-features = false, features = ["runtime-tokio-rustls", "macros", "postgres", "offline", "json", "migrate", "time"] }
+tgbotapi = {git = "https://github.com/Syfaro/tgbotapi-rs"}
 
-tgbotapi = { git = "https://github.com/Syfaro/tgbotapi-rs" }
+twilight-model = {version = "0.4", optional = true}
+
+[dependencies.sqlx]
+default-features = false
+features = ["runtime-tokio-rustls", "macros", "postgres", "offline", "json", "migrate", "time", "bigdecimal"]
+version = "0.5"

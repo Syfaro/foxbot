@@ -19,7 +19,7 @@ use twilight_model::{
     id::{ChannelId, GuildId, MessageId, UserId},
 };
 
-use foxbot_models::FileURLCache;
+use foxbot_models::{FileURLCache, User};
 use foxbot_utils::*;
 
 #[tokio::main]
@@ -266,7 +266,16 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
                 )
                 .await?;
             } else if let Some(links) = extract_links(content) {
-                mirror_links(&ctx, msg.guild_id, msg.channel_id, msg.id, msg_id, &links).await?;
+                mirror_links(
+                    &ctx,
+                    msg.guild_id,
+                    msg.channel_id,
+                    msg.author.id,
+                    msg.id,
+                    msg_id,
+                    &links,
+                )
+                .await?;
             } else {
                 ctx.http
                     .create_message(msg.channel_id)
@@ -477,10 +486,10 @@ fn sources_embed(attachment: &Attachment, files: &[fuzzysearch::File]) -> anyhow
         .join("\n");
 
     let embed = EmbedBuilder::new()
-        .title("Image Sources")?
-        .description(urls)?
+        .title("Image Sources")
+        .description(urls)
         .thumbnail(ImageSource::url(attachment.url.to_string())?)
-        .footer(EmbedFooterBuilder::new("fuzzysearch.net")?)
+        .footer(EmbedFooterBuilder::new("fuzzysearch.net"))
         .build()?;
 
     Ok(embed)
@@ -490,7 +499,7 @@ fn link_embed(post: &foxbot_sites::PostInfo) -> anyhow::Result<Embed> {
     use twilight_embed_builder::{EmbedBuilder, ImageSource};
 
     let embed = EmbedBuilder::new()
-        .title(post.site_name)?
+        .title(post.site_name)
         .url(post.source_link.as_deref().unwrap_or(&post.url))
         .image(ImageSource::url(&post.url)?)
         .build()?;
@@ -629,6 +638,7 @@ fn extract_links(content: &str) -> Option<Vec<&str>> {
 /// Collect all images from many links.
 async fn get_images<'a, C>(
     ctx: &Context,
+    user_id: UserId,
     links: &'a [&str],
     callback: &mut C,
 ) -> anyhow::Result<Vec<&'a str>>
@@ -644,7 +654,8 @@ where
             if site.url_supported(link).await {
                 let start = std::time::Instant::now();
 
-                let images = site.get_images(0, link).await?;
+                let user: User = user_id.into();
+                let images = site.get_images(user, link).await?;
 
                 match images {
                     Some(results) => {
@@ -688,13 +699,14 @@ async fn mirror_links(
     ctx: &Context,
     guild_id: Option<GuildId>,
     channel_id: ChannelId,
+    user_id: UserId,
     summoning_id: MessageId,
     content_id: MessageId,
     links: &[&str],
 ) -> anyhow::Result<()> {
     let mut results: Vec<foxbot_sites::PostInfo> = Vec::with_capacity(links.len());
 
-    let _missing = get_images(&ctx, links, &mut |info| {
+    let _missing = get_images(&ctx, user_id, links, &mut |info| {
         results.extend(info.results);
     })
     .await?;

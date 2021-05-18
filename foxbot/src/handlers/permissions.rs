@@ -69,7 +69,7 @@ async fn handle_my_chat_member(
     if let Err(err) = GroupConfig::set(
         &handler.conn,
         GroupConfigKey::HasDeletePermission,
-        my_chat_member.chat.id,
+        &my_chat_member.chat,
         can_delete,
     )
     .await
@@ -98,8 +98,8 @@ async fn handle_chat_member(
     match ChatAdmin::update_chat(
         &handler.conn,
         &chat_member.new_chat_member.status,
-        chat_member.new_chat_member.user.id,
-        chat_member.chat.id,
+        &chat_member.new_chat_member.user,
+        &chat_member.chat,
         Some(chat_member.date),
     )
     .await
@@ -137,7 +137,7 @@ async fn handle_bot_update(
     if !is_admin {
         tracing::warn!("Bot has lost admin permissions, discarding potentially stale data");
 
-        ChatAdmin::flush(&handler.conn, handler.bot_user.id, chat_member.chat.id)
+        ChatAdmin::flush(&handler.conn, handler.bot_user.id, &chat_member.chat)
             .await
             .context("Bot permissions changed and unable to flush channel administrators")?;
     } else {
@@ -156,8 +156,8 @@ async fn handle_bot_update(
             ChatAdmin::update_chat(
                 &handler.conn,
                 &admin.status,
-                admin.user.id,
-                chat_member.chat.id,
+                &admin.user,
+                &chat_member.chat,
                 None,
             )
             .await

@@ -20,7 +20,7 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
 
     tracing::trace!("got enqueued message: {:?}", message);
 
-    match GroupConfig::get(&handler.conn, message.chat.id, GroupConfigKey::GroupAdd).await? {
+    match GroupConfig::get(&handler.conn, &message.chat, GroupConfigKey::GroupAdd).await? {
         Some(val) if val => (),
         _ => return Ok(()),
     }
@@ -35,12 +35,7 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
     )
     .await?
     .1;
-    sort_results(
-        &handler.conn,
-        message.from.as_ref().unwrap().id,
-        &mut matches,
-    )
-    .await?;
+    sort_results(&handler.conn, message.from.as_ref().unwrap(), &mut matches).await?;
 
     let wanted_matches = matches
         .iter()

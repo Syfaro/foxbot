@@ -7,7 +7,7 @@ use super::{
     Status::{self, *},
 };
 use crate::MessageHandler;
-use foxbot_models::{Sites, UserConfig, UserConfigKey};
+use foxbot_models::{Sites, User, UserConfig, UserConfigKey};
 use foxbot_utils::*;
 
 pub struct SettingsHandler;
@@ -114,7 +114,7 @@ async fn order(
         let order: Option<Vec<String>> = UserConfig::get(
             &handler.conn,
             UserConfigKey::SiteSortOrder,
-            callback_query.from.id,
+            &callback_query.from,
         )
         .await
         .context("unable to query user site sort order")?;
@@ -139,7 +139,7 @@ async fn order(
         UserConfig::set(
             &handler.conn,
             UserConfigKey::SiteSortOrder,
-            callback_query.from.id,
+            &callback_query.from,
             sites,
         )
         .await
@@ -160,7 +160,7 @@ async fn order(
             ..Default::default()
         };
 
-        let keyboard = sort_order_keyboard(&handler.conn, callback_query.from.id).await?;
+        let keyboard = sort_order_keyboard(&handler.conn, &callback_query.from).await?;
 
         let edit_message = EditMessageReplyMarkup {
             message_id: Some(reply_message.message_id),
@@ -184,7 +184,7 @@ async fn order(
         })
         .await;
 
-    let keyboard = sort_order_keyboard(&handler.conn, callback_query.from.id).await?;
+    let keyboard = sort_order_keyboard(&handler.conn, &callback_query.from).await?;
 
     let edit_message = EditMessageText {
         message_id: Some(reply_message.message_id),
@@ -257,11 +257,13 @@ async fn send_settings_message(
     Ok(sent_message)
 }
 
-async fn sort_order_keyboard(
+async fn sort_order_keyboard<U: Into<User>>(
     conn: &sqlx::Pool<sqlx::Postgres>,
-    user_id: i64,
+    user: U,
 ) -> anyhow::Result<InlineKeyboardMarkup> {
-    let row: Option<Vec<String>> = UserConfig::get(&conn, UserConfigKey::SiteSortOrder, user_id)
+    let user = user.into();
+
+    let row: Option<Vec<String>> = UserConfig::get(&conn, UserConfigKey::SiteSortOrder, user)
         .await
         .context("unable to query user sort order")?;
     let mut sites = match row {
@@ -274,7 +276,7 @@ async fn sort_order_keyboard(
     // If the available sites has changed, reset ordering to add new items.
     if sites.len() != foxbot_models::Sites::len() {
         sites = foxbot_models::Sites::default_order();
-        UserConfig::delete(&conn, UserConfigKey::SiteSortOrder, user_id).await?;
+        UserConfig::delete(&conn, UserConfigKey::SiteSortOrder, user).await?;
     }
 
     for (idx, site) in sites.iter().enumerate() {
