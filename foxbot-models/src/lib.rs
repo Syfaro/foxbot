@@ -132,7 +132,14 @@ impl UserConfig {
         key: UserConfigKey,
         user_id: i64,
     ) -> anyhow::Result<()> {
-        sqlx::query!("DELETE FROM user_config WHERE account_id = lookup_account_by_telegram_id($1) AND name = $2", user_id, key.as_str()).execute(conn).await?;
+        sqlx::query!(
+            "DELETE FROM user_config
+            WHERE account_id = lookup_account_by_telegram_id($1) AND name = $2",
+            user_id,
+            key.as_str()
+        )
+        .execute(conn)
+        .await?;
 
         Ok(())
     }

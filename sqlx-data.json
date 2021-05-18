@@ -372,6 +372,19 @@
       ]
     }
   },
+  "737ea3245f4fb679de13f733b4ccf1b81adc59390176a9169c91e85bcf0c4538": {
+    "query": "DELETE FROM user_config\n            WHERE account_id = lookup_account_by_telegram_id($1) AND name = $2",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Text"
+        ]
+      },
+      "nullable": []
+    }
+  },
   "7676c2d336dca998f8513860d58ac394b7e6340cf18b0ca1395a3dac7d8609aa": {
     "query": "DELETE FROM twitter_account\n            WHERE account_id = lookup_account_by_telegram_id($1)",
     "describe": {
