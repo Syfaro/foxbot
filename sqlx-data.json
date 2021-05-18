@@ -1,26 +1,5 @@
 {
   "db": "PostgreSQL",
-  "04f264317ab6180a39bf2733b43f40e61a2c3b0add97be42d474e3fa1d03af04": {
-    "query": "SELECT value\n            FROM group_config\n            WHERE group_config.chat_id = lookup_chat_by_telegram_id($1) AND name = $2\n            ORDER BY updated_at DESC LIMIT 1",
-    "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "value",
-          "type_info": "Jsonb"
-        }
-      ],
-      "parameters": {
-        "Left": [
-          "Int8",
-          "Text"
-        ]
-      },
-      "nullable": [
-        false
-      ]
-    }
-  },
   "072f943d0d5ded261ee897034ca49d9e119c66e494dc9097b667bc4e1b099dc3": {
     "query": "UPDATE chat_administrator SET chat_id = $1 WHERE chat_id = $2",
     "describe": {
@@ -34,33 +13,75 @@
       "nullable": []
     }
   },
-  "178a4d8008c057c86538a8044044426e9923eda22d1f8a4f6084ad7afb5c1ed8": {
-    "query": "INSERT INTO chat_administrator (account_id, chat_id, is_admin, updated_at)\n                VALUES (lookup_account_by_telegram_id($1), lookup_chat_by_telegram_id($2), $3, to_timestamp($4::bigint))",
+  "09b10de9123d3e78d3fe156c1b8461a000da1e76b1a41038a2acf2d8ae6ab70f": {
+    "query": "DELETE FROM twitter_account\n            WHERE account_id = lookup_account($1, $2)",
     "describe": {
       "columns": [],
       "parameters": {
         "Left": [
           "Int8",
-          "Int8",
-          "Bool",
-          "Int8"
+          "Numeric"
         ]
       },
       "nullable": []
     }
   },
-  "1aacdd98f714b8e1f589859dca9ef2ad3bff73fdeb912fe849a3f4e51263b0c1": {
-    "query": "INSERT INTO video_job_message (video_id, chat_id, message_id) VALUES\n                ($1, lookup_chat_by_telegram_id($2), $3)",
+  "0d4cddf77bde50b1c46baa565f2f06fc3e66577ff09ca40032bb9ee576fd7f5f": {
+    "query": "DELETE FROM user_config\n            WHERE account_id = lookup_account($1, $2) AND name = $3",
     "describe": {
       "columns": [],
       "parameters": {
         "Left": [
-          "Int4",
           "Int8",
-          "Int4"
+          "Numeric",
+          "Text"
         ]
       },
       "nullable": []
+    }
+  },
+  "18b1f1eecaa97d23f5b145cc1224210f425424e50d71bf55421080d02c1f239e": {
+    "query": "SELECT account.id account_id, account.telegram_id, account.discord_id, request_key, request_secret\n            FROM twitter_auth\n            JOIN account ON account.id = twitter_auth.account_id\n            WHERE request_key = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "account_id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 1,
+          "name": "telegram_id",
+          "type_info": "Int8"
+        },
+        {
+          "ordinal": 2,
+          "name": "discord_id",
+          "type_info": "Numeric"
+        },
+        {
+          "ordinal": 3,
+          "name": "request_key",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 4,
+          "name": "request_secret",
+          "type_info": "Text"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        false,
+        true,
+        true,
+        false,
+        false
+      ]
     }
   },
   "2d0eb75f282ed83d99e5ef77e8344bb6727742454c9f42b9cf1a9ceab5988e90": {
@@ -144,45 +165,26 @@
       "nullable": []
     }
   },
-  "38a3fbffae225644f875826d08afdaba40e98c45616cedc21cd26314b6f44725": {
-    "query": "INSERT INTO twitter_account (account_id, consumer_key, consumer_secret) VALUES\n                (lookup_account_by_telegram_id($1), $2, $3)",
+  "39084600ec74c0a0b99d8aeaa7dfd291c7630e7899e610d4ac7bf5fb300433e1": {
+    "query": "SELECT value\n            FROM group_config\n            WHERE group_config.chat_id = lookup_chat($1, $2) AND name = $3\n            ORDER BY updated_at DESC LIMIT 1",
     "describe": {
-      "columns": [],
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "value",
+          "type_info": "Jsonb"
+        }
+      ],
       "parameters": {
         "Left": [
           "Int8",
-          "Text",
+          "Numeric",
           "Text"
         ]
       },
-      "nullable": []
-    }
-  },
-  "3c6b4bea1e8e2028a5271f7c4e8cf11965e1887abc23cfee5ae8c528e571f1cc": {
-    "query": "DELETE FROM twitter_auth\n            WHERE account_id = lookup_account_by_telegram_id($1)",
-    "describe": {
-      "columns": [],
-      "parameters": {
-        "Left": [
-          "Int8"
-        ]
-      },
-      "nullable": []
-    }
-  },
-  "41d7843ef58b2e8a73f77d63b820684f5c716ccf634bd6ecef0607457cfb77d8": {
-    "query": "INSERT INTO source_notification (account_id, hash, message_id, photo_id)\n                VALUES (lookup_account_by_telegram_id($1), $2, $3, $4) ON CONFLICT DO NOTHING",
-    "describe": {
-      "columns": [],
-      "parameters": {
-        "Left": [
-          "Int8",
-          "Int8",
-          "Int4",
-          "Text"
-        ]
-      },
-      "nullable": []
+      "nullable": [
+        false
+      ]
     }
   },
   "44a12bda2ea72251b38421caf0c07382b0cc0a95a869e2c3c6f818949f9c5195": {
@@ -273,6 +275,33 @@
       ]
     }
   },
+  "4e0eb86a8698b5f3de421d034ca89d743ebe447d5c4334cd25d8371f2eff4432": {
+    "query": "SELECT consumer_key, consumer_secret\n            FROM twitter_account\n            WHERE twitter_account.account_id = lookup_account($1, $2)",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "consumer_key",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 1,
+          "name": "consumer_secret",
+          "type_info": "Text"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Numeric"
+        ]
+      },
+      "nullable": [
+        false,
+        false
+      ]
+    }
+  },
   "51ab9e5e7cd8d2b21259a2eaf933df39f2e3a2961351dc0acaa7bc5a72b6eb8d": {
     "query": "SELECT hash FROM file_id_cache WHERE file_id = $1",
     "describe": {
@@ -293,15 +322,16 @@
       ]
     }
   },
-  "5af4076aa90de9643172ba3f12f731ee09a43843232a3369c81ec48346ec5e55": {
-    "query": "INSERT INTO user_config (account_id, name, value)\n            VALUES (lookup_account_by_telegram_id($1), $2, $3)",
+  "5cec2b6c51717adcd83c671410f7acc1e41b78815687310f45f122cd7a168a4f": {
+    "query": "INSERT INTO twitter_auth (account_id, request_key, request_secret) VALUES\n                (lookup_account($1, $2), $3, $4)",
     "describe": {
       "columns": [],
       "parameters": {
         "Left": [
           "Int8",
+          "Numeric",
           "Text",
-          "Jsonb"
+          "Text"
         ]
       },
       "nullable": []
@@ -323,7 +353,7 @@
         ]
       },
       "nullable": [
-        false
+        true
       ]
     }
   },
@@ -415,6 +445,38 @@
       "nullable": []
     }
   },
+  "6f33591a771772951394866e5720c7db6f93b03614f79f25b9d550f8dd331254": {
+    "query": "INSERT INTO source_notification (account_id, hash, message_id, photo_id)\n                VALUES (lookup_account($1, $2), $3, $4, $5) ON CONFLICT DO NOTHING",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Numeric",
+          "Int8",
+          "Int4",
+          "Text"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "718413b4209daab5c56c6c2997d251bbc71fefbad905b74cdfa7229842add061": {
+    "query": "INSERT INTO chat_administrator (account_id, chat_id, is_admin, updated_at)\n                VALUES (lookup_account($1, $2), lookup_chat_by_telegram_id($3), $4, to_timestamp($5::bigint))",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Numeric",
+          "Int8",
+          "Bool",
+          "Int8"
+        ]
+      },
+      "nullable": []
+    }
+  },
   "73729c4a327de3c763025f0f61d50c9bfd356f7b9b6e6c636d6885cb78c97eee": {
     "query": "SELECT account.telegram_id user_id, hash, message_id, photo_id\n            FROM source_notification\n            JOIN account ON account.id = lookup_account_by_telegram_id(source_notification.account_id)\n            WHERE hash <@ ($1, 3)",
     "describe": {
@@ -453,19 +515,6 @@
       ]
     }
   },
-  "737ea3245f4fb679de13f733b4ccf1b81adc59390176a9169c91e85bcf0c4538": {
-    "query": "DELETE FROM user_config\n            WHERE account_id = lookup_account_by_telegram_id($1) AND name = $2",
-    "describe": {
-      "columns": [],
-      "parameters": {
-        "Left": [
-          "Int8",
-          "Text"
-        ]
-      },
-      "nullable": []
-    }
-  },
   "75985cf51c1bb1bebe3ea396bf65c9968c5040c2434f0a8e9d889b3f07ed532a": {
     "query": "SELECT lookup_chat_by_telegram_id($1)",
     "describe": {
@@ -484,18 +533,6 @@
       "nullable": [
         null
       ]
-    }
-  },
-  "7676c2d336dca998f8513860d58ac394b7e6340cf18b0ca1395a3dac7d8609aa": {
-    "query": "DELETE FROM twitter_account\n            WHERE account_id = lookup_account_by_telegram_id($1)",
-    "describe": {
-      "columns": [],
-      "parameters": {
-        "Left": [
-          "Int8"
-        ]
-      },
-      "nullable": []
     }
   },
   "7728b3eb516d6a4154c225b889b9d74079232e36c2be022dbd955a4f5cebcada": {
@@ -523,6 +560,21 @@
       "nullable": []
     }
   },
+  "8244dc113337c631c02ff77b4bf04c98035d85411bfd0ab7d41e2ab369ec426f": {
+    "query": "INSERT INTO group_config (chat_id, name, value) VALUES\n                (lookup_chat($1, $2), $3, $4)",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Numeric",
+          "Text",
+          "Jsonb"
+        ]
+      },
+      "nullable": []
+    }
+  },
   "82f6e2f376c7d0a86b5489b320831fb1ac15bb8a766a574bd51439e7acba8a83": {
     "query": "UPDATE video_job_message SET chat_id = $1 WHERE chat_id = $2",
     "describe": {
@@ -534,27 +586,6 @@
         ]
       },
       "nullable": []
-    }
-  },
-  "85de52f6850d5eb3adfc19467a43ee693a063c088ffb2bc32f336ae8f1e1f1c1": {
-    "query": "SELECT value\n            FROM user_config\n            WHERE user_config.account_id = lookup_account_by_telegram_id($1) AND name = $2\n            ORDER BY updated_at DESC LIMIT 1",
-    "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "value",
-          "type_info": "Jsonb"
-        }
-      ],
-      "parameters": {
-        "Left": [
-          "Int8",
-          "Text"
-        ]
-      },
-      "nullable": [
-        false
-      ]
     }
   },
   "86d9f856585958d5a3980996fd2a3f04a21f60ac7a2a759537284947ae57588f": {
@@ -577,74 +608,39 @@
       ]
     }
   },
-  "87e03d42c67970bc449869d979cece93a8102c1fd9324ceb9759d6efcfa7dc57": {
-    "query": "SELECT account.telegram_id user_id, request_key, request_secret\n            FROM twitter_auth\n            JOIN account ON account.id = twitter_auth.account_id\n            WHERE request_key = $1",
-    "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "user_id",
-          "type_info": "Int8"
-        },
-        {
-          "ordinal": 1,
-          "name": "request_key",
-          "type_info": "Text"
-        },
-        {
-          "ordinal": 2,
-          "name": "request_secret",
-          "type_info": "Text"
-        }
-      ],
-      "parameters": {
-        "Left": [
-          "Text"
-        ]
-      },
-      "nullable": [
-        false,
-        false,
-        false
-      ]
-    }
-  },
-  "8bac1a20c07f94bbbdc4292f66683677934f92c5a9a44d7fa2b4d81d94336dac": {
-    "query": "INSERT INTO group_config (chat_id, name, value) VALUES\n                (lookup_chat_by_telegram_id($1), $2, $3)",
+  "95930ce19cbe76cac13da523052de2e53d47f302653ea2fa4c63f93f5a3086b1": {
+    "query": "INSERT INTO video_job_message (video_id, chat_id, message_id) VALUES\n                ($1, lookup_chat($2, $3), $4)",
     "describe": {
       "columns": [],
       "parameters": {
         "Left": [
+          "Int4",
           "Int8",
-          "Text",
-          "Jsonb"
+          "Numeric",
+          "Int4"
         ]
       },
       "nullable": []
     }
   },
-  "8c56e3f05f3efa027c2db1b3225d2df695fbfb1a265de29e3adebba0788b27c2": {
-    "query": "SELECT consumer_key, consumer_secret\n            FROM twitter_account\n            WHERE twitter_account.account_id = lookup_account_by_telegram_id($1)",
+  "a27704959360f077a7962c12e1b3fee3c54144bd24631ece1112e34eaaaef712": {
+    "query": "SELECT value\n            FROM user_config\n            WHERE user_config.account_id = lookup_account($1, $2) AND name = $3\n            ORDER BY updated_at DESC LIMIT 1",
     "describe": {
       "columns": [
         {
           "ordinal": 0,
-          "name": "consumer_key",
-          "type_info": "Text"
-        },
-        {
-          "ordinal": 1,
-          "name": "consumer_secret",
-          "type_info": "Text"
+          "name": "value",
+          "type_info": "Jsonb"
         }
       ],
       "parameters": {
         "Left": [
-          "Int8"
+          "Int8",
+          "Numeric",
+          "Text"
         ]
       },
       "nullable": [
-        false,
         false
       ]
     }
@@ -713,15 +709,29 @@
       "nullable": []
     }
   },
-  "ccbff78ccf9a1a19a65a95d192ccb1ead5dbe14e9ca611014651c950c466ff92": {
-    "query": "INSERT INTO twitter_auth (account_id, request_key, request_secret) VALUES\n                (lookup_account_by_telegram_id($1), $2, $3)",
+  "ce0e5bab6cbc42b6b37ce2c88a26959fe4d789d30e1a9732878fa57a2f83c7a7": {
+    "query": "INSERT INTO user_config (account_id, name, value)\n            VALUES (lookup_account($1, $2), $3, $4)",
     "describe": {
       "columns": [],
       "parameters": {
         "Left": [
           "Int8",
+          "Numeric",
           "Text",
-          "Text"
+          "Jsonb"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "cf5e06f82665f3d2832dcb38d1f9a71dfb1dcb33490d7d8d6db03b370df6d84f": {
+    "query": "DELETE FROM twitter_auth\n            WHERE account_id = lookup_account($1, $2)",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Numeric"
         ]
       },
       "nullable": []
@@ -768,6 +778,28 @@
       ]
     }
   },
+  "d5c4e9b0db815868a2b9766a6b8aa65f2798ff6274483c3cc42c59ac7f706ffb": {
+    "query": "SELECT is_admin\n            FROM chat_administrator\n            WHERE account_id = lookup_account($1, $2) AND chat_id = lookup_chat_by_telegram_id($3)\n            ORDER BY updated_at DESC LIMIT 1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "is_admin",
+          "type_info": "Bool"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Numeric",
+          "Int8"
+        ]
+      },
+      "nullable": [
+        false
+      ]
+    }
+  },
   "dc5ffecf6ca8dd081cd0ee3970219a73c27bff1fc30ea0ebb6a1354cdccddfbf": {
     "query": "INSERT INTO file_url_cache (url, hash) VALUES ($1, $2) ON CONFLICT DO NOTHING",
     "describe": {
@@ -794,6 +826,21 @@
       "nullable": []
     }
   },
+  "e9f1382fe92772fde8d17cab99ce6e5c7b14f137e2e50f2f19b67b7f117e6a04": {
+    "query": "INSERT INTO twitter_account (account_id, consumer_key, consumer_secret) VALUES\n                (lookup_account($1, $2), $3, $4)",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Numeric",
+          "Text",
+          "Text"
+        ]
+      },
+      "nullable": []
+    }
+  },
   "eff9bed64058278d5a47ae4714f620406d140d3c58f68c7a974e970aff946628": {
     "query": "UPDATE group_config SET chat_id = $1 WHERE chat_id = $2",
     "describe": {
@@ -807,34 +854,14 @@
       "nullable": []
     }
   },
-  "f78fdca94944e40d61b918c5db894566061ea7ac380c3475bc7cc67471edabf7": {
-    "query": "SELECT is_admin\n            FROM chat_administrator\n            WHERE account_id = lookup_account_by_telegram_id($1) AND chat_id = lookup_chat_by_telegram_id($2)\n            ORDER BY updated_at DESC LIMIT 1",
-    "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "is_admin",
-          "type_info": "Bool"
-        }
-      ],
-      "parameters": {
-        "Left": [
-          "Int8",
-          "Int8"
-        ]
-      },
-      "nullable": [
-        false
-      ]
-    }
-  },
-  "ff63c318a1efa4f22bfe50fcdbe467ef14d37f04aaafc02bda89d85b2929fd08": {
-    "query": "DELETE FROM source_notification\n            WHERE account_id = lookup_account_by_telegram_id($1) AND hash <@ ($2, 0)",
+  "ff16be327927d1d9b38d922e52782a38bb6bea34955cad826ae2d162006e40e1": {
+    "query": "DELETE FROM source_notification\n            WHERE account_id = lookup_account($1, $2) AND hash <@ ($3, 0)",
     "describe": {
       "columns": [],
       "parameters": {
         "Left": [
           "Int8",
+          "Numeric",
           "Int8"
         ]
       },
