@@ -505,15 +505,15 @@ impl Drop for ContinuousAction {
 /// * Checking if the file ID already exists in the cache
 /// * If not, downloading the image and hashing it
 /// * Looking up the hash with [`lookup_single_hash`]
-#[tracing::instrument(err, skip(bot, conn, fapi))]
+#[tracing::instrument(err, skip(bot, redis, fapi))]
 pub async fn match_image(
     bot: &tgbotapi::Telegram,
-    conn: &sqlx::Pool<sqlx::Postgres>,
+    redis: &redis::aio::ConnectionManager,
     fapi: &fuzzysearch::FuzzySearch,
     file: &tgbotapi::PhotoSize,
     distance: Option<i64>,
 ) -> anyhow::Result<(i64, Vec<fuzzysearch::File>)> {
-    if let Some(hash) = FileCache::get(conn, &file.file_unique_id)
+    if let Some(hash) = FileCache::get(redis, &file.file_unique_id)
         .await
         .context("unable to query file cache")?
     {
@@ -541,7 +541,7 @@ pub async fn match_image(
         .context("unable to spawn blocking")?
         .context("unable to hash bytes")?;
 
-    FileCache::set(conn, &file.file_unique_id, hash)
+    FileCache::set(redis, &file.file_unique_id, hash)
         .await
         .context("unable to set file cache")?;
 

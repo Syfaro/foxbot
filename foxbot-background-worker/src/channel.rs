@@ -24,7 +24,7 @@ pub async fn process_channel_update(handler: Arc<Handler>, job: faktory::Job) ->
     let file = find_best_photo(sizes).ok_or(Error::MissingData)?;
     let (searched_hash, mut matches) = match_image(
         &handler.telegram,
-        &handler.conn,
+        &handler.redis,
         &handler.fuzzysearch,
         file,
         Some(3),
@@ -260,7 +260,7 @@ pub async fn process_channel_edit(handler: Arc<Handler>, job: faktory::Job) -> R
 /// No link normalization is required here because all links are already
 /// normalized when coming from FuzzySearch.
 async fn already_had_source(
-    conn: &redis::aio::ConnectionManager,
+    redis: &redis::aio::ConnectionManager,
     message: &tgbotapi::Message,
     matches: &[fuzzysearch::File],
 ) -> anyhow::Result<bool> {
@@ -280,9 +280,9 @@ async fn already_had_source(
 
     tracing::trace!(%group_id, "adding new sources: {:?}", urls);
 
-    let mut conn = conn.clone();
-    let added_links: usize = conn.sadd(&key, urls).await?;
-    conn.expire(&key, 300).await?;
+    let mut redis = redis.clone();
+    let added_links: usize = redis.sadd(&key, urls).await?;
+    redis.expire(&key, 300).await?;
 
     tracing::debug!(
         source_count,
