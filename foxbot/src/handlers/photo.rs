@@ -52,7 +52,7 @@ impl Handler for PhotoHandler {
         let best_photo = find_best_photo(photos).unwrap();
         let (hash, mut matches) = match_image(
             &handler.bot,
-            &handler.conn,
+            &handler.redis,
             &handler.fapi,
             best_photo,
             Some(3),

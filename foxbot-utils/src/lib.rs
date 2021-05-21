@@ -508,7 +508,7 @@ impl Drop for ContinuousAction {
 #[tracing::instrument(err, skip(bot, conn, fapi))]
 pub async fn match_image(
     bot: &tgbotapi::Telegram,
-    conn: &sqlx::Pool<sqlx::Postgres>,
+    conn: &redis::aio::ConnectionManager,
     fapi: &fuzzysearch::FuzzySearch,
     file: &tgbotapi::PhotoSize,
     distance: Option<i64>,

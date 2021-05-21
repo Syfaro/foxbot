@@ -319,7 +319,7 @@ impl CommandHandler {
         let best_photo = find_best_photo(photo).unwrap();
         let mut matches = match_image(
             &handler.bot,
-            &handler.conn,
+            &handler.redis,
             &handler.fapi,
             best_photo,
             Some(3),
@@ -386,7 +386,7 @@ impl CommandHandler {
 
             match_image(
                 &handler.bot,
-                &handler.conn,
+                &handler.redis,
                 &handler.fapi,
                 best_photo,
                 Some(10),

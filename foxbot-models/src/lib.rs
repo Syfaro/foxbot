@@ -346,11 +346,15 @@ pub struct FileCache;
 impl FileCache {
     /// Look up a file's cached hash by its unique ID.
     pub async fn get(
-        conn: &sqlx::Pool<sqlx::Postgres>,
+        conn: &redis::aio::ConnectionManager,
         file_id: &str,
     ) -> anyhow::Result<Option<i64>> {
-        let result = sqlx::query!("SELECT hash FROM file_id_cache WHERE file_id = $1", file_id)
-            .fetch_optional(conn)
+        use redis::AsyncCommands;
+
+        let mut conn = conn.clone();
+
+        let result = conn
+            .get::<_, Option<i64>>(file_id)
             .await
             .map(|row| {
                 let status = match row {
@@ -362,7 +366,7 @@ impl FileCache {
                     .unwrap()
                     .inc();
 
-                row.map(|row| row.hash)
+                row
             })
             .context("unable to select hash from file_id_cache");
 
@@ -370,17 +374,14 @@ impl FileCache {
     }
 
     pub async fn set(
-        conn: &sqlx::Pool<sqlx::Postgres>,
+        conn: &redis::aio::ConnectionManager,
         file_id: &str,
         hash: i64,
     ) -> anyhow::Result<()> {
-        sqlx::query!(
-            "INSERT INTO file_id_cache (file_id, hash) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-            file_id,
-            hash
-        )
-        .execute(conn)
-        .await?;
+        use redis::AsyncCommands;
+
+        let mut conn = conn.clone();
+        conn.set(file_id, hash).await?;
 
         Ok(())
     }

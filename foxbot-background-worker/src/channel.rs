@@ -24,7 +24,7 @@ pub async fn process_channel_update(handler: Arc<Handler>, job: faktory::Job) ->
     let file = find_best_photo(sizes).ok_or(Error::MissingData)?;
     let (searched_hash, mut matches) = match_image(
         &handler.telegram,
-        &handler.conn,
+        &handler.redis,
         &handler.fuzzysearch,
         file,
         Some(3),

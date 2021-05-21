@@ -28,7 +28,7 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
     let best_photo = find_best_photo(photo_sizes).unwrap();
     let mut matches = match_image(
         &handler.telegram,
-        &handler.conn,
+        &handler.redis,
         &handler.fuzzysearch,
         best_photo,
         Some(3),
