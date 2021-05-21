@@ -346,7 +346,7 @@ pub struct FileCache;
 impl FileCache {
     /// Look up a file's cached hash by its unique ID.
     pub async fn get(
-        conn: &redis::aio::ConnectionManager,
+        redis: &redis::aio::ConnectionManager,
         file_id: &str,
     ) -> anyhow::Result<Option<i64>> {
         use redis::AsyncCommands;
@@ -374,14 +374,14 @@ impl FileCache {
     }
 
     pub async fn set(
-        conn: &redis::aio::ConnectionManager,
+        redis: &redis::aio::ConnectionManager,
         file_id: &str,
         hash: i64,
     ) -> anyhow::Result<()> {
         use redis::AsyncCommands;
 
         let mut conn = conn.clone();
-        conn.set(file_id, hash).await?;
+        conn.set_ex(file_id, hash, 60*60*24*7).await?;
 
         Ok(())
     }
