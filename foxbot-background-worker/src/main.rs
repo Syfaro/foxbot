@@ -322,15 +322,15 @@ impl Handler {
 }
 
 /// Set that chat needs additional time before another message can be sent.
-#[tracing::instrument(skip(conn))]
+#[tracing::instrument(skip(redis))]
 pub async fn needs_more_time(
-    conn: &redis::aio::ConnectionManager,
+    redis: &redis::aio::ConnectionManager,
     chat_id: &str,
     at: chrono::DateTime<chrono::Utc>,
 ) {
     use redis::AsyncCommands;
 
-    let mut conn = conn.clone();
+    let mut redis = redis.clone();
 
     let now = chrono::Utc::now();
     let seconds = (at - now).num_seconds();
@@ -340,7 +340,7 @@ pub async fn needs_more_time(
     }
 
     let key = format!("retry-at:{}", chat_id);
-    if let Err(err) = conn
+    if let Err(err) = redis
         .set_ex::<_, _, ()>(&key, at.timestamp(), seconds as usize)
         .await
     {
@@ -349,18 +349,18 @@ pub async fn needs_more_time(
 }
 
 /// Check if a chat needs more time before a message can be sent.
-#[tracing::instrument(skip(conn))]
+#[tracing::instrument(skip(redis))]
 pub async fn check_more_time(
-    conn: &redis::aio::ConnectionManager,
+    redis: &redis::aio::ConnectionManager,
     chat_id: &str,
 ) -> Option<chrono::DateTime<chrono::Utc>> {
     use chrono::TimeZone;
     use redis::AsyncCommands;
 
-    let mut conn = conn.clone();
+    let mut redis = redis.clone();
 
     let key = format!("retry-at:{}", chat_id);
-    match conn.get::<_, Option<i64>>(&key).await {
+    match redis.get::<_, Option<i64>>(&key).await {
         Ok(Some(timestamp)) => {
             let after = chrono::Utc.timestamp(timestamp, 0);
             if after <= chrono::Utc::now() {
@@ -383,10 +383,7 @@ fn get_custom_span(job: &faktory::Job) -> tracing::Span {
     let custom: HashMap<String, String> = job
         .custom
         .iter()
-        .filter_map(|(key, value)| match value.as_str() {
-            Some(s) => Some((key.to_owned(), s.to_owned())),
-            _ => None,
-        })
+        .filter_map(|(key, value)| value.as_str().map(|s| (key.to_owned(), s.to_owned())))
         .collect();
     let propagator = opentelemetry::sdk::propagation::TraceContextPropagator::new();
     let context = propagator.extract(&custom);

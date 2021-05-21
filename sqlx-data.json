@@ -273,26 +273,6 @@
       ]
     }
   },
-  "51ab9e5e7cd8d2b21259a2eaf933df39f2e3a2961351dc0acaa7bc5a72b6eb8d": {
-    "query": "SELECT hash FROM file_id_cache WHERE file_id = $1",
-    "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "hash",
-          "type_info": "Int8"
-        }
-      ],
-      "parameters": {
-        "Left": [
-          "Text"
-        ]
-      },
-      "nullable": [
-        false
-      ]
-    }
-  },
   "5af4076aa90de9643172ba3f12f731ee09a43843232a3369c81ec48346ec5e55": {
     "query": "INSERT INTO user_config (account_id, name, value)\n            VALUES (lookup_account_by_telegram_id($1), $2, $3)",
     "describe": {
@@ -746,19 +726,6 @@
       "nullable": [
         false
       ]
-    }
-  },
-  "dde2f98c7e317bd0a9a22f55310a4aac1a9b25ee136fbdb9e7e1fe1109f554ba": {
-    "query": "INSERT INTO file_id_cache (file_id, hash) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-    "describe": {
-      "columns": [],
-      "parameters": {
-        "Left": [
-          "Text",
-          "Int8"
-        ]
-      },
-      "nullable": []
     }
   },
   "eff9bed64058278d5a47ae4714f620406d140d3c58f68c7a974e970aff946628": {

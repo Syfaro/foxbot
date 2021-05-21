@@ -4,7 +4,7 @@ use tgbotapi::{ChatMemberUpdated, ChatType};
 
 use super::{
     Handler,
-    Status::{self, *},
+    Status::{self, Completed, Ignored},
 };
 use crate::MessageHandler;
 use foxbot_models::{ChatAdmin, GroupConfig, GroupConfigKey, Permissions};
@@ -33,16 +33,16 @@ impl Handler for PermissionHandler {
             ..
         } = update
         {
-            migrate_chat(&handler, *chat_id, *from_id).await?;
+            migrate_chat(handler, *chat_id, *from_id).await?;
             return Ok(Completed);
         }
 
-        if handle_my_chat_member(&handler, &update.my_chat_member).await? {
-            handle_chat_member(&handler, &update.my_chat_member).await?;
+        if handle_my_chat_member(handler, &update.my_chat_member).await? {
+            handle_chat_member(handler, &update.my_chat_member).await?;
             return Ok(Completed);
         }
 
-        if handle_chat_member(&handler, &update.chat_member).await? {
+        if handle_chat_member(handler, &update.chat_member).await? {
             return Ok(Completed);
         }
 
@@ -130,7 +130,7 @@ async fn handle_chat_member(
             // Handle loading some data when the bot's administrative status
             // changes.
             if chat_member.new_chat_member.user.id == handler.bot_user.id {
-                if let Err(err) = handle_bot_update(&handler, &chat_member, is_admin).await {
+                if let Err(err) = handle_bot_update(handler, chat_member, is_admin).await {
                     tracing::error!("unable to update requested data: {:?}", err);
                 }
             }
@@ -195,22 +195,20 @@ async fn migrate_chat(handler: &MessageHandler, chat_id: i64, from_id: i64) -> a
         .execute(&mut tx)
         .await?;
 
-    let new_chat_exists = sqlx::query_scalar!(
+    let new_chat_exists = !sqlx::query_scalar!(
         "SELECT 1 FROM chat_telegram WHERE telegram_id = $1",
         chat_id
     )
     .fetch_all(&mut tx)
     .await?
-    .len()
-        > 0;
-    let old_chat_exists = sqlx::query_scalar!(
+    .is_empty();
+    let old_chat_exists = !sqlx::query_scalar!(
         "SELECT 1 FROM chat_telegram WHERE telegram_id = $1",
         from_id
     )
     .fetch_all(&mut tx)
     .await?
-    .len()
-        > 0;
+    .is_empty();
 
     tracing::debug!(
         new_chat_exists,

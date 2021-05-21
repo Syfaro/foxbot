@@ -1,7 +1,6 @@
 use crate::*;
 
 #[tracing::instrument(skip(handler, job), fields(job_id = job.id(), chat_id))]
-#[deny(clippy::unwrap_used)]
 pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Result<(), Error> {
     use foxbot_models::{GroupConfig, GroupConfigKey};
 
@@ -97,12 +96,12 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
         }
     }
 
-    let best_photo = find_best_photo(&photo_sizes).unwrap();
+    let best_photo = find_best_photo(photo_sizes).unwrap();
     let mut matches = match_image(
         &handler.telegram,
-        &handler.conn,
+        &handler.redis,
         &handler.fuzzysearch,
-        &best_photo,
+        best_photo,
         Some(3),
     )
     .await?
@@ -168,7 +167,7 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
                 args.insert("link", m.url().into());
 
                 if let Some(rating) = get_rating_bundle_name(&m.rating) {
-                    let rating = get_message(&bundle, rating, None).unwrap();
+                    let rating = get_message(bundle, rating, None).unwrap();
                     args.insert("rating", rating.into());
                     get_message(bundle, "automatic-single", Some(args)).unwrap()
                 } else {
@@ -185,7 +184,7 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
                     args.insert("link", result.url().into());
 
                     let message = if let Some(rating) = get_rating_bundle_name(&result.rating) {
-                        let rating = get_message(&bundle, rating, None).unwrap();
+                        let rating = get_message(bundle, rating, None).unwrap();
                         args.insert("rating", rating.into());
                         get_message(bundle, "automatic-multiple-result", Some(args)).unwrap()
                     } else {
@@ -217,7 +216,6 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
 }
 
 #[tracing::instrument(skip(handler, job), fields(job_id = job.id(), chat_id))]
-#[deny(clippy::unwrap_used)]
 pub async fn process_group_source(handler: Arc<Handler>, job: faktory::Job) -> Result<(), Error> {
     use tgbotapi::requests::SendMessage;
 

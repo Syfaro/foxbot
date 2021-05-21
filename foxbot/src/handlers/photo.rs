@@ -1,14 +1,20 @@
 use anyhow::Context;
 use async_trait::async_trait;
-use tgbotapi::{requests::*, *};
+use tgbotapi::{
+    requests::{ChatAction, SendMessage},
+    ChatType, Command, Update,
+};
 
 use super::{
     Handler,
-    Status::{self, *},
+    Status::{self, Completed, Ignored},
 };
 use crate::MessageHandler;
 use foxbot_models::{GroupConfig, GroupConfigKey};
-use foxbot_utils::*;
+use foxbot_utils::{
+    continuous_action, find_best_photo, get_message, match_image, needs_field, sort_results,
+    source_reply,
+};
 
 pub struct PhotoHandler;
 
@@ -43,12 +49,12 @@ impl Handler for PhotoHandler {
             ChatAction::Typing,
         );
 
-        let best_photo = find_best_photo(&photos).unwrap();
+        let best_photo = find_best_photo(photos).unwrap();
         let (hash, mut matches) = match_image(
             &handler.bot,
-            &handler.conn,
+            &handler.redis,
             &handler.fapi,
-            &best_photo,
+            best_photo,
             Some(3),
         )
         .await?;
@@ -69,8 +75,8 @@ impl Handler for PhotoHandler {
                     message.from.as_ref().unwrap().language_code.as_deref(),
                     |bundle| {
                         (
-                            get_message(&bundle, "reverse-no-results", None).unwrap(),
-                            get_message(&bundle, "reverse-subscribe", None).unwrap(),
+                            get_message(bundle, "reverse-no-results", None).unwrap(),
+                            get_message(bundle, "reverse-subscribe", None).unwrap(),
                         )
                     },
                 )
@@ -100,7 +106,7 @@ impl Handler for PhotoHandler {
         let text = handler
             .get_fluent_bundle(
                 message.from.as_ref().unwrap().language_code.as_deref(),
-                |bundle| source_reply(&matches, &bundle),
+                |bundle| source_reply(&matches, bundle),
             )
             .await;
 
