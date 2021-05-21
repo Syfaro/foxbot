@@ -776,17 +776,15 @@ impl Subscriptions {
         let subscriptions = sqlx::query!(
             "SELECT account.telegram_id user_id, hash, message_id, photo_id
             FROM source_notification
-            JOIN account ON account.id = lookup_account_by_telegram_id(source_notification.account_id)
+            JOIN account ON account.id = source_notification.account_id
             WHERE hash <@ ($1, 3)",
             hash
         )
-        .map(|row| {
-            Subscription {
-                user_id: row.user_id.unwrap(),
-                hash: row.hash.unwrap(),
-                message_id: row.message_id,
-                photo_id: row.photo_id,
-            }
+        .map(|row| Subscription {
+            user_id: row.user_id.unwrap(),
+            hash: row.hash.unwrap(),
+            message_id: row.message_id,
+            photo_id: row.photo_id,
         })
         .fetch_all(conn)
         .await?;
