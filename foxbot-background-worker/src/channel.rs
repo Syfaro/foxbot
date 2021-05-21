@@ -1,5 +1,8 @@
 use std::sync::Arc;
 
+use foxbot_models::{GroupConfig, GroupConfigKey};
+use tgbotapi::requests::GetChatMember;
+
 use crate::*;
 
 #[tracing::instrument(skip(handler, job), fields(job_id = job.id()))]
@@ -20,6 +23,47 @@ pub async fn process_channel_update(handler: Arc<Handler>, job: faktory::Job) ->
         Some(photo) => photo,
         _ => return Ok(()),
     };
+
+    // Store if bot has edit permissions in channel.
+    match GroupConfig::get::<bool>(
+        &handler.conn,
+        message.chat.id,
+        GroupConfigKey::CanEditChannel,
+    )
+    .await
+    {
+        Ok(None) => {
+            match handler
+                .telegram
+                .make_request(&GetChatMember {
+                    chat_id: message.chat_id(),
+                    user_id: handler.bot_user.id,
+                })
+                .await
+            {
+                Ok(chat_member) => {
+                    if let Err(err) = GroupConfig::set(
+                        &handler.conn,
+                        GroupConfigKey::CanEditChannel,
+                        message.chat.id,
+                        chat_member.can_edit_messages.unwrap_or(false),
+                    )
+                    .await
+                    {
+                        tracing::error!("could not update can_edit_channel: {:?}", err);
+                    }
+                }
+                Err(err) => tracing::error!("could not get bot chat member: {:?}", err),
+            }
+        }
+        Err(err) => {
+            tracing::error!(
+                "could not update channel can_edit_channel status: {:?}",
+                err
+            );
+        }
+        _ => (),
+    }
 
     let file = find_best_photo(&sizes).ok_or(Error::MissingData)?;
     let (searched_hash, mut matches) = match_image(

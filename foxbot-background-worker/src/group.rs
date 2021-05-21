@@ -1,6 +1,6 @@
 use crate::*;
 
-#[tracing::instrument(skip(handler, job), fields(job_id = job.id()))]
+#[tracing::instrument(skip(handler, job), fields(job_id = job.id(), chat_id))]
 #[deny(clippy::unwrap_used)]
 pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Result<(), Error> {
     use foxbot_models::{GroupConfig, GroupConfigKey};
@@ -13,6 +13,7 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
         .to_owned();
 
     let message: tgbotapi::Message = serde_json::value::from_value(data)?;
+    tracing::Span::current().record("chat_id", &message.chat.id);
     let photo_sizes = match &message.photo {
         Some(sizes) => sizes,
         _ => return Ok(()),
@@ -20,9 +21,80 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
 
     tracing::trace!("got enqueued message: {:?}", message);
 
+    // Check if group is linked to a channel.
+    match GroupConfig::get::<Option<i64>>(
+        &handler.conn,
+        message.chat.id,
+        GroupConfigKey::HasLinkedChat,
+    )
+    .await
+    {
+        Ok(Some(None)) => {
+            match handler
+                .telegram
+                .make_request(&tgbotapi::requests::GetChat {
+                    chat_id: message.chat_id(),
+                })
+                .await
+            {
+                Ok(chat_member) => {
+                    if let Err(err) = GroupConfig::set(
+                        &handler.conn,
+                        GroupConfigKey::HasLinkedChat,
+                        message.chat.id,
+                        chat_member.linked_chat_id,
+                    )
+                    .await
+                    {
+                        tracing::error!("could not update has_linked_chat: {:?}", err);
+                    }
+
+                    tracing::info!(linked_chat_id = ?chat_member.linked_chat_id, "updated linked chat id");
+                }
+                Err(err) => tracing::error!("could not get chat: {:?}", err),
+            }
+        }
+        Err(err) => {
+            tracing::error!("could not update group has_linked_chat status: {:?}", err);
+        }
+        _ => tracing::trace!("already checked if group has linked chat"),
+    }
+
     match GroupConfig::get(&handler.conn, message.chat.id, GroupConfigKey::GroupAdd).await? {
-        Some(val) if val => (),
-        _ => return Ok(()),
+        Some(true) => tracing::debug!("group wants automatic sources"),
+        _ => {
+            tracing::trace!("group sourcing disabled, skipping message");
+
+            return Ok(());
+        }
+    }
+
+    // Check if the message was a forward from a chat, and if it was, check if
+    // we have edit permissions in that channel. If we do, we can skip this
+    // message as it will get a source applied automatically.
+    if let Some(forward_from_chat) = &message.forward_from_chat {
+        match GroupConfig::get::<bool>(
+            &handler.conn,
+            forward_from_chat.id,
+            GroupConfigKey::CanEditChannel,
+        )
+        .await
+        {
+            Ok(Some(true)) => {
+                tracing::debug!(
+                    chat_id = forward_from_chat.id,
+                    "message was forward from channel with edit permissions, skipping"
+                );
+                return Ok(());
+            }
+            Ok(_) => tracing::trace!("message was not from channel with edit permissions"),
+            Err(err) => {
+                tracing::error!(
+                    "unable to check if message was from channel with edit permissions: {:?}",
+                    err
+                )
+            }
+        }
     }
 
     let best_photo = find_best_photo(&photo_sizes).unwrap();
@@ -48,6 +120,8 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
         .collect::<Vec<_>>();
 
     if wanted_matches.is_empty() {
+        tracing::debug!("found no matches for group image");
+
         return Ok(());
     }
 
@@ -58,6 +132,8 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
         .iter()
         .any(|m| link_was_seen(&sites, &links, &m.url()))
     {
+        tracing::debug!("group message already contained valid links");
+
         return Ok(());
     }
 
@@ -92,8 +168,8 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
                 args.insert("link", m.url().into());
 
                 if let Some(rating) = get_rating_bundle_name(&m.rating) {
+                    let rating = get_message(&bundle, rating, None).unwrap();
                     args.insert("rating", rating.into());
-
                     get_message(bundle, "automatic-single", Some(args)).unwrap()
                 } else {
                     get_message(bundle, "automatic-single-unknown", Some(args)).unwrap()
@@ -140,7 +216,7 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
     Ok(())
 }
 
-#[tracing::instrument(skip(handler, job), fields(job_id = job.id()))]
+#[tracing::instrument(skip(handler, job), fields(job_id = job.id(), chat_id))]
 #[deny(clippy::unwrap_used)]
 pub async fn process_group_source(handler: Arc<Handler>, job: faktory::Job) -> Result<(), Error> {
     use tgbotapi::requests::SendMessage;
@@ -160,6 +236,7 @@ pub async fn process_group_source(handler: Arc<Handler>, job: faktory::Job) -> R
         text,
     } = serde_json::value::from_value(data.clone())?;
     let chat_id: &str = &chat_id;
+    tracing::Span::current().record("chat_id", &chat_id);
 
     if let Some(at) = check_more_time(&handler.redis, chat_id).await {
         tracing::trace!("need to wait more time for this chat: {}", at);
