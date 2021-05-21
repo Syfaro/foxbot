@@ -194,7 +194,7 @@ impl Site for Direct {
 
     async fn url_supported(&mut self, url: &str) -> bool {
         // If the URL extension isn't one in our list, ignore.
-        if !Direct::EXTENSIONS.iter().any(|ext| url.ends_with(ext)) {
+        if !Self::EXTENSIONS.iter().any(|ext| url.ends_with(ext)) {
             return false;
         }
 
@@ -214,7 +214,7 @@ impl Site for Direct {
         };
 
         // Return if the Content-Type is in our list.
-        Direct::TYPES.iter().any(|t| content_type == t)
+        Self::TYPES.iter().any(|t| content_type == t)
     }
 
     async fn get_images(
@@ -472,7 +472,7 @@ impl Site for E621 {
 
             format!("https://{}/posts.json?md5={}", self.site.host(), md5)
         } else {
-            return self.get_pool(&url).await;
+            return self.get_pool(url).await;
         };
 
         let resp: E621Resp = self.load(&endpoint).await?;
@@ -542,7 +542,7 @@ impl Twitter {
         Vec<egg_mode::entities::MediaEntity>,
     )> {
         if let Some(Ok(id)) = captures.name("id").map(|id| id.as_str().parse::<u64>()) {
-            let tweet = egg_mode::tweet::show(id, &token).await.ok()?.response;
+            let tweet = egg_mode::tweet::show(id, token).await.ok()?.response;
 
             let user = tweet.user?;
             let media = tweet.extended_entities?.media;
@@ -551,7 +551,7 @@ impl Twitter {
         } else {
             let user = captures["screen_name"].to_owned();
             let timeline =
-                egg_mode::tweet::user_timeline(user, false, false, &token).with_page_size(200);
+                egg_mode::tweet::user_timeline(user, false, false, token).with_page_size(200);
             let (_timeline, feed) = timeline.start().await.ok()?;
 
             let user = feed.iter().next()?.user.as_ref()?.to_owned();
@@ -700,11 +700,11 @@ impl FurAffinity {
     /// Attempt to resolve a direct image URL into a submission using
     /// FuzzySearch.
     async fn load_direct_url(&self, filename: &str, url: &str) -> anyhow::Result<Option<PostInfo>> {
-        let sub: fuzzysearch::File = match self.fapi.lookup_filename(&filename).await {
+        let sub: fuzzysearch::File = match self.fapi.lookup_filename(filename).await {
             Ok(mut results) if !results.is_empty() => results.remove(0),
             _ => {
                 return Ok(Some(PostInfo {
-                    file_type: get_file_ext(&url).unwrap().to_string(),
+                    file_type: get_file_ext(url).unwrap().to_string(),
                     url: url.to_owned(),
                     site_name: self.name(),
                     ..Default::default()
@@ -792,7 +792,7 @@ impl FurAffinity {
         };
 
         let fuzzy = self.load_from_fuzzy(id);
-        let fa = self.load_from_fa(&url);
+        let fa = self.load_from_fa(url);
 
         pin_mut!(fa);
         pin_mut!(fuzzy);
@@ -834,15 +834,13 @@ impl Site for FurAffinity {
 
         if let Some(sub_id) = captures.name("id") {
             Some(format!("FurAffinity-{}", sub_id.as_str()))
-        } else if let Some(file_id) = captures.name("file_id") {
-            Some(format!("FurAffinityFile-{}", file_id.as_str()))
         } else {
-            None
+            captures.name("file_id").map(|file_id| format!("FurAffinityFile-{}", file_id.as_str()))
         }
     }
 
     async fn url_supported(&mut self, url: &str) -> bool {
-        self.matcher.is_match(&url)
+        self.matcher.is_match(url)
     }
 
     async fn get_images(
@@ -852,14 +850,14 @@ impl Site for FurAffinity {
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let captures = self
             .matcher
-            .captures(&url)
+            .captures(url)
             .context("Could not capture FurAffinity URL")?;
 
         let image = if let Some(filename) = captures.name("file_name") {
-            self.load_direct_url(filename.as_str(), &url).await
+            self.load_direct_url(filename.as_str(), url).await
         } else if let Some(id) = captures.name("id") {
             let id: i32 = id.as_str().parse().unwrap();
-            self.load_submission(id, &url).await
+            self.load_submission(id, url).await
         } else {
             return Ok(None);
         };

@@ -26,7 +26,7 @@ impl Handler for ChannelPhotoHandler {
         let message = needs_field!(update, channel_post);
         needs_field!(&message, photo);
 
-        potential_return!(initial_filter(&message));
+        potential_return!(initial_filter(message));
 
         let custom = get_faktory_custom();
 

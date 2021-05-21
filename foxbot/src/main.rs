@@ -217,7 +217,7 @@ pub enum HandlerUpdate {
 
 impl From<Box<tgbotapi::Update>> for HandlerUpdate {
     fn from(update: Box<tgbotapi::Update>) -> Self {
-        HandlerUpdate::Telegram(update)
+        Self::Telegram(update)
     }
 }
 
@@ -231,7 +231,7 @@ async fn main() {
     };
 
     let jaeger_collector = match &config.jaeger_collector {
-        Some(collector) => collector.to_owned(),
+        Some(collector) => collector.clone(),
         _ => panic!("Missing JAEGER_COLLECTOR"),
     };
 
@@ -380,8 +380,7 @@ async fn main() {
         "sentry enabled: {}",
         _guard
             .as_ref()
-            .map(|sentry| sentry.is_enabled())
-            .unwrap_or(false)
+            .map_or(false, sentry::ClientInitGuard::is_enabled)
     );
 
     serve_metrics(config.clone()).await;
@@ -407,7 +406,7 @@ async fn main() {
             .as_ref()
             .expect("Missing WEBHOOK_ENDPOINT");
         let set_webhook = SetWebhook {
-            url: webhook_endpoint.to_owned(),
+            url: webhook_endpoint.clone(),
             allowed_updates: Some(vec![
                 "message".into(),
                 "channel_post".into(),
@@ -549,11 +548,11 @@ async fn handle_request(
             let hash = if let Some(hash) = data
                 .as_object()
                 .and_then(|obj| obj.get("hash"))
-                .and_then(|hash| hash.as_str())
-                .and_then(|hash| {
+                .and_then(serde_json::Value::as_str)
+                .map(|hash| {
                     let mut data = [0u8; 8];
                     base64::decode_config_slice(&hash, base64::STANDARD, &mut data).ok();
-                    Some(data)
+                    data
                 }) {
                 i64::from_be_bytes(hash)
             } else {
@@ -582,7 +581,7 @@ async fn handle_request(
 
             let url = uri.to_string();
             let display_name = url.split('=').last().unwrap();
-            let progress = update.get("progress").and_then(|val| val.as_str());
+            let progress = update.get("progress").and_then(serde_json::Value::as_str);
 
             tracing::debug!(display_name, "Got video update: {:?}", update);
 
@@ -657,21 +656,22 @@ async fn handle_request(
                 return Ok(Response::new(Body::from(denied)));
             }
 
-            let (token, verifier) = match (query.get("oauth_token"), query.get("oauth_verifier")) {
-                (Some(token), Some(verifier)) => (token, verifier),
-                _ => {
-                    let bad_request = templates.render("400", &data).unwrap();
-                    let mut resp = Response::new(Body::from(bad_request));
-                    *resp.status_mut() = StatusCode::BAD_REQUEST;
-                    return Ok(resp);
-                }
+            let (token, verifier) = if let (Some(token), Some(verifier)) =
+                (query.get("oauth_token"), query.get("oauth_verifier"))
+            {
+                (token, verifier)
+            } else {
+                let bad_request = templates.render("400", &data).unwrap();
+                let mut resp = Response::new(Body::from(bad_request));
+                *resp.status_mut() = StatusCode::BAD_REQUEST;
+                return Ok(resp);
             };
 
             update_tx
                 .send((
                     HandlerUpdate::Service(ServiceData::TwitterVerified {
-                        token: token.to_owned(),
-                        verifier: verifier.to_owned(),
+                        token: token.clone(),
+                        verifier: verifier.clone(),
                     }),
                     tracing::Span::current(),
                 ))
@@ -932,8 +932,7 @@ impl MessageHandler {
         let lang_code = message
             .from
             .as_ref()
-            .map(|from| from.language_code.clone())
-            .flatten();
+            .and_then(|from| from.language_code.clone());
 
         use redis::AsyncCommands;
         let mut conn = self.redis.clone();
@@ -963,9 +962,9 @@ impl MessageHandler {
 
                 if u.is_nil() {
                     if recent_error_count > 0 {
-                        get_message(&bundle, "error-generic-count", Some(args))
+                        get_message(bundle, "error-generic-count", Some(args))
                     } else {
-                        get_message(&bundle, "error-generic", None)
+                        get_message(bundle, "error-generic", None)
                     }
                 } else {
                     let f = format!("`{}`", u.to_string());
@@ -977,7 +976,7 @@ impl MessageHandler {
                         "error-uuid"
                     };
 
-                    get_message(&bundle, name, Some(args))
+                    get_message(bundle, name, Some(args))
                 }
             })
             .await
@@ -1062,7 +1061,7 @@ impl MessageHandler {
 
         let try_me = self
             .get_fluent_bundle(from.language_code.as_deref(), |bundle| {
-                get_message(&bundle, "welcome-try-me", None).unwrap()
+                get_message(bundle, "welcome-try-me", None).unwrap()
             })
             .await;
 
@@ -1082,7 +1081,7 @@ impl MessageHandler {
 
         let welcome = self
             .get_fluent_bundle(from.language_code.as_deref(), |bundle| {
-                get_message(&bundle, &name, None).unwrap()
+                get_message(bundle, name, None).unwrap()
             })
             .await;
 
@@ -1108,7 +1107,7 @@ impl MessageHandler {
 
         let text = self
             .get_fluent_bundle(language_code, |bundle| {
-                get_message(&bundle, name, None).unwrap()
+                get_message(bundle, name, None).unwrap()
             })
             .await;
 
@@ -1137,7 +1136,7 @@ impl MessageHandler {
                 tracing::debug!("got service update: {:?}", service_data);
 
                 for handler in &self.handlers {
-                    if let Err(err) = handler.handle_service(&self, &service_data).await {
+                    if let Err(err) = handler.handle_service(self, &service_data).await {
                         tracing::error!("unable to handle service update: {:?}", err);
                         capture_anyhow(&err);
                     }
@@ -1171,7 +1170,7 @@ impl MessageHandler {
                 .start_timer();
 
             match handler
-                .handle(&self, &update, command.as_ref())
+                .handle(self, &update, command.as_ref())
                 .instrument(tracing::info_span!(
                     "handler_handle",
                     handler = handler.name()
@@ -1200,7 +1199,7 @@ impl MessageHandler {
                     }
 
                     if let Some(msg) = &update.message {
-                        self.report_error(&msg, Some(tags), || capture_anyhow(&err))
+                        self.report_error(msg, Some(tags), || capture_anyhow(&err))
                             .await;
                     } else {
                         capture_anyhow(&err);

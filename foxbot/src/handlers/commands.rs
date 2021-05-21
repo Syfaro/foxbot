@@ -55,12 +55,12 @@ impl Handler for CommandHandler {
 
         match command.name.as_ref() {
             "/help" | "/start" => handler.handle_welcome(message, &command.name).await,
-            "/mirror" => self.handle_mirror(&handler, message).await,
-            "/source" => self.handle_source(&handler, message).await,
-            "/alts" => self.handle_alts(&handler, message).await,
+            "/mirror" => self.handle_mirror(handler, message).await,
+            "/source" => self.handle_source(handler, message).await,
+            "/alts" => self.handle_alts(handler, message).await,
             "/error" => Err(anyhow::anyhow!("a test error message")),
-            "/groupsource" => self.enable_group_source(&handler, message).await,
-            "/grouppreviews" => self.group_nopreviews(&handler, &message).await,
+            "/groupsource" => self.enable_group_source(handler, message).await,
+            "/grouppreviews" => self.group_nopreviews(handler, message).await,
             _ => {
                 tracing::info!(command = ?command.name, "unknown command");
                 return Ok(Ignored);
@@ -93,13 +93,13 @@ impl CommandHandler {
             (message.message_id, message)
         };
 
-        let links = extract_links(&message);
+        let links = extract_links(message);
 
         if links.is_empty() {
             drop(action);
 
             handler
-                .send_generic_reply(&message, "mirror-no-links")
+                .send_generic_reply(message, "mirror-no-links")
                 .await?;
             return Ok(());
         }
@@ -108,7 +108,7 @@ impl CommandHandler {
 
         let mut missing = {
             let mut sites = handler.sites.lock().await;
-            find_images(&from, links, &mut sites, &mut |info| {
+            find_images(from, links, &mut sites, &mut |info| {
                 results.extend(info.results);
             })
             .await?
@@ -118,7 +118,7 @@ impl CommandHandler {
 
         if results.is_empty() {
             handler
-                .send_generic_reply(&message, "mirror-no-results")
+                .send_generic_reply(message, "mirror-no-results")
                 .await?;
             return Ok(());
         }
@@ -222,7 +222,7 @@ impl CommandHandler {
 
             let text = handler
                 .get_fluent_bundle(from.language_code.as_deref(), |bundle| {
-                    get_message(&bundle, "mirror-missing", Some(args)).unwrap()
+                    get_message(bundle, "mirror-missing", Some(args)).unwrap()
                 })
                 .await;
 
@@ -283,7 +283,7 @@ impl CommandHandler {
                 drop(action);
 
                 handler
-                    .send_generic_reply(&message, "source-no-photo")
+                    .send_generic_reply(message, "source-no-photo")
                     .await?;
                 return Ok(());
             }
@@ -316,12 +316,12 @@ impl CommandHandler {
             }
         }
 
-        let best_photo = find_best_photo(&photo).unwrap();
+        let best_photo = find_best_photo(photo).unwrap();
         let mut matches = match_image(
             &handler.bot,
             &handler.conn,
             &handler.fapi,
-            &best_photo,
+            best_photo,
             Some(3),
         )
         .await?
@@ -336,7 +336,7 @@ impl CommandHandler {
         let text = handler
             .get_fluent_bundle(
                 message.from.as_ref().unwrap().language_code.as_deref(),
-                |bundle| source_reply(&matches, &bundle),
+                |bundle| source_reply(&matches, bundle),
             )
             .await;
 
@@ -382,13 +382,13 @@ impl CommandHandler {
             };
 
         let (searched_hash, matches) = if let Some(sizes) = &message.photo {
-            let best_photo = find_best_photo(&sizes).unwrap();
+            let best_photo = find_best_photo(sizes).unwrap();
 
             match_image(
                 &handler.bot,
                 &handler.conn,
                 &handler.fapi,
-                &best_photo,
+                best_photo,
                 Some(10),
             )
             .await?
@@ -398,12 +398,12 @@ impl CommandHandler {
                 .as_ref()
                 .context("Message was not sent from a user")?;
 
-            let links = extract_links(&message);
+            let links = extract_links(message);
 
             let mut results: Vec<PostInfo> = Vec::with_capacity(links.len());
             let missing = {
                 let mut sites = handler.sites.lock().await;
-                find_images(&from, links, &mut sites, &mut |info| {
+                find_images(from, links, &mut sites, &mut |info| {
                     results.extend(info.results);
                 })
                 .await?
@@ -413,14 +413,14 @@ impl CommandHandler {
                 drop(action);
 
                 handler
-                    .send_generic_reply(&message, "alternate-multiple-photo")
+                    .send_generic_reply(message, "alternate-multiple-photo")
                     .await?;
                 return Ok(());
-            } else if missing.len() > 0 {
+            } else if !missing.is_empty() {
                 drop(action);
 
                 handler
-                    .send_generic_reply(&message, "alternate-unknown-link")
+                    .send_generic_reply(message, "alternate-unknown-link")
                     .await?;
                 return Ok(());
             } else if let Some(result) = results.first() {
@@ -438,7 +438,7 @@ impl CommandHandler {
                 drop(action);
 
                 handler
-                    .send_generic_reply(&message, "source-no-photo")
+                    .send_generic_reply(message, "source-no-photo")
                     .await?;
                 return Ok(());
             }
@@ -448,7 +448,7 @@ impl CommandHandler {
             drop(action);
 
             handler
-                .send_generic_reply(&message, "reverse-no-results")
+                .send_generic_reply(message, "reverse-no-results")
                 .await?;
             return Ok(());
         }
@@ -484,7 +484,7 @@ impl CommandHandler {
         let (text, used_hashes) = handler
             .get_fluent_bundle(
                 message.from.as_ref().unwrap().language_code.as_deref(),
-                |bundle| build_alternate_response(&bundle, items),
+                |bundle| build_alternate_response(bundle, items),
             )
             .await;
 
@@ -492,7 +492,7 @@ impl CommandHandler {
 
         if used_hashes.is_empty() {
             handler
-                .send_generic_reply(&message, "reverse-no-results")
+                .send_generic_reply(message, "reverse-no-results")
                 .await?;
             return Ok(());
         }
@@ -511,7 +511,7 @@ impl CommandHandler {
 
         if matches.is_empty() {
             handler
-                .send_generic_reply(&message, "reverse-no-results")
+                .send_generic_reply(message, "reverse-no-results")
                 .await?;
             return Ok(());
         }
@@ -537,7 +537,7 @@ impl CommandHandler {
         let (updated_text, _used_hashes) = handler
             .get_fluent_bundle(
                 message.from.as_ref().unwrap().language_code.as_deref(),
-                |bundle| build_alternate_response(&bundle, items),
+                |bundle| build_alternate_response(bundle, items),
             )
             .await;
 
@@ -570,7 +570,7 @@ impl CommandHandler {
 
         if !message.chat.chat_type.is_group() {
             handler
-                .send_generic_reply(&message, "automatic-enable-not-group")
+                .send_generic_reply(message, "automatic-enable-not-group")
                 .await?;
             return Ok(false);
         }
@@ -598,7 +598,7 @@ impl CommandHandler {
 
         if !user_is_admin {
             handler
-                .send_generic_reply(&message, "automatic-enable-not-admin")
+                .send_generic_reply(message, "automatic-enable-not-admin")
                 .await?;
             return Ok(false);
         }
@@ -633,7 +633,7 @@ impl CommandHandler {
 
         if !bot_is_admin {
             handler
-                .send_generic_reply(&message, "automatic-enable-bot-not-admin")
+                .send_generic_reply(message, "automatic-enable-bot-not-admin")
                 .await?;
             return Ok(false);
         }
@@ -646,7 +646,7 @@ impl CommandHandler {
         handler: &MessageHandler,
         message: &Message,
     ) -> anyhow::Result<()> {
-        if !self.is_valid_admin_group(&handler, &message, true).await? {
+        if !self.is_valid_admin_group(handler, message, true).await? {
             return Ok(());
         }
 
@@ -668,7 +668,7 @@ impl CommandHandler {
             "automatic-disable"
         };
 
-        handler.send_generic_reply(&message, name).await?;
+        handler.send_generic_reply(message, name).await?;
 
         Ok(())
     }
@@ -678,7 +678,7 @@ impl CommandHandler {
         handler: &MessageHandler,
         message: &Message,
     ) -> anyhow::Result<()> {
-        if !self.is_valid_admin_group(&handler, &message, false).await? {
+        if !self.is_valid_admin_group(handler, message, false).await? {
             return Ok(());
         }
 
@@ -704,7 +704,7 @@ impl CommandHandler {
             "automatic-preview-disable"
         };
 
-        handler.send_generic_reply(&message, name).await?;
+        handler.send_generic_reply(message, name).await?;
 
         Ok(())
     }

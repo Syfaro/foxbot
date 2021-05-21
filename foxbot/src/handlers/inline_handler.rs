@@ -62,7 +62,7 @@ impl InlineHandler {
 
         let video_starting = handler
             .get_fluent_bundle(lang, |bundle| {
-                get_message(&bundle, "video-starting", None).unwrap()
+                get_message(bundle, "video-starting", None).unwrap()
             })
             .await;
 
@@ -87,7 +87,7 @@ impl InlineHandler {
     ) -> anyhow::Result<()> {
         tracing::info!("got video progress");
 
-        let video = Video::lookup_display_name(&handler.conn, &display_name)
+        let video = Video::lookup_display_name(&handler.conn, display_name)
             .await?
             .context("Video was missing")?;
         tracing::Span::current().record("video_id", &video.id);
@@ -97,7 +97,7 @@ impl InlineHandler {
             .get_fluent_bundle(None, |bundle| {
                 let mut args = fluent::FluentArgs::new();
                 args.insert("percent", progress.to_string().into());
-                get_message(&bundle, "video-progress", Some(args)).unwrap()
+                get_message(bundle, "video-progress", Some(args)).unwrap()
             })
             .await;
 
@@ -124,11 +124,11 @@ impl InlineHandler {
     ) -> anyhow::Result<()> {
         tracing::info!("video completed");
 
-        let video = Video::lookup_display_name(&handler.conn, &display_name)
+        let video = Video::lookup_display_name(&handler.conn, display_name)
             .await?
             .context("Video was missing")?;
         tracing::Span::current().record("video_id", &video.id);
-        Video::set_processed_url(&handler.conn, video.id, &video_url, &thumb_url).await?;
+        Video::set_processed_url(&handler.conn, video.id, video_url, thumb_url).await?;
 
         let mut messages = Video::associated_messages(&handler.conn, video.id).await?;
 
@@ -141,7 +141,7 @@ impl InlineHandler {
 
         let video_return_button = handler
             .get_fluent_bundle(None, |bundle| {
-                get_message(&bundle, "video-return-button", None).unwrap()
+                get_message(bundle, "video-return-button", None).unwrap()
             })
             .await;
 
@@ -261,7 +261,7 @@ impl Handler for InlineHandler {
                 Some(cmd) if cmd.name == "/start" => {
                     if let Some(text) = &message.text {
                         if text.contains("process-") {
-                            self.process_video(&handler, &message).await?;
+                            self.process_video(handler, message).await?;
                             return Ok(Completed);
                         }
                     }
@@ -293,7 +293,7 @@ impl Handler for InlineHandler {
 
         let mut futs: FuturesOrdered<_> = results
             .iter()
-            .map(|result| process_result(&handler, &result, &inline.from))
+            .map(|result| process_result(handler, result, &inline.from))
             .collect();
 
         let mut responses: Vec<(ResultType, InlineQueryResult)> = vec![];
@@ -310,8 +310,8 @@ impl Handler for InlineHandler {
                 .get_fluent_bundle(inline.from.language_code.as_deref(), |bundle| {
                     InlineQueryResult::article(
                         generate_id(),
-                        get_message(&bundle, "inline-no-results-title", None).unwrap(),
-                        get_message(&bundle, "inline-no-results-body", None).unwrap(),
+                        get_message(bundle, "inline-no-results-title", None).unwrap(),
+                        get_message(bundle, "inline-no-results-body", None).unwrap(),
                     )
                 })
                 .await;
@@ -345,7 +345,7 @@ impl Handler for InlineHandler {
         if inline.query.is_empty() {
             let help_text = handler
                 .get_fluent_bundle(inline.from.language_code.as_deref(), |bundle| {
-                    get_message(&bundle, "inline-help", None).unwrap()
+                    get_message(bundle, "inline-help", None).unwrap()
                 })
                 .await;
 
@@ -358,7 +358,7 @@ impl Handler for InlineHandler {
         if let Some(video) = has_video {
             let process_text = handler
                 .get_fluent_bundle(inline.from.language_code.as_deref(), |bundle| {
-                    get_message(&bundle, "inline-process", None).unwrap()
+                    get_message(bundle, "inline-process", None).unwrap()
                 })
                 .await;
 
@@ -388,7 +388,7 @@ impl Handler for InlineHandler {
                 display_name,
                 progress,
             } => {
-                self.video_progress(&handler, &display_name, &progress)
+                self.video_progress(handler, display_name, progress)
                     .await
             }
             ServiceData::VideoComplete {
@@ -396,7 +396,7 @@ impl Handler for InlineHandler {
                 video_url,
                 thumb_url,
             } => {
-                self.video_complete(&handler, &display_name, &video_url, &thumb_url)
+                self.video_complete(handler, display_name, video_url, thumb_url)
                     .await
             }
             _ => Ok(()),
@@ -414,7 +414,7 @@ async fn process_result(
 ) -> anyhow::Result<Option<Vec<(ResultType, InlineQueryResult)>>> {
     let direct = handler
         .get_fluent_bundle(from.language_code.as_deref(), |bundle| {
-            get_message(&bundle, "inline-direct", None).unwrap()
+            get_message(bundle, "inline-direct", None).unwrap()
         })
         .await;
 
@@ -444,7 +444,7 @@ async fn process_result(
 
     match result.file_type.as_ref() {
         "png" | "jpeg" | "jpg" => Ok(Some(
-            build_image_result(&handler, &result, thumb_url, &keyboard).await?,
+            build_image_result(handler, result, thumb_url, &keyboard).await?,
         )),
         "webm" => {
             let source = match &result.source_link {
@@ -462,7 +462,7 @@ async fn process_result(
 
             let results = build_webm_result(
                 &handler.conn,
-                &result,
+                result,
                 thumb_url,
                 &keyboard,
                 url_id,
@@ -473,8 +473,8 @@ async fn process_result(
 
             Ok(Some(results))
         }
-        "mp4" => Ok(Some(build_mp4_result(&result, thumb_url, &keyboard))),
-        "gif" => Ok(Some(build_gif_result(&result, thumb_url, &keyboard))),
+        "mp4" => Ok(Some(build_mp4_result(result, thumb_url, &keyboard))),
+        "gif" => Ok(Some(build_gif_result(result, thumb_url, &keyboard))),
         other => {
             tracing::warn!(file_type = other, "got unusable type");
             Ok(None)
@@ -572,10 +572,10 @@ async fn build_webm_result(
     url_id: String,
     display_url: &str,
 ) -> anyhow::Result<Vec<(ResultType, InlineQueryResult)>> {
-    let video = match Video::lookup_url_id(&conn, &url_id).await? {
+    let video = match Video::lookup_url_id(conn, &url_id).await? {
         None => {
             let display_name =
-                Video::insert_new_media(&conn, &url_id, &result.url, &display_url, &generate_id())
+                Video::insert_new_media(conn, &url_id, &result.url, display_url, &generate_id())
                     .await?;
 
             return Ok(vec![(

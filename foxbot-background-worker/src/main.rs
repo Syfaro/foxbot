@@ -377,10 +377,7 @@ fn get_custom_span(job: &faktory::Job) -> tracing::Span {
     let custom: HashMap<String, String> = job
         .custom
         .iter()
-        .filter_map(|(key, value)| match value.as_str() {
-            Some(s) => Some((key.to_owned(), s.to_owned())),
-            _ => None,
-        })
+        .filter_map(|(key, value)| value.as_str().map(|s| (key.to_owned(), s.to_owned())))
         .collect();
     let propagator = opentelemetry::sdk::propagation::TraceContextPropagator::new();
     let context = propagator.extract(&custom);

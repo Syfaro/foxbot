@@ -34,7 +34,7 @@ impl Coconut {
     }
 
     pub async fn start_video(&self, source: &str, name: &str) -> anyhow::Result<i32> {
-        let config = self.build_config(&source, &name);
+        let config = self.build_config(source, name);
 
         let resp = self
             .client
