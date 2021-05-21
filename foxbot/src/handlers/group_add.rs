@@ -1,13 +1,13 @@
 use anyhow::Context;
 use async_trait::async_trait;
-use tgbotapi::*;
+use tgbotapi::{Command, Update};
 
 use super::{
     Handler,
-    Status::{self, *},
+    Status::{self, Completed, Ignored},
 };
 use crate::MessageHandler;
-use foxbot_utils::*;
+use foxbot_utils::needs_field;
 
 pub struct GroupAddHandler;
 

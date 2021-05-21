@@ -76,7 +76,7 @@ pub async fn process_hash_new(handler: Arc<Handler>, job: faktory::Job) -> Resul
 
         handler
             .get_fluent_bundle(None, |bundle| {
-                get_message(&bundle, "subscribe-found-single", Some(args)).unwrap()
+                get_message(bundle, "subscribe-found-single", Some(args)).unwrap()
             })
             .await
     } else {
