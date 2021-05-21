@@ -387,10 +387,7 @@ impl Handler for InlineHandler {
             ServiceData::VideoProgress {
                 display_name,
                 progress,
-            } => {
-                self.video_progress(handler, display_name, progress)
-                    .await
-            }
+            } => self.video_progress(handler, display_name, progress).await,
             ServiceData::VideoComplete {
                 display_name,
                 video_url,
@@ -460,16 +457,10 @@ async fn process_result(
                     .context("Result being processed was missing URL ID")?
             };
 
-            let results = build_webm_result(
-                &handler.conn,
-                result,
-                thumb_url,
-                &keyboard,
-                url_id,
-                &source,
-            )
-            .await
-            .expect("unable to process webm results");
+            let results =
+                build_webm_result(&handler.conn, result, thumb_url, &keyboard, url_id, &source)
+                    .await
+                    .expect("unable to process webm results");
 
             Ok(Some(results))
         }

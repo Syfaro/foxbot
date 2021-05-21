@@ -58,12 +58,7 @@ impl Sites {
 
     /// The bot's default site ordering.
     pub fn default_order() -> Vec<Self> {
-        vec![
-            Self::FurAffinity,
-            Self::Weasyl,
-            Self::E621,
-            Self::Twitter,
-        ]
+        vec![Self::FurAffinity, Self::Weasyl, Self::E621, Self::Twitter]
     }
 }
 

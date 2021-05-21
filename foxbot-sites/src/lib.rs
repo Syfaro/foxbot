@@ -857,7 +857,9 @@ impl Site for FurAffinity {
         if let Some(sub_id) = captures.name("id") {
             Some(format!("FurAffinity-{}", sub_id.as_str()))
         } else {
-            captures.name("file_id").map(|file_id| format!("FurAffinityFile-{}", file_id.as_str()))
+            captures
+                .name("file_id")
+                .map(|file_id| format!("FurAffinityFile-{}", file_id.as_str()))
         }
     }
 
