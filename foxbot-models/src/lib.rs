@@ -351,9 +351,9 @@ impl FileCache {
     ) -> anyhow::Result<Option<i64>> {
         use redis::AsyncCommands;
 
-        let mut conn = conn.clone();
+        let mut redis = redis.clone();
 
-        let result = conn
+        let result = redis
             .get::<_, Option<i64>>(file_id)
             .await
             .map(|row| {
@@ -380,8 +380,8 @@ impl FileCache {
     ) -> anyhow::Result<()> {
         use redis::AsyncCommands;
 
-        let mut conn = conn.clone();
-        conn.set_ex(file_id, hash, 60*60*24*7).await?;
+        let mut redis = redis.clone();
+        redis.set_ex(file_id, hash, 60 * 60 * 24 * 7).await?;
 
         Ok(())
     }
