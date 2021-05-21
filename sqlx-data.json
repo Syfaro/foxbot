@@ -307,6 +307,44 @@
       "nullable": []
     }
   },
+  "608059a2b5b4a8855417901072923f5a8bb28b5b22dae35f08a606ec0e501678": {
+    "query": "SELECT account.telegram_id user_id, hash, message_id, photo_id\n            FROM source_notification\n            JOIN account ON account.id = source_notification.account_id\n            WHERE hash <@ ($1, 3)",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "user_id",
+          "type_info": "Int8"
+        },
+        {
+          "ordinal": 1,
+          "name": "hash",
+          "type_info": "Int8"
+        },
+        {
+          "ordinal": 2,
+          "name": "message_id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 3,
+          "name": "photo_id",
+          "type_info": "Text"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Int8"
+        ]
+      },
+      "nullable": [
+        true,
+        true,
+        true,
+        true
+      ]
+    }
+  },
   "66f224396a3d4330a584349bea657f0eca671234070accce35ef3c8efa9d8aa9": {
     "query": "INSERT INTO cached_post (post_url, thumb, cdn_url, width, height) VALUES\n                ($1, $2, $3, $4, $5) RETURNING id",
     "describe": {
@@ -393,44 +431,6 @@
         ]
       },
       "nullable": []
-    }
-  },
-  "73729c4a327de3c763025f0f61d50c9bfd356f7b9b6e6c636d6885cb78c97eee": {
-    "query": "SELECT account.telegram_id user_id, hash, message_id, photo_id\n            FROM source_notification\n            JOIN account ON account.id = lookup_account_by_telegram_id(source_notification.account_id)\n            WHERE hash <@ ($1, 3)",
-    "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "user_id",
-          "type_info": "Int8"
-        },
-        {
-          "ordinal": 1,
-          "name": "hash",
-          "type_info": "Int8"
-        },
-        {
-          "ordinal": 2,
-          "name": "message_id",
-          "type_info": "Int4"
-        },
-        {
-          "ordinal": 3,
-          "name": "photo_id",
-          "type_info": "Text"
-        }
-      ],
-      "parameters": {
-        "Left": [
-          "Int8"
-        ]
-      },
-      "nullable": [
-        true,
-        true,
-        true,
-        true
-      ]
     }
   },
   "737ea3245f4fb679de13f733b4ccf1b81adc59390176a9169c91e85bcf0c4538": {
