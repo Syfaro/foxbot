@@ -146,6 +146,8 @@ pub enum GroupConfigKey {
     GroupAdd,
     GroupNoPreviews,
     HasDeletePermission,
+    CanEditChannel,
+    HasLinkedChat,
 }
 
 impl GroupConfigKey {
@@ -154,6 +156,8 @@ impl GroupConfigKey {
             GroupConfigKey::GroupAdd => "group_add",
             GroupConfigKey::GroupNoPreviews => "group_no_previews",
             GroupConfigKey::HasDeletePermission => "has_delete_permission",
+            GroupConfigKey::CanEditChannel => "can_edit_channel",
+            GroupConfigKey::HasLinkedChat => "has_linked_chat",
         }
     }
 }

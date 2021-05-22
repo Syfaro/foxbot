@@ -4,7 +4,7 @@ use std::{collections::HashMap, future::Future};
 
 use opentelemetry::propagation::TextMapPropagator;
 use tgbotapi::{
-    requests::{EditMessageCaption, EditMessageReplyMarkup, ReplyMarkup},
+    requests::{EditMessageCaption, EditMessageReplyMarkup, GetMe, ReplyMarkup},
     InlineKeyboardButton, InlineKeyboardMarkup,
 };
 use tracing::Instrument;
@@ -124,9 +124,14 @@ fn main() {
 
     let producer = faktory::Producer::connect(None).unwrap();
 
+    let bot_user = runtime
+        .block_on(telegram.make_request(&GetMe))
+        .expect("unable to get own user");
+
     let handler = Arc::new(Handler {
         sites: tokio::sync::Mutex::new(sites),
         telegram: Arc::new(telegram),
+        bot_user,
         producer: Arc::new(Mutex::new(producer)),
         fuzzysearch,
         conn: pool,
@@ -267,6 +272,7 @@ pub struct Handler {
 
     producer: Arc<Mutex<faktory::Producer<std::net::TcpStream>>>,
     telegram: Arc<tgbotapi::Telegram>,
+    bot_user: tgbotapi::User,
     fuzzysearch: fuzzysearch::FuzzySearch,
     conn: sqlx::Pool<sqlx::Postgres>,
     redis: redis::aio::ConnectionManager,

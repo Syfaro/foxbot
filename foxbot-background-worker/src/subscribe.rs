@@ -42,7 +42,6 @@ mod string {
 }
 
 #[tracing::instrument(skip(handler, job), fields(job_id = job.id()))]
-#[deny(clippy::unwrap_used)]
 pub async fn process_hash_new(handler: Arc<Handler>, job: faktory::Job) -> Result<(), Error> {
     let data = job
         .args()
@@ -123,7 +122,6 @@ pub async fn process_hash_new(handler: Arc<Handler>, job: faktory::Job) -> Resul
 }
 
 #[tracing::instrument(skip(handler, job), fields(job_id = job.id()))]
-#[deny(clippy::unwrap_used)]
 pub async fn process_hash_notify(handler: Arc<Handler>, job: faktory::Job) -> Result<(), Error> {
     use tgbotapi::requests::{SendMessage, SendPhoto};
 

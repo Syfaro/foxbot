@@ -1,6 +1,6 @@
 use anyhow::Context;
 use async_trait::async_trait;
-use tgbotapi::ChatMemberUpdated;
+use tgbotapi::{ChatMemberUpdated, ChatType};
 
 use super::{
     Handler,
@@ -59,7 +59,7 @@ async fn handle_my_chat_member(
         _ => return Ok(false),
     };
 
-    tracing::info!("Got updated my chat member info: {:?}", my_chat_member);
+    tracing::info!("got updated my chat member info: {:?}", my_chat_member);
 
     let can_delete = my_chat_member
         .new_chat_member
@@ -74,11 +74,27 @@ async fn handle_my_chat_member(
     )
     .await
     {
-        tracing::error!("Unable to set group delete permission: {:?}", err);
+        tracing::error!("unable to set group delete permission: {:?}", err);
+    }
+
+    if my_chat_member.chat.chat_type == ChatType::Channel {
+        if let Err(err) = GroupConfig::set(
+            &handler.conn,
+            GroupConfigKey::CanEditChannel,
+            my_chat_member.chat.id,
+            my_chat_member
+                .new_chat_member
+                .can_edit_messages
+                .unwrap_or(false),
+        )
+        .await
+        {
+            tracing::error!("unable to set channel edit permission: {:?}", err);
+        }
     }
 
     if let Err(err) = Permissions::add_change(&handler.conn, my_chat_member).await {
-        tracing::error!("Unable to save permission change: {:?}", err);
+        tracing::error!("unable to save permission change: {:?}", err);
     }
 
     Ok(true)
@@ -93,7 +109,7 @@ async fn handle_chat_member(
         _ => return Ok(false),
     };
 
-    tracing::debug!("Got updated chat member info: {:?}", chat_member);
+    tracing::debug!("got updated chat member info: {:?}", chat_member);
 
     match ChatAdmin::update_chat(
         &handler.conn,
@@ -108,19 +124,19 @@ async fn handle_chat_member(
             tracing::debug!(
                 user_id = chat_member.new_chat_member.user.id,
                 is_admin,
-                "Updated user"
+                "updated user"
             );
 
             // Handle loading some data when the bot's administrative status
             // changes.
             if chat_member.new_chat_member.user.id == handler.bot_user.id {
                 if let Err(err) = handle_bot_update(handler, chat_member, is_admin).await {
-                    tracing::error!("Unable to update requested data: {:?}", err);
+                    tracing::error!("unable to update requested data: {:?}", err);
                 }
             }
         }
         Err(err) => {
-            tracing::error!("Unable to save permission change: {:?}", err);
+            tracing::error!("unable to save permission change: {:?}", err);
         }
     }
 
@@ -132,14 +148,14 @@ async fn handle_bot_update(
     chat_member: &ChatMemberUpdated,
     is_admin: bool,
 ) -> anyhow::Result<()> {
-    tracing::debug!("Bot permissions changed");
+    tracing::debug!("bot permissions changed");
 
     if !is_admin {
-        tracing::warn!("Bot has lost admin permissions, discarding potentially stale data");
+        tracing::warn!("bot has lost admin permissions, discarding potentially stale data");
 
         ChatAdmin::flush(&handler.conn, handler.bot_user.id, chat_member.chat.id)
             .await
-            .context("Bot permissions changed and unable to flush channel administrators")?;
+            .context("bot permissions changed and unable to flush channel administrators")?;
     } else {
         let get_chat_administrators = tgbotapi::requests::GetChatAdministrators {
             chat_id: chat_member.chat.id.into(),
@@ -148,10 +164,10 @@ async fn handle_bot_update(
         let admins = handler
             .make_request(&get_chat_administrators)
             .await
-            .context("Unable to get chat administrators after bot permissions changed")?;
+            .context("unable to get chat administrators after bot permissions changed")?;
 
         for admin in admins {
-            tracing::trace!(user_id = admin.user.id, "Discovered group admin");
+            tracing::trace!(user_id = admin.user.id, "discovered group admin");
 
             ChatAdmin::update_chat(
                 &handler.conn,
@@ -162,7 +178,7 @@ async fn handle_bot_update(
             )
             .await
             .context(
-                "Unable to update administrator status of user after bot permissions changed",
+                "unable to update administrator status of user after bot permissions changed",
             )?;
         }
     }

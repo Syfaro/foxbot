@@ -707,7 +707,7 @@ impl FurAffinity {
         let sub: fuzzysearch::File = match self.fapi.lookup_filename(filename).await {
             Ok(mut results) if !results.is_empty() => results.remove(0),
             _ => {
-                let ext = match get_file_ext(&url) {
+                let ext = match get_file_ext(url) {
                     Some(ext) => ext,
                     None => return Ok(None),
                 };
@@ -884,7 +884,7 @@ impl Site for FurAffinity {
                 Ok(id) => id,
                 Err(_err) => return Ok(None),
             };
-            self.load_submission(id, &url).await
+            self.load_submission(id, url).await
         } else {
             return Ok(None);
         };
