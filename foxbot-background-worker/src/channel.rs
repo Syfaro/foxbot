@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use anyhow::Context;
 use foxbot_models::{GroupConfig, GroupConfigKey};
 use tgbotapi::requests::GetChatMember;
 
@@ -23,45 +24,11 @@ pub async fn process_channel_update(handler: Arc<Handler>, job: faktory::Job) ->
         _ => return Ok(()),
     };
 
-    // Store if bot has edit permissions in channel.
-    match GroupConfig::get::<bool>(
-        &handler.conn,
-        message.chat.id,
-        GroupConfigKey::CanEditChannel,
-    )
-    .await
-    {
-        Ok(None) => {
-            match handler
-                .telegram
-                .make_request(&GetChatMember {
-                    chat_id: message.chat_id(),
-                    user_id: handler.bot_user.id,
-                })
-                .await
-            {
-                Ok(chat_member) => {
-                    if let Err(err) = GroupConfig::set(
-                        &handler.conn,
-                        GroupConfigKey::CanEditChannel,
-                        message.chat.id,
-                        chat_member.can_edit_messages.unwrap_or(false),
-                    )
-                    .await
-                    {
-                        tracing::error!("could not update can_edit_channel: {:?}", err);
-                    }
-                }
-                Err(err) => tracing::error!("could not get bot chat member: {:?}", err),
-            }
-        }
-        Err(err) => {
-            tracing::error!(
-                "could not update channel can_edit_channel status: {:?}",
-                err
-            );
-        }
-        _ => (),
+    if let Err(err) = store_channel_edit(&handler, &message).await {
+        tracing::error!(
+            "could not update bot knowledge of channel edit permissions: {:?}",
+            err
+        );
     }
 
     let file = find_best_photo(sizes).ok_or(Error::MissingData)?;
@@ -109,7 +76,6 @@ pub async fn process_channel_update(handler: Arc<Handler>, job: faktory::Job) ->
             .collect();
         if has_similar_hash(searched_hash, &urls).await {
             tracing::debug!("url in post contained similar hash");
-
             return Ok(());
         }
     }
@@ -388,6 +354,52 @@ async fn has_similar_hash(to: i64, urls: &[&str]) -> bool {
     }
 
     false
+}
+
+/// Store if bot has edit permissions in channel.
+#[tracing::instrument(skip(handler, message))]
+async fn store_channel_edit(handler: &Handler, message: &tgbotapi::Message) -> anyhow::Result<()> {
+    // Check if we already have a saved value for the channel. If we do, it's
+    // probably correct and we don't need to update it. Permissions are updated
+    // through Telegram updates normally.
+    if GroupConfig::get::<bool>(
+        &handler.conn,
+        message.chat.id,
+        GroupConfigKey::CanEditChannel,
+    )
+    .await
+    .context("could not check if we knew if bot had edit permissions in channel")?
+    .is_some()
+    {
+        tracing::trace!("already knew if bot had edit permissions in channel");
+        return Ok(());
+    }
+
+    let chat_member = handler
+        .telegram
+        .make_request(&GetChatMember {
+            chat_id: message.chat_id(),
+            user_id: handler.bot_user.id,
+        })
+        .await
+        .context("could not get bot user in channel")?;
+
+    let can_edit_messages = chat_member.can_edit_messages.unwrap_or(false);
+    tracing::debug!(
+        can_edit_messages,
+        "updated if bot can edit messages in channel"
+    );
+
+    GroupConfig::set(
+        &handler.conn,
+        GroupConfigKey::CanEditChannel,
+        message.chat.id,
+        can_edit_messages,
+    )
+    .await
+    .context("could not save bot channel edit permissions")?;
+
+    Ok(())
 }
 
 #[cfg(test)]
