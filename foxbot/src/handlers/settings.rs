@@ -1,14 +1,19 @@
 use anyhow::Context;
 use async_trait::async_trait;
-use tgbotapi::{requests::*, *};
+use tgbotapi::{
+    requests::{
+        AnswerCallbackQuery, EditMessageReplyMarkup, EditMessageText, ReplyMarkup, SendMessage,
+    },
+    CallbackQuery, Command, InlineKeyboardButton, InlineKeyboardMarkup, Message, Update,
+};
 
 use super::{
     Handler,
-    Status::{self, *},
+    Status::{self, Completed, Ignored},
 };
 use crate::MessageHandler;
 use foxbot_models::{Sites, User, UserConfig, UserConfigKey};
-use foxbot_utils::*;
+use foxbot_utils::{get_message, needs_field};
 
 pub struct SettingsHandler;
 
@@ -26,7 +31,7 @@ impl Handler for SettingsHandler {
     ) -> anyhow::Result<Status> {
         if let Some(command) = command {
             if command.name == "/settings" {
-                send_settings_message(&handler, &update.message.as_ref().unwrap())
+                send_settings_message(handler, update.message.as_ref().unwrap())
                     .await
                     .context("unable to send settings message")?;
                 return Ok(Completed);
@@ -41,7 +46,7 @@ impl Handler for SettingsHandler {
         }
 
         if data.starts_with("s:order:") {
-            return order(&handler, &callback_query, &data).await;
+            return order(handler, callback_query, data).await;
         }
 
         Ok(Completed)
@@ -56,7 +61,7 @@ async fn order(
     if data.ends_with(":e") {
         let text = handler
             .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
-                get_message(&bundle, "settings-unsupported", None).unwrap()
+                get_message(bundle, "settings-unsupported", None).unwrap()
             })
             .await;
 
@@ -82,7 +87,7 @@ async fn order(
 
         let text = handler
             .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
-                get_message(&bundle, "settings-move-unable", Some(args)).unwrap()
+                get_message(bundle, "settings-move-unable", Some(args)).unwrap()
             })
             .await;
 
@@ -150,7 +155,7 @@ async fn order(
 
         let text = handler
             .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
-                get_message(&bundle, "settings-move-updated", Some(args)).unwrap()
+                get_message(bundle, "settings-move-updated", Some(args)).unwrap()
             })
             .await;
 
@@ -180,7 +185,7 @@ async fn order(
 
     let text = handler
         .get_fluent_bundle(from, |bundle| {
-            get_message(&bundle, "settings-site-order", None).unwrap()
+            get_message(bundle, "settings-site-order", None).unwrap()
         })
         .await;
 
@@ -219,7 +224,7 @@ async fn send_settings_message(
 
     let site_preference = handler
         .get_fluent_bundle(from, |bundle| {
-            get_message(&bundle, "settings-site-preference", None).unwrap()
+            get_message(bundle, "settings-site-preference", None).unwrap()
         })
         .await;
 
@@ -233,7 +238,7 @@ async fn send_settings_message(
 
     let text = handler
         .get_fluent_bundle(from, |bundle| {
-            get_message(&bundle, "settings-main", None).unwrap()
+            get_message(bundle, "settings-main", None).unwrap()
         })
         .await;
 
@@ -263,7 +268,7 @@ async fn sort_order_keyboard<U: Into<User>>(
 ) -> anyhow::Result<InlineKeyboardMarkup> {
     let user = user.into();
 
-    let row: Option<Vec<String>> = UserConfig::get(&conn, UserConfigKey::SiteSortOrder, user)
+    let row: Option<Vec<String>> = UserConfig::get(conn, UserConfigKey::SiteSortOrder, user)
         .await
         .context("unable to query user sort order")?;
     let mut sites = match row {
@@ -276,7 +281,7 @@ async fn sort_order_keyboard<U: Into<User>>(
     // If the available sites has changed, reset ordering to add new items.
     if sites.len() != foxbot_models::Sites::len() {
         sites = foxbot_models::Sites::default_order();
-        UserConfig::delete(&conn, UserConfigKey::SiteSortOrder, user).await?;
+        UserConfig::delete(conn, UserConfigKey::SiteSortOrder, user).await?;
     }
 
     for (idx, site) in sites.iter().enumerate() {

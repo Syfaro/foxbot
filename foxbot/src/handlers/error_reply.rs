@@ -45,7 +45,7 @@ impl Handler for ErrorReplyHandler {
             return Ok(Ignored);
         }
 
-        let code = match get_code_block(&entities, &reply_message_text) {
+        let code = match get_code_block(entities, reply_message_text) {
             Some(code) => code,
             _ => return Ok(Ignored),
         };
@@ -81,7 +81,7 @@ impl Handler for ErrorReplyHandler {
             .context("unable to send feedback to sentry")?;
 
         handler
-            .send_generic_reply(&message, "error-feedback")
+            .send_generic_reply(message, "error-feedback")
             .await
             .context("unable to send user confirmation about received feedback")?;
 

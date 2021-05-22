@@ -1,9 +1,12 @@
 use std::sync::Arc;
 
+use anyhow::Context;
+use foxbot_models::{GroupConfig, GroupConfigKey};
+use tgbotapi::requests::GetChatMember;
+
 use crate::*;
 
 #[tracing::instrument(skip(handler, job), fields(job_id = job.id()))]
-#[deny(clippy::unwrap_used)]
 pub async fn process_channel_update(handler: Arc<Handler>, job: faktory::Job) -> Result<(), Error> {
     let data = job
         .args()
@@ -21,12 +24,19 @@ pub async fn process_channel_update(handler: Arc<Handler>, job: faktory::Job) ->
         _ => return Ok(()),
     };
 
-    let file = find_best_photo(&sizes).ok_or(Error::MissingData)?;
+    if let Err(err) = store_channel_edit(&handler, &message).await {
+        tracing::error!(
+            "could not update bot knowledge of channel edit permissions: {:?}",
+            err
+        );
+    }
+
+    let file = find_best_photo(sizes).ok_or(Error::MissingData)?;
     let (searched_hash, mut matches) = match_image(
         &handler.telegram,
-        &handler.conn,
+        &handler.redis,
         &handler.fuzzysearch,
-        &file,
+        file,
         Some(3),
     )
     .await?;
@@ -66,7 +76,6 @@ pub async fn process_channel_update(handler: Arc<Handler>, job: faktory::Job) ->
             .collect();
         if has_similar_hash(searched_hash, &urls).await {
             tracing::debug!("url in post contained similar hash");
-
             return Ok(());
         }
     }
@@ -102,7 +111,6 @@ pub async fn process_channel_update(handler: Arc<Handler>, job: faktory::Job) ->
 }
 
 #[tracing::instrument(skip(handler, job), fields(job_id = job.id()))]
-#[deny(clippy::unwrap_used)]
 pub async fn process_channel_edit(handler: Arc<Handler>, job: faktory::Job) -> Result<(), Error> {
     let data: serde_json::Value = job
         .args()
@@ -260,7 +268,7 @@ pub async fn process_channel_edit(handler: Arc<Handler>, job: faktory::Job) -> R
 /// No link normalization is required here because all links are already
 /// normalized when coming from FuzzySearch.
 async fn already_had_source(
-    conn: &redis::aio::ConnectionManager,
+    redis: &redis::aio::ConnectionManager,
     message: &tgbotapi::Message,
     matches: &[fuzzysearch::File],
 ) -> anyhow::Result<bool> {
@@ -280,9 +288,9 @@ async fn already_had_source(
 
     tracing::trace!(%group_id, "adding new sources: {:?}", urls);
 
-    let mut conn = conn.clone();
-    let added_links: usize = conn.sadd(&key, urls).await?;
-    conn.expire(&key, 300).await?;
+    let mut redis = redis.clone();
+    let added_links: usize = redis.sadd(&key, urls).await?;
+    redis.expire(&key, 300).await?;
 
     tracing::debug!(
         source_count,
@@ -346,6 +354,48 @@ async fn has_similar_hash(to: i64, urls: &[&str]) -> bool {
     }
 
     false
+}
+
+/// Store if bot has edit permissions in channel.
+#[tracing::instrument(skip(handler, message))]
+async fn store_channel_edit(handler: &Handler, message: &tgbotapi::Message) -> anyhow::Result<()> {
+    // Check if we already have a saved value for the channel. If we do, it's
+    // probably correct and we don't need to update it. Permissions are updated
+    // through Telegram updates normally.
+    if GroupConfig::get::<bool, _>(&handler.conn, &message.chat, GroupConfigKey::CanEditChannel)
+        .await
+        .context("could not check if we knew if bot had edit permissions in channel")?
+        .is_some()
+    {
+        tracing::trace!("already knew if bot had edit permissions in channel");
+        return Ok(());
+    }
+
+    let chat_member = handler
+        .telegram
+        .make_request(&GetChatMember {
+            chat_id: message.chat_id(),
+            user_id: handler.bot_user.id,
+        })
+        .await
+        .context("could not get bot user in channel")?;
+
+    let can_edit_messages = chat_member.can_edit_messages.unwrap_or(false);
+    tracing::debug!(
+        can_edit_messages,
+        "updated if bot can edit messages in channel"
+    );
+
+    GroupConfig::set(
+        &handler.conn,
+        GroupConfigKey::CanEditChannel,
+        &message.chat,
+        can_edit_messages,
+    )
+    .await
+    .context("could not save bot channel edit permissions")?;
+
+    Ok(())
 }
 
 #[cfg(test)]

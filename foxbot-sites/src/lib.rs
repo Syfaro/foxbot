@@ -190,7 +190,7 @@ impl Site for Direct {
 
     async fn url_supported(&mut self, url: &str) -> bool {
         // If the URL extension isn't one in our list, ignore.
-        if !Direct::EXTENSIONS.iter().any(|ext| url.ends_with(ext)) {
+        if !Self::EXTENSIONS.iter().any(|ext| url.ends_with(ext)) {
             return false;
         }
 
@@ -210,7 +210,7 @@ impl Site for Direct {
         };
 
         // Return if the Content-Type is in our list.
-        Direct::TYPES.iter().any(|t| content_type == t)
+        Self::TYPES.iter().any(|t| content_type == t)
     }
 
     async fn get_images(
@@ -237,8 +237,13 @@ impl Site for Direct {
             tracing::warn!("reverse search timed out");
         }
 
+        let ext = match get_file_ext(url) {
+            Some(ext) => ext,
+            None => return Ok(None),
+        };
+
         Ok(Some(vec![PostInfo {
-            file_type: get_file_ext(url).unwrap().to_string(),
+            file_type: ext.to_string(),
             url: u.clone(),
             source_link,
             site_name: source_name.unwrap_or_else(|| self.name()),
@@ -468,7 +473,7 @@ impl Site for E621 {
 
             format!("https://{}/posts.json?md5={}", self.site.host(), md5)
         } else {
-            return self.get_pool(&url).await;
+            return self.get_pool(url).await;
         };
 
         let resp: E621Resp = self.load(&endpoint).await?;
@@ -538,7 +543,7 @@ impl Twitter {
         Vec<egg_mode::entities::MediaEntity>,
     )> {
         if let Some(Ok(id)) = captures.name("id").map(|id| id.as_str().parse::<u64>()) {
-            let tweet = egg_mode::tweet::show(id, &token).await.ok()?.response;
+            let tweet = egg_mode::tweet::show(id, token).await.ok()?.response;
 
             let user = tweet.user?;
             let media = tweet.extended_entities?.media;
@@ -547,7 +552,7 @@ impl Twitter {
         } else {
             let user = captures["screen_name"].to_owned();
             let timeline =
-                egg_mode::tweet::user_timeline(user, false, false, &token).with_page_size(200);
+                egg_mode::tweet::user_timeline(user, false, false, token).with_page_size(200);
             let (_timeline, feed) = timeline.start().await.ok()?;
 
             let user = feed.iter().next()?.user.as_ref()?.to_owned();
@@ -614,9 +619,9 @@ impl Site for Twitter {
         Ok(Some(
             media
                 .into_iter()
-                .map(|item| match get_best_video(&item) {
-                    Some(video_url) => PostInfo {
-                        file_type: get_file_ext(video_url).unwrap().to_owned(),
+                .filter_map(|item| match get_best_video(&item) {
+                    Some(video_url) => Some(PostInfo {
+                        file_type: get_file_ext(video_url)?.to_owned(),
                         url: video_url.to_string(),
                         thumb: Some(format!("{}:thumb", item.media_url_https.clone())),
                         source_link: Some(item.expanded_url),
@@ -624,16 +629,16 @@ impl Site for Twitter {
                         title: Some(user.screen_name.clone()),
                         site_name: self.name(),
                         ..Default::default()
-                    },
-                    None => PostInfo {
-                        file_type: get_file_ext(&item.media_url_https).unwrap().to_owned(),
+                    }),
+                    None => Some(PostInfo {
+                        file_type: get_file_ext(&item.media_url_https)?.to_owned(),
                         url: item.media_url_https.clone(),
                         thumb: Some(format!("{}:thumb", item.media_url_https.clone())),
                         source_link: Some(item.expanded_url),
                         personal: user.protected,
                         site_name: self.name(),
                         ..Default::default()
-                    },
+                    }),
                 })
                 .collect(),
         ))
@@ -650,8 +655,7 @@ fn get_best_video(media: &egg_mode::entities::MediaEntity) -> Option<&str> {
     let highest_bitrate = video_info
         .variants
         .iter()
-        .max_by_key(|video| video.bitrate.unwrap_or(0))
-        .unwrap();
+        .max_by_key(|video| video.bitrate.unwrap_or(0))?;
 
     Some(&highest_bitrate.url)
 }
@@ -692,11 +696,16 @@ impl FurAffinity {
     /// Attempt to resolve a direct image URL into a submission using
     /// FuzzySearch.
     async fn load_direct_url(&self, filename: &str, url: &str) -> anyhow::Result<Option<PostInfo>> {
-        let sub: fuzzysearch::File = match self.fapi.lookup_filename(&filename).await {
+        let sub: fuzzysearch::File = match self.fapi.lookup_filename(filename).await {
             Ok(mut results) if !results.is_empty() => results.remove(0),
             _ => {
+                let ext = match get_file_ext(url) {
+                    Some(ext) => ext,
+                    None => return Ok(None),
+                };
+
                 return Ok(Some(PostInfo {
-                    file_type: get_file_ext(&url).unwrap().to_string(),
+                    file_type: ext.to_string(),
                     url: url.to_owned(),
                     site_name: self.name(),
                     ..Default::default()
@@ -704,8 +713,13 @@ impl FurAffinity {
             }
         };
 
+        let ext = match get_file_ext(&sub.filename) {
+            Some(ext) => ext,
+            None => return Ok(None),
+        };
+
         Ok(Some(PostInfo {
-            file_type: get_file_ext(&sub.filename).unwrap().to_string(),
+            file_type: ext.to_string(),
             url: sub.url.clone(),
             source_link: Some(sub.url()),
             site_name: self.name(),
@@ -749,8 +763,13 @@ impl FurAffinity {
                 .context("furaffinity was missing src")?
         );
 
+        let ext = match get_file_ext(&image_url) {
+            Some(ext) => ext,
+            None => return Ok(None),
+        };
+
         Ok(Some(PostInfo {
-            file_type: get_file_ext(&image_url).unwrap().to_string(),
+            file_type: ext.to_string(),
             url: image_url.clone(),
             source_link: Some(url.to_string()),
             site_name: self.name(),
@@ -763,15 +782,18 @@ impl FurAffinity {
             .lookup_id(id)
             .await
             .map(|files| {
-                files.first().map(|file| PostInfo {
-                    file_type: get_file_ext(&file.filename).unwrap().to_string(),
-                    url: file.url.clone(),
-                    source_link: Some(file.url()),
-                    site_name: self.name(),
-                    ..Default::default()
+                files.first().map(|file| {
+                    Some(PostInfo {
+                        file_type: get_file_ext(&file.filename)?.to_string(),
+                        url: file.url.clone(),
+                        source_link: Some(file.url()),
+                        site_name: self.name(),
+                        ..Default::default()
+                    })
                 })
             })
             .context("Unable to lookup FurAffinity ID on FuzzySearch")
+            .map(|post| post.flatten())
     }
 
     /// Load a submission from the given ID and URL by racing FurAffinity and
@@ -784,7 +806,7 @@ impl FurAffinity {
         };
 
         let fuzzy = self.load_from_fuzzy(id);
-        let fa = self.load_from_fa(&url);
+        let fa = self.load_from_fa(url);
 
         pin_mut!(fa);
         pin_mut!(fuzzy);
@@ -826,15 +848,15 @@ impl Site for FurAffinity {
 
         if let Some(sub_id) = captures.name("id") {
             Some(format!("FurAffinity-{}", sub_id.as_str()))
-        } else if let Some(file_id) = captures.name("file_id") {
-            Some(format!("FurAffinityFile-{}", file_id.as_str()))
         } else {
-            None
+            captures
+                .name("file_id")
+                .map(|file_id| format!("FurAffinityFile-{}", file_id.as_str()))
         }
     }
 
     async fn url_supported(&mut self, url: &str) -> bool {
-        self.matcher.is_match(&url)
+        self.matcher.is_match(url)
     }
 
     async fn get_images(
@@ -844,14 +866,17 @@ impl Site for FurAffinity {
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let captures = self
             .matcher
-            .captures(&url)
+            .captures(url)
             .context("Could not capture FurAffinity URL")?;
 
         let image = if let Some(filename) = captures.name("file_name") {
-            self.load_direct_url(filename.as_str(), &url).await
+            self.load_direct_url(filename.as_str(), url).await
         } else if let Some(id) = captures.name("id") {
-            let id: i32 = id.as_str().parse().unwrap();
-            self.load_submission(id, &url).await
+            let id: i32 = match id.as_str().parse() {
+                Ok(id) => id,
+                Err(_err) => return Ok(None),
+            };
+            self.load_submission(id, url).await
         } else {
             return Ok(None);
         };
@@ -976,13 +1001,15 @@ impl Site for Mastodon {
         Ok(Some(
             json.media_attachments
                 .iter()
-                .map(|media| PostInfo {
-                    file_type: get_file_ext(&media.url).unwrap().to_owned(),
-                    url: media.url.clone(),
-                    thumb: Some(media.preview_url.clone()),
-                    source_link: Some(json.url.clone()),
-                    site_name: self.name(),
-                    ..Default::default()
+                .filter_map(|media| {
+                    Some(PostInfo {
+                        file_type: get_file_ext(&media.url)?.to_owned(),
+                        url: media.url.clone(),
+                        thumb: Some(media.preview_url.clone()),
+                        source_link: Some(json.url.clone()),
+                        site_name: self.name(),
+                        ..Default::default()
+                    })
                 })
                 .collect(),
         ))
@@ -1084,18 +1111,18 @@ impl Site for Weasyl {
             submissions
                 .iter()
                 .zip(thumbs)
-                .map(|(sub, thumb)| {
-                    let sub_url = sub.get("url").unwrap().as_str().unwrap().to_owned();
-                    let thumb_url = thumb.get("url").unwrap().as_str().unwrap().to_owned();
+                .filter_map(|(sub, thumb)| {
+                    let sub_url = sub.get("url")?.as_str()?.to_owned();
+                    let thumb_url = thumb.get("url")?.as_str()?.to_owned();
 
-                    PostInfo {
-                        file_type: get_file_ext(&sub_url).unwrap().to_owned(),
+                    Some(PostInfo {
+                        file_type: get_file_ext(&sub_url)?.to_owned(),
                         url: sub_url.clone(),
                         thumb: Some(thumb_url),
                         source_link: Some(url.to_string()),
                         site_name: self.name(),
                         ..Default::default()
-                    }
+                    })
                 })
                 .collect(),
         ))
@@ -1270,7 +1297,10 @@ impl Site for Inkbunny {
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let captures = self.matcher.captures(url).unwrap();
-        let sub_id: i32 = captures["id"].to_owned().parse().unwrap();
+        let sub_id: i32 = match captures["id"].to_owned().parse() {
+            Ok(id) => id,
+            Err(_err) => return Ok(None),
+        };
 
         let submissions = self.get_submissions(&[sub_id]).await?;
 
@@ -1278,8 +1308,13 @@ impl Site for Inkbunny {
 
         for submission in submissions.submissions {
             for file in submission.files {
+                let ext = match get_file_ext(&file.file_url_screen) {
+                    Some(ext) => ext,
+                    None => continue,
+                };
+
                 results.push(PostInfo {
-                    file_type: get_file_ext(&file.file_url_screen).unwrap().to_owned(),
+                    file_type: ext.to_owned(),
                     url: file.file_url_screen.clone(),
                     thumb: Some(file.thumbnail_url_medium_noncustom.clone()),
                     source_link: Some(url.to_owned()),

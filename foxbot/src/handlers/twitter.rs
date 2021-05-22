@@ -2,11 +2,11 @@ use async_trait::async_trait;
 
 use super::{
     Handler,
-    Status::{self, *},
+    Status::{self, Completed, Ignored},
 };
 use crate::{Config, MessageHandler, ServiceData};
 use foxbot_models::{Twitter, TwitterAccount};
-use foxbot_utils::*;
+use foxbot_utils::{get_message, needs_field};
 
 pub struct TwitterHandler;
 
@@ -26,7 +26,7 @@ impl Handler for TwitterHandler {
             Some(cmd) if cmd.name == "/twitter" => {
                 let message = needs_field!(update, message);
                 let user = needs_field!(message, from);
-                return handle_command(&handler, &message, &user)
+                return handle_command(handler, message, user)
                     .await
                     .map(|_| Completed);
             }
@@ -40,7 +40,7 @@ impl Handler for TwitterHandler {
             }) if data == "twitter-add" => {
                 let callback = needs_field!(update, callback_query);
                 let message = needs_field!(callback, message);
-                handle_add(&handler, &callback, &message)
+                handle_add(handler, callback, message)
                     .await
                     .map(|_| Completed)
             }
@@ -49,7 +49,7 @@ impl Handler for TwitterHandler {
             }) if data == "twitter-remove" => {
                 let callback = needs_field!(update, callback_query);
                 let message = needs_field!(callback, message);
-                handle_remove(&handler, &callback, &message)
+                handle_remove(handler, callback, message)
                     .await
                     .map(|_| Completed)
             }
@@ -63,7 +63,7 @@ impl Handler for TwitterHandler {
         service: &ServiceData,
     ) -> anyhow::Result<()> {
         if let ServiceData::TwitterVerified { token, verifier } = service {
-            verify_account(&handler, &token, &verifier).await
+            verify_account(handler, token, verifier).await
         } else {
             Ok(())
         }
@@ -77,7 +77,7 @@ async fn handle_command(
 ) -> anyhow::Result<()> {
     if message.chat.chat_type != tgbotapi::ChatType::Private {
         handler
-            .send_generic_reply(&message, "twitter-private")
+            .send_generic_reply(message, "twitter-private")
             .await?;
         return Ok(());
     }
@@ -91,15 +91,15 @@ async fn handle_command(
 
             let text = handler
                 .get_fluent_bundle(user.language_code.as_deref(), |bundle| {
-                    get_message(&bundle, "twitter-existing-account", Some(args)).unwrap()
+                    get_message(bundle, "twitter-existing-account", Some(args)).unwrap()
                 })
                 .await;
 
             let (change, remove) = handler
                 .get_fluent_bundle(user.language_code.as_deref(), |bundle| {
                     (
-                        get_message(&bundle, "twitter-change-anyway", None).unwrap(),
-                        get_message(&bundle, "twitter-remove-account", None).unwrap(),
+                        get_message(bundle, "twitter-change-anyway", None).unwrap(),
+                        get_message(bundle, "twitter-remove-account", None).unwrap(),
                     )
                 })
                 .await;
@@ -134,7 +134,7 @@ async fn handle_command(
         }
     }
 
-    let link = prepare_authorization_link(&handler, &user).await?;
+    let link = prepare_authorization_link(handler, user).await?;
 
     let message = tgbotapi::requests::SendMessage {
         chat_id: user.id.into(),
@@ -152,7 +152,7 @@ async fn verify_account(
     token: &str,
     verifier: &str,
 ) -> anyhow::Result<()> {
-    let row = match Twitter::get_request(&handler.conn, &token).await? {
+    let row = match Twitter::get_request(&handler.conn, token).await? {
         Some(row) => row,
         _ => return Ok(()),
     };
@@ -182,7 +182,7 @@ async fn verify_account(
 
     let text = handler
         .get_fluent_bundle(None, |bundle| {
-            get_message(&bundle, "twitter-welcome", Some(args)).unwrap()
+            get_message(bundle, "twitter-welcome", Some(args)).unwrap()
         })
         .await;
 
@@ -216,9 +216,9 @@ async fn handle_add(
     callback: &tgbotapi::CallbackQuery,
     message: &tgbotapi::Message,
 ) -> anyhow::Result<()> {
-    answer_callback(&handler, &callback).await?;
+    answer_callback(handler, callback).await?;
 
-    let link = prepare_authorization_link(&handler, &callback.from).await?;
+    let link = prepare_authorization_link(handler, &callback.from).await?;
 
     let edit_message = tgbotapi::requests::EditMessageText {
         chat_id: message.chat_id(),
@@ -237,13 +237,13 @@ async fn handle_remove(
     callback: &tgbotapi::CallbackQuery,
     message: &tgbotapi::Message,
 ) -> anyhow::Result<()> {
-    answer_callback(&handler, &callback).await?;
+    answer_callback(handler, callback).await?;
 
     Twitter::remove_account(&handler.conn, &callback.from).await?;
 
     let text = handler
         .get_fluent_bundle(callback.from.language_code.as_deref(), |bundle| {
-            get_message(&bundle, "twitter-removed-account", None).unwrap()
+            get_message(bundle, "twitter-removed-account", None).unwrap()
         })
         .await;
 
@@ -283,7 +283,7 @@ async fn prepare_authorization_link(
 
     let text = handler
         .get_fluent_bundle(user.language_code.as_deref(), |bundle| {
-            get_message(&bundle, "twitter-callback", Some(args)).unwrap()
+            get_message(bundle, "twitter-callback", Some(args)).unwrap()
         })
         .await;
 
@@ -299,7 +299,7 @@ fn get_keypair(config: &Config) -> egg_mode::KeyPair {
 
 fn get_access(config: &Config, account: TwitterAccount) -> egg_mode::Token {
     egg_mode::Token::Access {
-        consumer: get_keypair(&config),
+        consumer: get_keypair(config),
         access: egg_mode::KeyPair::new(account.consumer_key, account.consumer_secret),
     }
 }

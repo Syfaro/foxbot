@@ -111,10 +111,10 @@ impl std::str::FromStr for Sites {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "FurAffinity" => Ok(Sites::FurAffinity),
-            "e621" => Ok(Sites::E621),
-            "Twitter" => Ok(Sites::Twitter),
-            "Weasyl" => Ok(Sites::Weasyl),
+            "FurAffinity" => Ok(Self::FurAffinity),
+            "e621" => Ok(Self::E621),
+            "Twitter" => Ok(Self::Twitter),
+            "Weasyl" => Ok(Self::Weasyl),
             _ => Err(ParseSitesError),
         }
     }
@@ -129,21 +129,16 @@ impl Sites {
     /// Get the user-understandable name of the site.
     pub fn as_str(&self) -> &'static str {
         match *self {
-            Sites::FurAffinity => "FurAffinity",
-            Sites::E621 => "e621",
-            Sites::Twitter => "Twitter",
-            Sites::Weasyl => "Weasyl",
+            Self::FurAffinity => "FurAffinity",
+            Self::E621 => "e621",
+            Self::Twitter => "Twitter",
+            Self::Weasyl => "Weasyl",
         }
     }
 
     /// The bot's default site ordering.
-    pub fn default_order() -> Vec<Sites> {
-        vec![
-            Sites::FurAffinity,
-            Sites::Weasyl,
-            Sites::E621,
-            Sites::Twitter,
-        ]
+    pub fn default_order() -> Vec<Self> {
+        vec![Self::FurAffinity, Self::Weasyl, Self::E621, Self::Twitter]
     }
 }
 
@@ -237,6 +232,8 @@ pub enum GroupConfigKey {
     GroupAdd,
     GroupNoPreviews,
     HasDeletePermission,
+    CanEditChannel,
+    HasLinkedChat,
 }
 
 impl GroupConfigKey {
@@ -245,6 +242,8 @@ impl GroupConfigKey {
             GroupConfigKey::GroupAdd => "group_add",
             GroupConfigKey::GroupNoPreviews => "group_no_previews",
             GroupConfigKey::HasDeletePermission => "has_delete_permission",
+            GroupConfigKey::CanEditChannel => "can_edit_channel",
+            GroupConfigKey::HasLinkedChat => "has_linked_chat",
         }
     }
 }
@@ -466,11 +465,15 @@ pub struct FileCache;
 impl FileCache {
     /// Look up a file's cached hash by its unique ID.
     pub async fn get(
-        conn: &sqlx::Pool<sqlx::Postgres>,
+        redis: &redis::aio::ConnectionManager,
         file_id: &str,
     ) -> anyhow::Result<Option<i64>> {
-        let result = sqlx::query!("SELECT hash FROM file_id_cache WHERE file_id = $1", file_id)
-            .fetch_optional(conn)
+        use redis::AsyncCommands;
+
+        let mut redis = redis.clone();
+
+        let result = redis
+            .get::<_, Option<i64>>(file_id)
             .await
             .map(|row| {
                 let status = match row {
@@ -482,7 +485,7 @@ impl FileCache {
                     .unwrap()
                     .inc();
 
-                row.map(|row| row.hash)
+                row
             })
             .context("unable to select hash from file_id_cache");
 
@@ -490,17 +493,14 @@ impl FileCache {
     }
 
     pub async fn set(
-        conn: &sqlx::Pool<sqlx::Postgres>,
+        redis: &redis::aio::ConnectionManager,
         file_id: &str,
         hash: i64,
     ) -> anyhow::Result<()> {
-        sqlx::query!(
-            "INSERT INTO file_id_cache (file_id, hash) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-            file_id,
-            hash
-        )
-        .execute(conn)
-        .await?;
+        use redis::AsyncCommands;
+
+        let mut redis = redis.clone();
+        redis.set_ex(file_id, hash, 60 * 60 * 24 * 7).await?;
 
         Ok(())
     }
@@ -534,7 +534,7 @@ impl Video {
     pub async fn lookup_display_name(
         conn: &sqlx::Pool<sqlx::Postgres>,
         display_name: &str,
-    ) -> anyhow::Result<Option<Video>> {
+    ) -> anyhow::Result<Option<Self>> {
         let video = sqlx::query_as!(
             Video,
             "SELECT id, processed, source, url, mp4_url, thumb_url, display_url, display_name, job_id
@@ -552,7 +552,7 @@ impl Video {
     pub async fn lookup_url_id(
         conn: &sqlx::Pool<sqlx::Postgres>,
         url_id: &str,
-    ) -> anyhow::Result<Option<Video>> {
+    ) -> anyhow::Result<Option<Self>> {
         let video = sqlx::query_as!(
             Video,
             "SELECT id, processed, source, url, mp4_url, thumb_url, display_url, display_name, job_id
@@ -693,7 +693,7 @@ impl CachedPost {
         conn: &sqlx::Pool<sqlx::Postgres>,
         post_url: &str,
         thumb: bool,
-    ) -> anyhow::Result<Option<CachedPost>> {
+    ) -> anyhow::Result<Option<Self>> {
         let post = sqlx::query!(
             "SELECT id, post_url, thumb, cdn_url, width, height
             FROM cached_post
@@ -709,7 +709,7 @@ impl CachedPost {
             None => return Ok(None),
         };
 
-        Ok(Some(CachedPost {
+        Ok(Some(Self {
             id: post.id,
             post_url: post.post_url,
             thumb: post.thumb,
@@ -910,17 +910,15 @@ impl Subscriptions {
         let subscriptions = sqlx::query!(
             "SELECT account.telegram_id user_id, hash, message_id, photo_id
             FROM source_notification
-            JOIN account ON account.id = lookup_account_by_telegram_id(source_notification.account_id)
+            JOIN account ON account.id = source_notification.account_id
             WHERE hash <@ ($1, 3)",
             hash
         )
-        .map(|row| {
-            Subscription {
-                telegram_id: row.user_id.unwrap(),
-                hash: row.hash.unwrap(),
-                message_id: row.message_id,
-                photo_id: row.photo_id,
-            }
+        .map(|row| Subscription {
+            telegram_id: row.user_id.unwrap(),
+            hash: row.hash.unwrap(),
+            message_id: row.message_id,
+            photo_id: row.photo_id,
         })
         .fetch_all(conn)
         .await?;

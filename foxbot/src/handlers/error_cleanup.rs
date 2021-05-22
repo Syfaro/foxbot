@@ -36,7 +36,7 @@ impl Handler for ErrorCleanup {
                 let lang = callback_query.from.language_code.as_deref();
                 let message = handler
                     .get_fluent_bundle(lang, |bundle| {
-                        get_message(&bundle, "error-delete-callback", None).unwrap()
+                        get_message(bundle, "error-delete-callback", None).unwrap()
                     })
                     .await;
 
@@ -75,7 +75,7 @@ impl Handler for ErrorCleanup {
                 let lang = callback_query.from.language_code.as_deref();
                 handler
                     .get_fluent_bundle(lang, |bundle| {
-                        get_message(&bundle, "error-deleted", None).unwrap()
+                        get_message(bundle, "error-deleted", None).unwrap()
                     })
                     .await
             }

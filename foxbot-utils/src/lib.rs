@@ -99,7 +99,7 @@ where
                     Some(results) => {
                         tracing::debug!(site = site.name(), "found images: {:?}", results);
                         callback(SiteCallback {
-                            site: &site,
+                            site,
                             link,
                             duration: start.elapsed().as_millis() as i64,
                             results,
@@ -146,7 +146,7 @@ async fn upload_image(
 ) -> anyhow::Result<ImageInfo> {
     use bytes::BufMut;
 
-    if let Some(cached_post) = CachedPost::get(&conn, &url, thumb)
+    if let Some(cached_post) = CachedPost::get(conn, url, thumb)
         .await
         .context("unable to get cached post")?
     {
@@ -156,7 +156,7 @@ async fn upload_image(
         });
     }
 
-    let im = image::load_from_memory(&data)?;
+    let im = image::load_from_memory(data)?;
 
     // We need to determine what processing to do, if any, on the image before
     // caching it. We can start by checking if this is a thumbnail. If so, we
@@ -215,7 +215,7 @@ async fn upload_image(
 
     let cdn_url = format!("{}/{}/{}", s3_url, s3_bucket, key);
 
-    if let Err(err) = CachedPost::save(&conn, &url, &cdn_url, thumb, dimensions).await {
+    if let Err(err) = CachedPost::save(conn, url, &cdn_url, thumb, dimensions).await {
         sentry::integrations::anyhow::capture_anyhow(&err);
     }
 
@@ -230,7 +230,7 @@ async fn upload_image(
 /// Will fail if the download is larger than 50MB.
 #[tracing::instrument]
 pub async fn download_image(url: &str) -> anyhow::Result<bytes::Bytes> {
-    let size_check = CheckFileSize::new(&url, 50_000_000);
+    let size_check = CheckFileSize::new(url, 50_000_000);
     size_check.into_bytes().await
 }
 
@@ -244,7 +244,7 @@ pub async fn size_post(post: &PostInfo, data: &bytes::Bytes) -> anyhow::Result<P
         return Ok(post.to_owned());
     }
 
-    let im = image::load_from_memory(&data)?;
+    let im = image::load_from_memory(data)?;
     let dimensions = im.dimensions();
 
     Ok(PostInfo {
@@ -266,11 +266,11 @@ pub async fn cache_post(
     post: &PostInfo,
     data: &bytes::Bytes,
 ) -> anyhow::Result<PostInfo> {
-    let image = upload_image(&conn, &s3, &s3_bucket, &s3_url, &post.url, false, &data).await?;
+    let image = upload_image(conn, s3, s3_bucket, s3_url, &post.url, false, data).await?;
 
     let thumb = if let Some(thumb) = &post.thumb {
         Some(
-            upload_image(&conn, &s3, &s3_bucket, &s3_url, &thumb, true, &data)
+            upload_image(conn, s3, s3_bucket, s3_url, thumb, true, data)
                 .await?
                 .url,
         )
@@ -305,7 +305,7 @@ pub fn get_message(
         .expect("message doesn't exist");
     let pattern = msg.value.expect("message has no value");
     let mut errors = vec![];
-    let value = bundle.format_pattern(&pattern, args.as_ref(), &mut errors);
+    let value = bundle.format_pattern(pattern, args.as_ref(), &mut errors);
     if errors.is_empty() {
         Ok(value.to_string())
     } else {
@@ -382,7 +382,7 @@ pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (S
     });
 
     let mut s = String::new();
-    s.push_str(&get_message(&bundle, "alternate-title", None).unwrap());
+    s.push_str(&get_message(bundle, "alternate-title", None).unwrap());
     s.push_str("\n\n");
 
     for item in items {
@@ -402,7 +402,7 @@ pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (S
             .join(", ");
         let mut args = fluent::FluentArgs::new();
         args.insert("name", artist_name.into());
-        s.push_str(&get_message(&bundle, "alternate-posted-by", Some(args)).unwrap());
+        s.push_str(&get_message(bundle, "alternate-posted-by", Some(args)).unwrap());
         s.push('\n');
         let mut subs: Vec<fuzzysearch::File> = item.1.to_vec();
         subs.sort_by(|a, b| a.id().partial_cmp(&b.id()).unwrap());
@@ -414,11 +414,11 @@ pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (S
             args.insert("link", sub.url().into());
             args.insert("distance", sub.distance.unwrap_or(10).into());
             let message = if let Some(rating) = get_rating_bundle_name(&sub.rating) {
-                let rating = get_message(&bundle, rating, None).unwrap();
+                let rating = get_message(bundle, rating, None).unwrap();
                 args.insert("rating", rating.into());
-                get_message(&bundle, "alternate-distance", Some(args)).unwrap()
+                get_message(bundle, "alternate-distance", Some(args)).unwrap()
             } else {
-                get_message(&bundle, "alternate-distance-unknown", Some(args)).unwrap()
+                get_message(bundle, "alternate-distance-unknown", Some(args)).unwrap()
             };
             s.push_str(&message);
             s.push('\n');
@@ -507,19 +507,19 @@ impl Drop for ContinuousAction {
 /// * Checking if the file ID already exists in the cache
 /// * If not, downloading the image and hashing it
 /// * Looking up the hash with [`lookup_single_hash`]
-#[tracing::instrument(err, skip(bot, conn, fapi))]
+#[tracing::instrument(err, skip(bot, redis, fapi))]
 pub async fn match_image(
     bot: &tgbotapi::Telegram,
-    conn: &sqlx::Pool<sqlx::Postgres>,
+    redis: &redis::aio::ConnectionManager,
     fapi: &fuzzysearch::FuzzySearch,
     file: &tgbotapi::PhotoSize,
     distance: Option<i64>,
 ) -> anyhow::Result<(i64, Vec<fuzzysearch::File>)> {
-    if let Some(hash) = FileCache::get(&conn, &file.file_unique_id)
+    if let Some(hash) = FileCache::get(redis, &file.file_unique_id)
         .await
         .context("unable to query file cache")?
     {
-        return lookup_single_hash(&fapi, hash, distance)
+        return lookup_single_hash(fapi, hash, distance)
             .await
             .map(|files| (hash, files));
     }
@@ -543,11 +543,11 @@ pub async fn match_image(
         .context("unable to spawn blocking")?
         .context("unable to hash bytes")?;
 
-    FileCache::set(&conn, &file.file_unique_id, hash)
+    FileCache::set(redis, &file.file_unique_id, hash)
         .await
         .context("unable to set file cache")?;
 
-    lookup_single_hash(&fapi, hash, distance)
+    lookup_single_hash(fapi, hash, distance)
         .await
         .map(|files| (hash, files))
 }
@@ -603,7 +603,7 @@ pub async fn sort_results<U: Into<User>>(
 
     let user = user.into();
 
-    let row: Option<Vec<String>> = UserConfig::get(&conn, UserConfigKey::SiteSortOrder, user)
+    let row: Option<Vec<String>> = UserConfig::get(conn, UserConfigKey::SiteSortOrder, user)
         .await
         .context("unable to get user site sort order")?;
     let sites = match row {
@@ -687,7 +687,7 @@ pub fn extract_links(message: &tgbotapi::Message) -> Vec<&str> {
         for row in &markup.inline_keyboard {
             for button in row {
                 if let Some(url) = &button.url {
-                    links.push(&url);
+                    links.push(url);
                 }
             }
         }
@@ -721,7 +721,7 @@ fn extract_entity_links<'a>(
         if entity.entity_type == tgbotapi::MessageEntityType::TextLink {
             links.push(entity.url.as_ref().unwrap());
         } else if entity.entity_type == tgbotapi::MessageEntityType::Url {
-            links.push(get_entity_text(&text, &entity));
+            links.push(get_entity_text(text, entity));
         }
     }
 
@@ -757,8 +757,8 @@ fn utf16_pos_in_utf8(data: &str, pos: usize) -> usize {
 
 /// Extract text from a message entity.
 fn get_entity_text<'a>(text: &'a str, entity: &tgbotapi::MessageEntity) -> &'a str {
-    let start = utf16_pos_in_utf8(&text, entity.offset as usize);
-    let end = utf16_pos_in_utf8(&text, (entity.offset + entity.length) as usize);
+    let start = utf16_pos_in_utf8(text, entity.offset as usize);
+    let end = utf16_pos_in_utf8(text, (entity.offset + entity.length) as usize);
 
     &text[start..end]
 }
@@ -771,13 +771,13 @@ pub fn link_was_seen(
 ) -> bool {
     // Find the unique ID for the source link. If one does not exist, we can't
     // find any matches against it.
-    let source_id = match sites.iter().find_map(|site| site.url_id(&source)) {
+    let source_id = match sites.iter().find_map(|site| site.url_id(source)) {
         Some(source) => source,
         _ => return false,
     };
 
     links.iter().any(
-        |link| match sites.iter().find_map(|site| site.url_id(&link)) {
+        |link| match sites.iter().find_map(|site| site.url_id(link)) {
             Some(link_id) => {
                 tracing::debug!("{} - {}", link, link_id);
                 link_id == source_id
@@ -811,11 +811,11 @@ pub fn user_from_update(update: &tgbotapi::Update) -> Option<&tgbotapi::User> {
         Update {
             inline_query: Some(InlineQuery { from, .. }),
             ..
-        } => Some(&from),
+        } => Some(from),
         Update {
             callback_query: Some(CallbackQuery { from, .. }),
             ..
-        } => Some(&from),
+        } => Some(from),
         _ => None,
     }
 }
@@ -873,7 +873,7 @@ pub async fn can_delete_in_chat<C: Into<Chat>, U: Into<User>>(
     // in the database.
     if !ignore_cache {
         let can_delete: Option<bool> =
-            GroupConfig::get(&conn, chat, GroupConfigKey::HasDeletePermission).await?;
+            GroupConfig::get(conn, chat, GroupConfigKey::HasDeletePermission).await?;
 
         // If we had a value we're done, return it.
         if let Some(can_delete) = can_delete {
@@ -892,7 +892,7 @@ pub async fn can_delete_in_chat<C: Into<Chat>, U: Into<User>>(
     let can_delete = chat_member.can_delete_messages.unwrap_or(false);
 
     // Cache the new value.
-    GroupConfig::set(&conn, GroupConfigKey::HasDeletePermission, chat, can_delete).await?;
+    GroupConfig::set(conn, GroupConfigKey::HasDeletePermission, chat, can_delete).await?;
 
     Ok(can_delete)
 }
@@ -912,7 +912,7 @@ pub fn get_rating_bundle_name(rating: &Option<fuzzysearch::Rating>) -> Option<&'
 pub fn source_reply(matches: &[fuzzysearch::File], bundle: Bundle<'_>) -> String {
     let first = match matches.first() {
         Some(result) => result,
-        None => return get_message(&bundle, "reverse-no-results", None).unwrap(),
+        None => return get_message(bundle, "reverse-no-results", None).unwrap(),
     };
 
     let similar: Vec<&fuzzysearch::File> = matches
@@ -930,17 +930,17 @@ pub fn source_reply(matches: &[fuzzysearch::File], bundle: Bundle<'_>) -> String
         args.insert("link", first.url().into());
 
         if let Some(rating) = get_rating_bundle_name(&first.rating) {
-            let rating = get_message(&bundle, rating, None).unwrap();
+            let rating = get_message(bundle, rating, None).unwrap();
             args.insert("rating", rating.into());
 
-            get_message(&bundle, "reverse-result", Some(args)).unwrap()
+            get_message(bundle, "reverse-result", Some(args)).unwrap()
         } else {
-            get_message(&bundle, "reverse-result-unknown", Some(args)).unwrap()
+            get_message(bundle, "reverse-result-unknown", Some(args)).unwrap()
         }
     } else {
         let mut items = Vec::with_capacity(2 + similar.len());
 
-        let text = get_message(&bundle, "reverse-multiple-results", None).unwrap();
+        let text = get_message(bundle, "reverse-multiple-results", None).unwrap();
         items.push(text);
 
         for file in vec![first].into_iter().chain(similar) {
@@ -948,12 +948,12 @@ pub fn source_reply(matches: &[fuzzysearch::File], bundle: Bundle<'_>) -> String
             args.insert("link", file.url().into());
 
             let result = if let Some(rating) = get_rating_bundle_name(&file.rating) {
-                let rating = get_message(&bundle, rating, None).unwrap();
+                let rating = get_message(bundle, rating, None).unwrap();
                 args.insert("rating", rating.into());
 
-                get_message(&bundle, "reverse-multiple-item", Some(args)).unwrap()
+                get_message(bundle, "reverse-multiple-item", Some(args)).unwrap()
             } else {
-                get_message(&bundle, "reverse-multiple-item-unknown", Some(args)).unwrap()
+                get_message(bundle, "reverse-multiple-item-unknown", Some(args)).unwrap()
             };
 
             items.push(result);
@@ -1073,7 +1073,7 @@ impl<'a> CheckFileSize<'a> {
 pub async fn resize_photo(url: &str, max_size: u64) -> anyhow::Result<tgbotapi::FileType> {
     use bytes::BufMut;
 
-    let mut check = CheckFileSize::new(&url, 20_000_000);
+    let mut check = CheckFileSize::new(url, 20_000_000);
     let size = check.get_size().await?;
 
     if size <= max_size {
@@ -1162,7 +1162,7 @@ pub fn get_lang_bundle(langs: &Langs, requested: &str) -> LangBundle {
     let resolved_locales = fluent_langneg::negotiate_languages(
         &requested_locales,
         &available,
-        Some(&&default_locale),
+        Some(&default_locale),
         fluent_langneg::NegotiationStrategy::Filtering,
     );
 

@@ -302,26 +302,6 @@
       ]
     }
   },
-  "51ab9e5e7cd8d2b21259a2eaf933df39f2e3a2961351dc0acaa7bc5a72b6eb8d": {
-    "query": "SELECT hash FROM file_id_cache WHERE file_id = $1",
-    "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "hash",
-          "type_info": "Int8"
-        }
-      ],
-      "parameters": {
-        "Left": [
-          "Text"
-        ]
-      },
-      "nullable": [
-        false
-      ]
-    }
-  },
   "5cec2b6c51717adcd83c671410f7acc1e41b78815687310f45f122cd7a168a4f": {
     "query": "INSERT INTO twitter_auth (account_id, request_key, request_secret) VALUES\n                (lookup_account($1, $2), $3, $4)",
     "describe": {
@@ -335,6 +315,44 @@
         ]
       },
       "nullable": []
+    }
+  },
+  "608059a2b5b4a8855417901072923f5a8bb28b5b22dae35f08a606ec0e501678": {
+    "query": "SELECT account.telegram_id user_id, hash, message_id, photo_id\n            FROM source_notification\n            JOIN account ON account.id = source_notification.account_id\n            WHERE hash <@ ($1, 3)",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "user_id",
+          "type_info": "Int8"
+        },
+        {
+          "ordinal": 1,
+          "name": "hash",
+          "type_info": "Int8"
+        },
+        {
+          "ordinal": 2,
+          "name": "message_id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 3,
+          "name": "photo_id",
+          "type_info": "Text"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Int8"
+        ]
+      },
+      "nullable": [
+        true,
+        true,
+        true,
+        true
+      ]
     }
   },
   "65d64e09fa623877a370f1b46dfa48de1e105e34a97227c81805d6b26a966286": {
@@ -475,44 +493,6 @@
         ]
       },
       "nullable": []
-    }
-  },
-  "73729c4a327de3c763025f0f61d50c9bfd356f7b9b6e6c636d6885cb78c97eee": {
-    "query": "SELECT account.telegram_id user_id, hash, message_id, photo_id\n            FROM source_notification\n            JOIN account ON account.id = lookup_account_by_telegram_id(source_notification.account_id)\n            WHERE hash <@ ($1, 3)",
-    "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "user_id",
-          "type_info": "Int8"
-        },
-        {
-          "ordinal": 1,
-          "name": "hash",
-          "type_info": "Int8"
-        },
-        {
-          "ordinal": 2,
-          "name": "message_id",
-          "type_info": "Int4"
-        },
-        {
-          "ordinal": 3,
-          "name": "photo_id",
-          "type_info": "Text"
-        }
-      ],
-      "parameters": {
-        "Left": [
-          "Int8"
-        ]
-      },
-      "nullable": [
-        true,
-        true,
-        true,
-        true
-      ]
     }
   },
   "75985cf51c1bb1bebe3ea396bf65c9968c5040c2434f0a8e9d889b3f07ed532a": {
@@ -802,19 +782,6 @@
   },
   "dc5ffecf6ca8dd081cd0ee3970219a73c27bff1fc30ea0ebb6a1354cdccddfbf": {
     "query": "INSERT INTO file_url_cache (url, hash) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-    "describe": {
-      "columns": [],
-      "parameters": {
-        "Left": [
-          "Text",
-          "Int8"
-        ]
-      },
-      "nullable": []
-    }
-  },
-  "dde2f98c7e317bd0a9a22f55310a4aac1a9b25ee136fbdb9e7e1fe1109f554ba": {
-    "query": "INSERT INTO file_id_cache (file_id, hash) VALUES ($1, $2) ON CONFLICT DO NOTHING",
     "describe": {
       "columns": [],
       "parameters": {

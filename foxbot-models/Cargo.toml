@@ -21,6 +21,7 @@ serde_json = "1"
 
 tgbotapi = {git = "https://github.com/Syfaro/tgbotapi-rs"}
 
+redis = {version = "0.20", features = ["connection-manager", "tokio-comp"]}
 twilight-model = {version = "0.4", optional = true}
 
 [dependencies.sqlx]

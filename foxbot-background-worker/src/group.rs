@@ -1,10 +1,10 @@
 use crate::*;
+use anyhow::Context;
+use foxbot_models::{GroupConfig, GroupConfigKey};
+use tgbotapi::requests::GetChat;
 
-#[tracing::instrument(skip(handler, job), fields(job_id = job.id()))]
-#[deny(clippy::unwrap_used)]
+#[tracing::instrument(skip(handler, job), fields(job_id = job.id(), chat_id))]
 pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Result<(), Error> {
-    use foxbot_models::{GroupConfig, GroupConfigKey};
-
     let data: serde_json::Value = job
         .args()
         .iter()
@@ -13,6 +13,7 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
         .to_owned();
 
     let message: tgbotapi::Message = serde_json::value::from_value(data)?;
+    tracing::Span::current().record("chat_id", &message.chat.id);
     let photo_sizes = match &message.photo {
         Some(sizes) => sizes,
         _ => return Ok(()),
@@ -20,17 +21,57 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
 
     tracing::trace!("got enqueued message: {:?}", message);
 
-    match GroupConfig::get(&handler.conn, &message.chat, GroupConfigKey::GroupAdd).await? {
-        Some(val) if val => (),
-        _ => return Ok(()),
+    if let Err(err) = store_linked_chat(&handler, &message).await {
+        tracing::error!(
+            "could not update bot knowledge of chat linked channel: {:?}",
+            err
+        );
     }
 
-    let best_photo = find_best_photo(&photo_sizes).unwrap();
+    match GroupConfig::get(&handler.conn, &message.chat, GroupConfigKey::GroupAdd).await? {
+        Some(true) => tracing::debug!("group wants automatic sources"),
+        _ => {
+            tracing::trace!("group sourcing disabled, skipping message");
+            return Ok(());
+        }
+    }
+
+    match is_controlled_channel(&handler, &message).await {
+        Ok(true) => {
+            tracing::debug!("message was forwarded from controlled channel");
+
+            let date = message.forward_date.unwrap_or(message.date);
+            let now = chrono::Utc::now();
+            let message_date = chrono::DateTime::from_utc(
+                chrono::NaiveDateTime::from_timestamp(date, 0),
+                chrono::Utc,
+            );
+            let hours_ago = (now - message_date).num_hours();
+
+            tracing::trace!(hours_ago, "calculated message age");
+
+            // After 6 hours, it's fair game to try and source the post. This is
+            // important if a channel has posts that weren't sourced when they
+            // were posted, either because the bot wasn't enabled then or the
+            // source wasn't discovered yet.
+            if hours_ago < 6 {
+                tracing::debug!("message was too new to ensure source existence, skipping");
+                return Ok(());
+            }
+        }
+        Ok(false) => tracing::trace!("message was from uncontrolled channel, adding source"),
+        Err(err) => tracing::error!(
+            "could not check if message was forwarded from controlled channel: {:?}",
+            err
+        ),
+    }
+
+    let best_photo = find_best_photo(photo_sizes).unwrap();
     let mut matches = match_image(
         &handler.telegram,
-        &handler.conn,
+        &handler.redis,
         &handler.fuzzysearch,
-        &best_photo,
+        best_photo,
         Some(3),
     )
     .await?
@@ -43,6 +84,7 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
         .collect::<Vec<_>>();
 
     if wanted_matches.is_empty() {
+        tracing::debug!("found no matches for group image");
         return Ok(());
     }
 
@@ -53,6 +95,7 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
         .iter()
         .any(|m| link_was_seen(&sites, &links, &m.url()))
     {
+        tracing::debug!("group message already contained valid links");
         return Ok(());
     }
 
@@ -87,8 +130,8 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
                 args.insert("link", m.url().into());
 
                 if let Some(rating) = get_rating_bundle_name(&m.rating) {
+                    let rating = get_message(bundle, rating, None).unwrap();
                     args.insert("rating", rating.into());
-
                     get_message(bundle, "automatic-single", Some(args)).unwrap()
                 } else {
                     get_message(bundle, "automatic-single-unknown", Some(args)).unwrap()
@@ -104,7 +147,7 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
                     args.insert("link", result.url().into());
 
                     let message = if let Some(rating) = get_rating_bundle_name(&result.rating) {
-                        let rating = get_message(&bundle, rating, None).unwrap();
+                        let rating = get_message(bundle, rating, None).unwrap();
                         args.insert("rating", rating.into());
                         get_message(bundle, "automatic-multiple-result", Some(args)).unwrap()
                     } else {
@@ -135,8 +178,7 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
     Ok(())
 }
 
-#[tracing::instrument(skip(handler, job), fields(job_id = job.id()))]
-#[deny(clippy::unwrap_used)]
+#[tracing::instrument(skip(handler, job), fields(job_id = job.id(), chat_id))]
 pub async fn process_group_source(handler: Arc<Handler>, job: faktory::Job) -> Result<(), Error> {
     use tgbotapi::requests::SendMessage;
 
@@ -155,6 +197,7 @@ pub async fn process_group_source(handler: Arc<Handler>, job: faktory::Job) -> R
         text,
     } = serde_json::value::from_value(data.clone())?;
     let chat_id: &str = &chat_id;
+    tracing::Span::current().record("chat_id", &chat_id);
 
     if let Some(at) = check_more_time(&handler.redis, chat_id).await {
         tracing::trace!("need to wait more time for this chat: {}", at);
@@ -209,4 +252,87 @@ pub async fn process_group_source(handler: Arc<Handler>, job: faktory::Job) -> R
         })) => Ok(()),
         Err(err) => Err(err.into()),
     }
+}
+
+/// Check if group is linked to a channel.
+#[tracing::instrument(skip(handler, message))]
+async fn store_linked_chat(handler: &Handler, message: &tgbotapi::Message) -> anyhow::Result<()> {
+    if GroupConfig::get::<Option<i64>, _>(
+        &handler.conn,
+        &message.chat,
+        GroupConfigKey::HasLinkedChat,
+    )
+    .await
+    .context("could not check if chat had known linked channel")?
+    .is_some()
+    {
+        tracing::trace!("already knew if chat had linked channel");
+        return Ok(());
+    }
+
+    let chat = handler
+        .telegram
+        .make_request(&GetChat {
+            chat_id: message.chat_id(),
+        })
+        .await
+        .context("could not get chat information")?;
+
+    if let Some(linked_chat_id) = chat.linked_chat_id {
+        tracing::debug!(linked_chat_id, "discovered chat had linked channel");
+    } else {
+        tracing::debug!("chat did not have linked channel");
+    }
+
+    GroupConfig::set(
+        &handler.conn,
+        GroupConfigKey::HasLinkedChat,
+        &message.chat,
+        chat.linked_chat_id,
+    )
+    .await
+    .context("could not save linked chat information")?;
+
+    Ok(())
+}
+
+/// Check if the message was a forward from a chat, and if it was, check if we
+/// have edit permissions in that channel. If we do, we can skip this message as
+/// it will get a source applied automatically.
+#[tracing::instrument(skip(handler, message), fields(forward_from_chat_id))]
+async fn is_controlled_channel(
+    handler: &Handler,
+    message: &tgbotapi::Message,
+) -> anyhow::Result<bool> {
+    // If it wasn't forwarded from a channel, there's no way it's from a
+    // controlled channel.
+    let forward_from_chat = match &message.forward_from_chat {
+        Some(chat) => chat,
+        None => return Ok(false),
+    };
+
+    tracing::Span::current().record("forward_from_chat_id", &forward_from_chat.id);
+
+    let can_edit = match GroupConfig::get::<bool, _>(
+        &handler.conn,
+        foxbot_models::Chat::Telegram(forward_from_chat.id),
+        GroupConfigKey::CanEditChannel,
+    )
+    .await?
+    {
+        Some(true) => {
+            tracing::trace!("message was forwarded from chat with edit permissions");
+            true
+        }
+        Some(false) => {
+            tracing::trace!("message was forwarded from chat without edit permissions");
+            false
+        }
+        None => {
+            tracing::trace!("message was forwarded from unknown chat");
+            false
+        }
+    };
+
+    Ok(can_edit)
 }

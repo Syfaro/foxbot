@@ -1,13 +1,13 @@
 use async_trait::async_trait;
-use tgbotapi::requests::*;
+use tgbotapi::requests::{AnswerCallbackQuery, EditMessageReplyMarkup};
 
 use super::{
     Handler,
-    Status::{self, *},
+    Status::{self, Completed, Ignored},
 };
 use crate::{MessageHandler, ServiceData};
 use foxbot_models::Subscriptions;
-use foxbot_utils::*;
+use foxbot_utils::{find_best_photo, get_faktory_custom, get_message};
 
 pub struct SubscribeHandler;
 
@@ -33,7 +33,7 @@ impl Handler for SubscribeHandler {
                 return Ok(Ignored);
             }
 
-            self.subscribe(&handler, &callback_query).await?;
+            self.subscribe(handler, callback_query).await?;
             return Ok(Completed);
         }
 
@@ -86,7 +86,7 @@ impl SubscribeHandler {
             }) => (
                 Some(message.message_id),
                 message.photo.as_ref().and_then(|photo| {
-                    find_best_photo(&photo)
+                    find_best_photo(photo)
                         .iter()
                         .next()
                         .map(|photo| photo.file_id.clone())
@@ -110,7 +110,7 @@ impl SubscribeHandler {
 
             let text = handler
                 .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
-                    get_message(&bundle, "subscribe-error", None).unwrap()
+                    get_message(bundle, "subscribe-error", None).unwrap()
                 })
                 .await;
 
@@ -150,7 +150,7 @@ impl SubscribeHandler {
 
         let text = handler
             .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
-                get_message(&bundle, "subscribe-success", None).unwrap()
+                get_message(bundle, "subscribe-success", None).unwrap()
             })
             .await;
 
