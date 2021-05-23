@@ -273,6 +273,32 @@
       ]
     }
   },
+  "53b1a22850cc91a5b580980621b27c50dfe69ced32161317a31dfdb8d75ee53e": {
+    "query": "SELECT\n                message_id,\n                (\n                    SELECT chat_telegram.telegram_id\n                    FROM chat_telegram\n                    WHERE chat_id = video_job_message.chat_id\n                    ORDER BY abs(chat_telegram.telegram_id) DESC\n                    LIMIT 1\n                ) as \"chat_id!\"\n            FROM video_job_message\n            WHERE video_id = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "message_id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 1,
+          "name": "chat_id!",
+          "type_info": "Int8"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Int4"
+        ]
+      },
+      "nullable": [
+        false,
+        null
+      ]
+    }
+  },
   "5af4076aa90de9643172ba3f12f731ee09a43843232a3369c81ec48346ec5e55": {
     "query": "INSERT INTO user_config (account_id, name, value)\n            VALUES (lookup_account_by_telegram_id($1), $2, $3)",
     "describe": {
@@ -517,26 +543,6 @@
       ]
     }
   },
-  "86d9f856585958d5a3980996fd2a3f04a21f60ac7a2a759537284947ae57588f": {
-    "query": "SELECT message_id\n            FROM video_job_message\n            WHERE video_id = $1",
-    "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "message_id",
-          "type_info": "Int4"
-        }
-      ],
-      "parameters": {
-        "Left": [
-          "Int4"
-        ]
-      },
-      "nullable": [
-        false
-      ]
-    }
-  },
   "87e03d42c67970bc449869d979cece93a8102c1fd9324ceb9759d6efcfa7dc57": {
     "query": "SELECT account.telegram_id user_id, request_key, request_secret\n            FROM twitter_auth\n            JOIN account ON account.id = twitter_auth.account_id\n            WHERE request_key = $1",
     "describe": {
@@ -704,24 +710,6 @@
           "Text",
           "Text"
         ]
-      },
-      "nullable": [
-        false
-      ]
-    }
-  },
-  "d3d3cc97bad752504d1604aa4004aac0abb5d8975ec6787ce11025107403d304": {
-    "query": "SELECT chat_telegram.telegram_id\n            FROM chat_telegram\n            ORDER BY abs(chat_telegram.telegram_id) DESC\n            LIMIT 1",
-    "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "telegram_id",
-          "type_info": "Int8"
-        }
-      ],
-      "parameters": {
-        "Left": []
       },
       "nullable": [
         false
