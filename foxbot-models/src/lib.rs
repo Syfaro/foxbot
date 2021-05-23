@@ -539,22 +539,22 @@ impl Video {
         // have never been migrated.
         // I don't think this actually matters because associated messages
         // should always be private messages.
-        let chat_id = sqlx::query_scalar!(
-            "SELECT chat_telegram.telegram_id
-            FROM chat_telegram
-            ORDER BY abs(chat_telegram.telegram_id) DESC
-            LIMIT 1"
-        )
-        .fetch_one(conn)
-        .await?;
 
         let ids = sqlx::query!(
-            "SELECT message_id
+            r#"SELECT
+                message_id,
+                (
+                    SELECT chat_telegram.telegram_id
+                    FROM chat_telegram
+                    WHERE chat_id = video_job_message.chat_id
+                    ORDER BY abs(chat_telegram.telegram_id) DESC
+                    LIMIT 1
+                ) as "chat_id!"
             FROM video_job_message
-            WHERE video_id = $1",
+            WHERE video_id = $1"#,
             id
         )
-        .map(|row| (chat_id, row.message_id))
+        .map(|row| (row.chat_id, row.message_id))
         .fetch_all(conn)
         .await?;
 
