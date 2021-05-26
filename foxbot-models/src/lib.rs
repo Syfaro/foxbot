@@ -4,6 +4,30 @@ lazy_static::lazy_static! {
     static ref CACHE_REQUESTS: prometheus::CounterVec = prometheus::register_counter_vec!("foxbot_cache_requests_total", "Number of file cache hits and misses", &["result"]).unwrap();
 }
 
+/// An error message that is safe to be displayed to the user.
+///
+/// This should not contain any technical or internal information.
+#[derive(thiserror::Error, Debug)]
+#[error("{msg}")]
+pub struct DisplayableErrorMessage<'a> {
+    pub msg: std::borrow::Cow<'a, str>,
+    #[source]
+    source: anyhow::Error,
+}
+
+impl<'a> DisplayableErrorMessage<'a> {
+    pub fn new<M, E>(msg: M, err: E) -> Self
+    where
+        M: Into<std::borrow::Cow<'a, str>>,
+        E: Into<anyhow::Error>,
+    {
+        DisplayableErrorMessage {
+            msg: msg.into(),
+            source: err.into(),
+        }
+    }
+}
+
 /// Each available site, for configuration usage.
 #[derive(Clone, Debug, PartialEq, Hash, Eq, serde::Deserialize)]
 pub enum Sites {

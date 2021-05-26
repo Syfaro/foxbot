@@ -6,7 +6,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use thiserror::Error;
 
-use foxbot_models::Twitter as TwitterModel;
+use foxbot_models::{DisplayableErrorMessage, Twitter as TwitterModel};
 
 /// User agent used with all HTTP requests to sites.
 const USER_AGENT: &str = concat!(
@@ -431,10 +431,10 @@ impl E621 {
             .basic_auth(&self.auth.0, Some(&self.auth.1))
             .send()
             .await
-            .context("unable to request e621 api")?
+            .map_err(|err| DisplayableErrorMessage::new("Could not connect to e621", err))?
             .json()
             .await
-            .context("unable to parse e621 json")?;
+            .map_err(|err| DisplayableErrorMessage::new("e621 returned unknown data", err))?;
 
         Ok(resp)
     }
@@ -513,6 +513,11 @@ pub struct Twitter {
     conn: sqlx::Pool<sqlx::Postgres>,
 }
 
+struct TwitterData {
+    user: Box<egg_mode::user::TwitterUser>,
+    media: Vec<egg_mode::entities::MediaEntity>,
+}
+
 impl Twitter {
     pub async fn new(
         consumer_key: String,
@@ -542,24 +547,67 @@ impl Twitter {
         &self,
         token: &egg_mode::Token,
         captures: &regex::Captures<'_>,
-    ) -> Option<(
-        Box<egg_mode::user::TwitterUser>,
-        Vec<egg_mode::entities::MediaEntity>,
-    )> {
+    ) -> anyhow::Result<Option<TwitterData>> {
         if let Some(Ok(id)) = captures.name("id").map(|id| id.as_str().parse::<u64>()) {
-            let tweet = egg_mode::tweet::show(id, token).await.ok()?.response;
+            let tweet = egg_mode::tweet::show(id, token)
+                .await
+                .map_err(|err| {
+                    match &err {
+                        egg_mode::error::Error::TwitterError(_headers, twitter_errors) => {
+                            let codes: std::collections::HashSet<i32> = twitter_errors
+                                .errors
+                                .iter()
+                                .map(|error| error.code)
+                                .collect();
 
-            let user = tweet.user?;
-            let media = tweet.extended_entities?.media;
+                            tracing::warn!("got twitter error codes: {:?}", codes);
 
-            Some((user, media))
+                            if codes.contains(&34)
+                                || codes.contains(&144)
+                                || codes.contains(&421)
+                                || codes.contains(&422)
+                            {
+                                return DisplayableErrorMessage::new("Tweet not found", err);
+                            } else if codes.contains(&50) || codes.contains(&63) {
+                                return DisplayableErrorMessage::new("Twitter user not found", err);
+                            } else if codes.contains(&179) {
+                                return DisplayableErrorMessage::new(
+                                    "Tweet is from locked account",
+                                    err,
+                                );
+                            }
+                        }
+                        _ => (),
+                    }
+
+                    DisplayableErrorMessage::new("Twitter returned unknown data", err)
+                })?
+                .response;
+
+            let user = match tweet.user {
+                Some(user) => user,
+                None => return Ok(None),
+            };
+            let media = match tweet.extended_entities {
+                Some(entities) => entities.media,
+                None => return Ok(None),
+            };
+
+            Ok(Some(TwitterData { user, media }))
         } else {
             let user = captures["screen_name"].to_owned();
             let timeline =
                 egg_mode::tweet::user_timeline(user, false, false, token).with_page_size(200);
-            let (_timeline, feed) = timeline.start().await.ok()?;
+            let (_timeline, feed) = timeline.start().await?;
 
-            let user = feed.iter().next()?.user.as_ref()?.to_owned();
+            let first_tweet = match feed.iter().next() {
+                Some(tweet) => tweet,
+                None => return Ok(None),
+            };
+            let user = match &first_tweet.user {
+                Some(user) => Box::new(user.as_ref().to_owned()),
+                None => return Ok(None),
+            };
 
             let media = feed
                 .into_iter()
@@ -568,7 +616,7 @@ impl Twitter {
                 .flatten()
                 .collect();
 
-            Some((user, media))
+            Ok(Some(TwitterData { user, media }))
         }
     }
 }
@@ -619,7 +667,7 @@ impl Site for Twitter {
             _ => self.token.clone(),
         };
 
-        let (user, media) = match self.get_media(&token, &captures).await {
+        let TwitterData { user, media } = match self.get_media(&token, &captures).await? {
             None => return Ok(None),
             Some(data) => data,
         };
@@ -752,10 +800,14 @@ impl FurAffinity {
             .header(header::COOKIE, self.stringify_cookies())
             .send()
             .await
-            .context("unable to request furaffinity submission")?
+            .context("unable to request furaffinity submission")
+            .map_err(|err| DisplayableErrorMessage::new("Unable to connect to FurAffinity", err))?
             .text()
             .await
-            .context("unable to get text from furaffinity submission")?;
+            .context("unable to get text from furaffinity submission")
+            .map_err(|err| {
+                DisplayableErrorMessage::new("FurAffinity returned unknown data", err)
+            })?;
 
         let body = scraper::Html::parse_document(&resp);
         let img = match body.select(&self.submission).next() {
@@ -768,7 +820,11 @@ impl FurAffinity {
             img.value()
                 .attr("src")
                 .unwrap_fail()
-                .context("furaffinity was missing src")?
+                .context("furaffinity was missing src")
+                .map_err(|err| DisplayableErrorMessage::new(
+                    "FurAffinity page did not contain image",
+                    err
+                ))?
         );
 
         let ext = match get_file_ext(&image_url) {
@@ -997,10 +1053,16 @@ impl Site for Mastodon {
             .get(&format!("{}/api/v1/statuses/{}", base, status_id))
             .send()
             .await
-            .context("unable to request mastodon api")?
+            .context("unable to request mastodon api")
+            .map_err(|err| {
+                DisplayableErrorMessage::new("Unable to connect to Mastodon instance", err)
+            })?
             .json()
             .await
-            .context("unable to decode mastodon api")?;
+            .context("unable to decode mastodon api")
+            .map_err(|err| {
+                DisplayableErrorMessage::new("Mastodon instance returned unknown data", err)
+            })?;
 
         if json.media_attachments.is_empty() {
             return Ok(None);
@@ -1022,6 +1084,31 @@ impl Site for Mastodon {
                 .collect(),
         ))
     }
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct WeasylSubmission {
+    title: String,
+    owner: String,
+    owner_login: String,
+    tags: Vec<String>,
+    media: WeasylMedia,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct WeasylMedia {
+    submission: Vec<WeasylMediaSubmission>,
+    thumbnail: Vec<WeasylMediaThumbnail>,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct WeasylMediaSubmission {
+    url: String,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct WeasylMediaThumbnail {
+    url: String,
 }
 
 /// A loader for Weasyl.
@@ -1073,7 +1160,7 @@ impl Site for Weasyl {
         let captures = self.matcher.captures(url).unwrap();
         let sub_id = captures["id"].to_owned();
 
-        let resp: serde_json::Value = self
+        let resp: WeasylSubmission = self
             .client
             .get(&format!(
                 "https://www.weasyl.com/api/submissions/{}/view",
@@ -1082,50 +1169,29 @@ impl Site for Weasyl {
             .header("X-Weasyl-API-Key", self.api_key.as_bytes())
             .send()
             .await
-            .context("unable to request weasyl api")?
+            .context("unable to request weasyl api")
+            .map_err(|err| DisplayableErrorMessage::new("Unable to connect to Weasyl", err))?
             .json()
             .await
-            .context("unable to parse weasyl json api")?;
+            .context("unable to parse weasyl json api")
+            .map_err(|err| DisplayableErrorMessage::new("Weasyl returned unknown data", err))?;
 
-        let submissions = resp
-            .as_object()
-            .unwrap_fail()?
-            .get("media")
-            .unwrap_fail()?
-            .as_object()
-            .unwrap_fail()?
-            .get("submission")
-            .unwrap_fail()?
-            .as_array()
-            .unwrap_fail()?;
-
-        if submissions.is_empty() {
+        if resp.media.submission.is_empty() {
             return Ok(None);
         }
 
-        let thumbs = resp
-            .as_object()
-            .unwrap_fail()?
-            .get("media")
-            .unwrap_fail()?
-            .as_object()
-            .unwrap_fail()?
-            .get("thumbnail")
-            .unwrap_fail()?
-            .as_array()
-            .unwrap_fail()?;
-
         Ok(Some(
-            submissions
-                .iter()
-                .zip(thumbs)
+            resp.media
+                .submission
+                .into_iter()
+                .zip(resp.media.thumbnail)
                 .filter_map(|(sub, thumb)| {
-                    let sub_url = sub.get("url")?.as_str()?.to_owned();
-                    let thumb_url = thumb.get("url")?.as_str()?.to_owned();
+                    let sub_url = sub.url;
+                    let thumb_url = thumb.url;
 
                     Some(PostInfo {
                         file_type: get_file_ext(&sub_url)?.to_owned(),
-                        url: sub_url.clone(),
+                        url: sub_url,
                         thumb: Some(thumb_url),
                         source_link: Some(url.to_string()),
                         site_name: self.name(),
@@ -1202,20 +1268,22 @@ impl Inkbunny {
                 ("password", &self.password),
             ])
             .send()
-            .await?
+            .await
+            .map_err(|err| DisplayableErrorMessage::new("Unable to connect to Inkbunny", err))?
             .json()
-            .await?;
+            .await
+            .map_err(|err| DisplayableErrorMessage::new("Inkbunny returned unknown data", err))?;
 
         let login = match resp {
             InkbunnyResponse::Success(login) => login,
             InkbunnyResponse::Error { error_code: 0 } => {
-                panic!("Invalid Inkbunny username/password")
+                anyhow::bail!("Inkbunny username/password was incorrect")
             }
-            _ => panic!("Unhandled Inkbunny error code"),
+            _ => anyhow::bail!("Unhandled Inkbunny error code"),
         };
 
         if login.ratingsmask != "11111" {
-            panic!("Inkbunny user is missing viewing permissions");
+            anyhow::bail!("Inkbunny account was missing permissions");
         }
 
         self.sid = Some(login.sid.clone());
@@ -1239,9 +1307,13 @@ impl Inkbunny {
                 .post(Self::API_SUBMISSIONS)
                 .form(&vec![("sid", &sid), ("submission_ids", &ids)])
                 .send()
-                .await?
+                .await
+                .map_err(|err| DisplayableErrorMessage::new("Unable to connect to Inkbunny", err))?
                 .json()
-                .await?;
+                .await
+                .map_err(|err| {
+                    DisplayableErrorMessage::new("Inkbunny returned unknown data", err)
+                })?;
 
             match resp {
                 InkbunnyResponse::Success(submissions) => break submissions,
@@ -1250,7 +1322,7 @@ impl Inkbunny {
                     self.sid = None;
                     continue;
                 }
-                _ => panic!("Unhandled Inkbunny error"),
+                _ => anyhow::bail!("Inkbunny returned unknown data"),
             };
         };
 
@@ -1439,7 +1511,15 @@ impl Site for DeviantArt {
         let mut endpoint = url::Url::parse("https://backend.deviantart.com/oembed").unwrap();
         endpoint.query_pairs_mut().append_pair("url", url);
 
-        let resp: DeviantArtOEmbed = self.client.get(endpoint).send().await?.json().await?;
+        let resp: DeviantArtOEmbed = self
+            .client
+            .get(endpoint)
+            .send()
+            .await
+            .map_err(|err| DisplayableErrorMessage::new("Unable to connect to DeviantArt", err))?
+            .json()
+            .await
+            .map_err(|err| DisplayableErrorMessage::new("DeviantArt returned unknown data", err))?;
 
         if resp.file_type != "photo" {
             return Ok(None);

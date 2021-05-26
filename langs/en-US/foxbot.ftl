@@ -109,8 +109,16 @@ automatic-preview-enable = Sourced image previews enabled.
 
 # Error Messages
 error-generic = Oh no, something went wrong! Please send a message to my creator, { -creatorName }, saying what happened.
+error-generic-message =
+    Oh no, something went wrong: { $message }
+    
+    Please send a message to my creator, { -creatorName }, saying what happened.
 error-generic-count = Oh no, something went wrong! I've encountered { $count } errors. Please send a message to my creator, { -creatorName }, saying what happened.
 error-uuid = Oh no, something went wrong! Please reply to this message saying what happened. You may also send a message to my creator, { -creatorName }, with this ID if you continue having issues: { $uuid }
+error-uuid-message =
+    Oh no, something went wrong: { $message }
+    
+    Please reply to this message saying what happened. You may also send a message to my creator, { -creatorName }, with this ID if you continue having issues: { $uuid }
 error-uuid-count = Oh no, something went wrong! I've encountered { $count } errors. Please reply to this message saying what happened. You may also send a message to my creator, { -creatorName }, with this ID if you continue having issues: { $uuid }
 error-feedback = Thank you for the feedback, hopefully we can get this issue resolved soon.
 error-delete-callback = Error retrieving message to delete 
