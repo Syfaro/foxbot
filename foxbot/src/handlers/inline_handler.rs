@@ -8,7 +8,7 @@ use super::{
     Status::{self, *},
 };
 use crate::{MessageHandler, ServiceData};
-use foxbot_models::Video;
+use foxbot_models::{DisplayableErrorMessage, Video};
 use foxbot_sites::PostInfo;
 use foxbot_utils::*;
 
@@ -279,14 +279,50 @@ impl Handler for InlineHandler {
         tracing::debug!(?links, "found links");
 
         // Lock sites in order to find which of these links are usable
-        {
+        let images_err = {
             let mut sites = handler.sites.lock().await;
             let links = links.iter().map(|link| link.as_str()).collect();
             find_images(&inline.from, links, &mut sites, &mut |info| {
                 results.extend(info.results);
             })
             .await
-            .context("unable to find images")?;
+            .err()
+        };
+
+        if let Some(err) = images_err {
+            let article = match err.downcast_ref::<DisplayableErrorMessage>() {
+                Some(displayable_error) => {
+                    tracing::warn!(
+                        "got displayable error message, sending to user: {:?}",
+                        displayable_error
+                    );
+
+                    InlineQueryResult::article(
+                        generate_id(),
+                        format!("Error: {}", displayable_error.msg),
+                        displayable_error.msg.clone().to_string(),
+                    )
+                }
+                None => InlineQueryResult::article(
+                    generate_id(),
+                    "Error".into(),
+                    "Unknown error".into(),
+                ),
+            };
+
+            let answer_inline = AnswerInlineQuery {
+                inline_query_id: inline.id.to_owned(),
+                results: vec![article],
+                cache_time: None,
+                ..Default::default()
+            };
+
+            handler
+                .make_request(&answer_inline)
+                .await
+                .context("unable to answer inline query with error")?;
+
+            return Err(err);
         }
 
         let is_personal = results.iter().any(|result| result.personal);

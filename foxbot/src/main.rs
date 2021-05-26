@@ -6,6 +6,7 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::Instrument;
 use unic_langid::LanguageIdentifier;
 
+use foxbot_models::DisplayableErrorMessage;
 use foxbot_utils::*;
 
 mod coconut;
@@ -922,12 +923,13 @@ impl MessageHandler {
     pub async fn report_error<C>(
         &self,
         message: &Message,
+        err: anyhow::Error,
         tags: Option<Vec<(&str, String)>>,
         callback: C,
     ) where
-        C: FnOnce() -> uuid::Uuid,
+        C: FnOnce(&anyhow::Error) -> uuid::Uuid,
     {
-        let u = with_user_scope(message.from.as_ref(), tags, callback);
+        let u = with_user_scope(message.from.as_ref(), &err, tags, callback);
 
         let lang_code = message
             .from
@@ -955,14 +957,27 @@ impl MessageHandler {
             sentry::capture_error(&e);
         }
 
+        let displayable_error: Option<String> = err
+            .downcast_ref::<DisplayableErrorMessage>()
+            .map(|err| err.msg.clone().to_string());
+
         let msg = self
             .get_fluent_bundle(lang_code.as_deref(), |bundle| {
                 let mut args = fluent::FluentArgs::new();
                 args.insert("count", (recent_error_count + 1).into());
 
+                let has_displayable_error = if let Some(displayable_error) = displayable_error {
+                    args.insert("message", displayable_error.into());
+                    true
+                } else {
+                    false
+                };
+
                 if u.is_nil() {
                     if recent_error_count > 0 {
                         get_message(bundle, "error-generic-count", Some(args))
+                    } else if has_displayable_error {
+                        get_message(bundle, "error-generic-message", Some(args))
                     } else {
                         get_message(bundle, "error-generic", None)
                     }
@@ -972,6 +987,8 @@ impl MessageHandler {
 
                     let name = if recent_error_count > 0 {
                         "error-uuid-count"
+                    } else if has_displayable_error {
+                        "error-uuid-message"
                     } else {
                         "error-uuid"
                     };
@@ -995,8 +1012,8 @@ impl MessageHandler {
                 Ok(id) => id,
                 Err(e) => {
                     tracing::error!("unable to get error message-id to edit: {:?}", e);
-                    with_user_scope(message.from.as_ref(), None, || {
-                        sentry::capture_error(&e);
+                    with_user_scope(message.from.as_ref(), &e.into(), None, |err| {
+                        sentry::integrations::anyhow::capture_anyhow(&err);
                     });
 
                     return;
@@ -1014,8 +1031,8 @@ impl MessageHandler {
 
             if let Err(e) = self.make_request(&edit_message).await {
                 tracing::error!("unable to edit error message to user: {:?}", e);
-                with_user_scope(message.from.as_ref(), None, || {
-                    sentry::capture_error(&e);
+                with_user_scope(message.from.as_ref(), &e.into(), None, |err| {
+                    sentry::integrations::anyhow::capture_anyhow(&err);
                 });
 
                 let _ = conn.del::<_, ()>(&key_list).await;
@@ -1043,8 +1060,8 @@ impl MessageHandler {
                 }
                 Err(e) => {
                     tracing::error!("unable to send error message to user: {:?}", e);
-                    with_user_scope(message.from.as_ref(), None, || {
-                        sentry::capture_error(&e);
+                    with_user_scope(message.from.as_ref(), &e.into(), None, |err| {
+                        sentry::integrations::anyhow::capture_anyhow(&err);
                     });
                 }
             }
@@ -1199,7 +1216,7 @@ impl MessageHandler {
                     }
 
                     if let Some(msg) = &update.message {
-                        self.report_error(msg, Some(tags), || capture_anyhow(&err))
+                        self.report_error(msg, err, Some(tags), |err| capture_anyhow(&err))
                             .await;
                     } else {
                         capture_anyhow(&err);
