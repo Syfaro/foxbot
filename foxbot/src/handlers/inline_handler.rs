@@ -473,6 +473,29 @@ async fn process_result(
     }
 }
 
+fn escape_markdown<S: AsRef<str>>(input: S) -> String {
+    input
+        .as_ref()
+        .replace("_", r"\_")
+        .replace("-", r"\-")
+        .replace("!", r"\!")
+        .replace(".", r"\.")
+        .replace("(", r"\(")
+        .replace(")", r"\)")
+        .replace("[", r"\[")
+        .replace("]", r"\]")
+        .replace("{", r"\{")
+        .replace("}", r"\}")
+        .replace("*", r"\*")
+        .replace("#", r"\#")
+        .replace("`", r"\`")
+        .replace("+", r"\+")
+        .replace("=", r"\=")
+        .replace(">", r"\>")
+        .replace("|", r"\|")
+        .replace("~", r"\~")
+}
+
 async fn build_image_result(
     handler: &MessageHandler,
     result: &PostInfo,
@@ -525,6 +548,36 @@ async fn build_image_result(
         result.url.to_owned(),
         result.thumb.clone().unwrap(),
     );
+    let mut data = Vec::new();
+    match (result.artist_username, result.artist_url) {
+        (Some(username), None) => data.push(format!("Artist: {}", escape_markdown(username))),
+        (Some(username), Some(url)) => {
+            data.push(format!("Artist: [{}]({})", escape_markdown(username), url))
+        }
+        (None, Some(url)) => data.push(format!("Artist: {}", escape_markdown(url))),
+        (None, None) => (),
+    }
+    if let Some(title) = result.title {
+        data.push(format!("Title: {}", title));
+    }
+    match result.tags {
+        Some(tags) if !tags.is_empty() => {
+            data.push(format!(
+                "Tags: {}",
+                tags.iter()
+                    .map(|tag| escape_markdown(format!("#{}", tag.replace(' ', "_"))))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ));
+        }
+        _ => (),
+    }
+    if !data.is_empty() {
+        if let InlineQueryType::Photo(ref mut photo) = photo.content {
+            photo.parse_mode = Some(ParseMode::MarkdownV2);
+            photo.caption = Some(data.join("\n"));
+        }
+    }
     photo.reply_markup = Some(keyboard.clone());
 
     if let Some(dims) = result.image_dimensions {

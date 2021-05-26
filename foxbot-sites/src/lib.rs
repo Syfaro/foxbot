@@ -41,6 +41,11 @@ pub struct PostInfo {
     pub image_dimensions: Option<(u32, u32)>,
     /// Size of image in bytes, if available
     pub image_size: Option<usize>,
+
+    pub artist_username: Option<String>,
+    pub artist_url: Option<String>,
+    pub submission_title: Option<String>,
+    pub tags: Option<Vec<String>>,
 }
 
 /// A basic attempt to get the extension from a given URL. It assumes the URL
@@ -545,6 +550,7 @@ impl Twitter {
     ) -> Option<(
         Box<egg_mode::user::TwitterUser>,
         Vec<egg_mode::entities::MediaEntity>,
+        Option<Vec<String>>,
     )> {
         if let Some(Ok(id)) = captures.name("id").map(|id| id.as_str().parse::<u64>()) {
             let tweet = egg_mode::tweet::show(id, token).await.ok()?.response;
@@ -552,7 +558,14 @@ impl Twitter {
             let user = tweet.user?;
             let media = tweet.extended_entities?.media;
 
-            Some((user, media))
+            let hashtags = tweet
+                .entities
+                .hashtags
+                .iter()
+                .map(|hashtag| hashtag.text.clone())
+                .collect();
+
+            Some((user, media, Some(hashtags)))
         } else {
             let user = captures["screen_name"].to_owned();
             let timeline =
@@ -568,7 +581,7 @@ impl Twitter {
                 .flatten()
                 .collect();
 
-            Some((user, media))
+            Some((user, media, None))
         }
     }
 }
@@ -619,7 +632,7 @@ impl Site for Twitter {
             _ => self.token.clone(),
         };
 
-        let (user, media) = match self.get_media(&token, &captures).await {
+        let (user, media, hashtags) = match self.get_media(&token, &captures).await {
             None => return Ok(None),
             Some(data) => data,
         };
@@ -636,6 +649,9 @@ impl Site for Twitter {
                         personal: user.protected,
                         title: Some(user.screen_name.clone()),
                         site_name: self.name(),
+                        tags: hashtags.clone(),
+                        artist_username: Some(user.screen_name.clone()),
+                        artist_url: Some(format!("https://twitter.com/{}", user.screen_name)),
                         ..Default::default()
                     }),
                     None => Some(PostInfo {
@@ -645,6 +661,9 @@ impl Site for Twitter {
                         source_link: Some(item.expanded_url),
                         personal: user.protected,
                         site_name: self.name(),
+                        tags: hashtags.clone(),
+                        artist_username: Some(user.screen_name.clone()),
+                        artist_url: Some(format!("https://twitter.com/{}", user.screen_name)),
                         ..Default::default()
                     }),
                 })
@@ -1115,6 +1134,32 @@ impl Site for Weasyl {
             .as_array()
             .unwrap_fail()?;
 
+        let tags: Vec<String> = resp
+            .as_object()
+            .unwrap_fail()?
+            .get("tags")
+            .unwrap_fail()?
+            .as_array()
+            .unwrap_fail()?
+            .iter()
+            .filter_map(|tag| Some(tag.as_str()?.to_string()))
+            .collect();
+
+        let display_name = resp
+            .as_object()
+            .unwrap_fail()?
+            .get("owner")
+            .unwrap_fail()?
+            .as_str()
+            .unwrap_fail()?;
+        let username = resp
+            .as_object()
+            .unwrap_fail()?
+            .get("owner_login")
+            .unwrap_fail()?
+            .as_str()
+            .unwrap_fail()?;
+
         Ok(Some(
             submissions
                 .iter()
@@ -1129,6 +1174,9 @@ impl Site for Weasyl {
                         thumb: Some(thumb_url),
                         source_link: Some(url.to_string()),
                         site_name: self.name(),
+                        tags: Some(tags.clone()),
+                        artist_username: Some(display_name.to_string()),
+                        artist_url: Some(format!("https://www.weasyl.com/~{}", username)),
                         ..Default::default()
                     })
                 })
@@ -1164,9 +1212,16 @@ pub struct InkbunnyFile {
 }
 
 #[derive(Deserialize, Debug)]
+pub struct InkbunnyKeyword {
+    keyword_name: String,
+}
+
+#[derive(Deserialize, Debug)]
 pub struct InkbunnySubmission {
     submission_id: String,
+    username: String,
     files: Vec<InkbunnyFile>,
+    keywords: Vec<InkbunnyKeyword>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -1315,6 +1370,12 @@ impl Site for Inkbunny {
         let mut results = Vec::with_capacity(1);
 
         for submission in submissions.submissions {
+            let tags: Vec<String> = submission
+                .keywords
+                .iter()
+                .map(|kw| kw.keyword_name.clone())
+                .collect();
+
             for file in submission.files {
                 let ext = match get_file_ext(&file.file_url_screen) {
                     Some(ext) => ext,
@@ -1327,6 +1388,9 @@ impl Site for Inkbunny {
                     thumb: Some(file.thumbnail_url_medium_noncustom.clone()),
                     source_link: Some(url.to_owned()),
                     site_name: self.name(),
+                    tags: Some(tags.clone()),
+                    artist_username: Some(submission.username.clone()),
+                    artist_url: Some(format!("https://inkbunny.net/{}", submission.username)),
                     ..Default::default()
                 });
             }
@@ -1389,6 +1453,10 @@ struct DeviantArtOEmbed {
     thumbnail_url: String,
     width: AlwaysNum,
     height: AlwaysNum,
+    title: String,
+    tags: String,
+    author_name: String,
+    author_url: String,
 }
 
 impl DeviantArt {
@@ -1452,6 +1520,15 @@ impl Site for DeviantArt {
             source_link: Some(url.to_owned()),
             site_name: self.name(),
             image_dimensions: Some((resp.width.0, resp.height.0)),
+            artist_username: Some(resp.author_name),
+            artist_url: Some(resp.author_url),
+            title: Some(resp.title),
+            tags: Some(
+                resp.tags
+                    .split(", ")
+                    .map(std::string::ToString::to_string)
+                    .collect(),
+            ),
             ..Default::default()
         }]))
     }
