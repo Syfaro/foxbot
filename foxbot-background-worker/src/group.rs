@@ -36,6 +36,19 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
         }
     }
 
+    if message.media_group_id.is_some()
+        && GroupConfig::get(
+            &handler.conn,
+            message.chat.id,
+            GroupConfigKey::GroupNoAlbums,
+        )
+        .await?
+        .unwrap_or(false)
+    {
+        tracing::trace!("group is ignoring media groups");
+        return Ok(());
+    }
+
     match is_controlled_channel(&handler, &message).await {
         Ok(true) => {
             tracing::debug!("message was forwarded from controlled channel");

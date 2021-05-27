@@ -169,6 +169,7 @@ pub struct GroupConfig;
 pub enum GroupConfigKey {
     GroupAdd,
     GroupNoPreviews,
+    GroupNoAlbums,
     HasDeletePermission,
     CanEditChannel,
     HasLinkedChat,
@@ -179,6 +180,7 @@ impl GroupConfigKey {
         match self {
             GroupConfigKey::GroupAdd => "group_add",
             GroupConfigKey::GroupNoPreviews => "group_no_previews",
+            &GroupConfigKey::GroupNoAlbums => "group_no_albums",
             GroupConfigKey::HasDeletePermission => "has_delete_permission",
             GroupConfigKey::CanEditChannel => "can_edit_channel",
             GroupConfigKey::HasLinkedChat => "has_linked_chat",

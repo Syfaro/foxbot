@@ -106,6 +106,8 @@ automatic-disable = This feature is now turned off.
 automatic-enable-not-group = This feature is only supported in groups.
 automatic-preview-disable = Sourced image previews disabled.
 automatic-preview-enable = Sourced image previews enabled.
+automatic-album-enable = Album sourcing enabled.
+automatic-album-disable = Album sourcing disabled.
 
 # Error Messages
 error-generic = Oh no, something went wrong! Please send a message to my creator, { -creatorName }, saying what happened.
