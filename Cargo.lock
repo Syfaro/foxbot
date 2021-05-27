@@ -805,6 +805,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "fuzzysearch",
  "lazy_static",
  "prometheus",
  "redis",
@@ -2906,6 +2907,7 @@ dependencies = [
  "bitflags",
  "byteorder",
  "bytes",
+ "chrono",
  "crc",
  "crossbeam-channel",
  "crossbeam-queue",

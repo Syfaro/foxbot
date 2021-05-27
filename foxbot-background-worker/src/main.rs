@@ -146,6 +146,18 @@ fn main() {
     worker_environment.register("channel_edit", channel::process_channel_edit);
     worker_environment.register("group_photo", group::process_group_photo);
     worker_environment.register("group_source", group::process_group_source);
+    worker_environment.register(
+        "group_mediagroup_message",
+        group::process_group_mediagroup_message,
+    );
+    worker_environment.register(
+        "group_mediagroup_check",
+        group::process_group_mediagroup_check,
+    );
+    worker_environment.register(
+        "group_mediagroup_hash",
+        group::process_group_mediagroup_hash,
+    );
     worker_environment.register("hash_new", subscribe::process_hash_new);
     worker_environment.register("hash_notify", subscribe::process_hash_notify);
 

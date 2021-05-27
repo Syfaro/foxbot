@@ -1,6 +1,6 @@
 use crate::*;
 use anyhow::Context;
-use foxbot_models::{GroupConfig, GroupConfigKey};
+use foxbot_models::{GroupConfig, GroupConfigKey, MediaGroup};
 use tgbotapi::requests::GetChat;
 
 #[tracing::instrument(skip(handler, job), fields(job_id = job.id(), chat_id))]
@@ -36,16 +36,28 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
         }
     }
 
-    if message.media_group_id.is_some()
-        && GroupConfig::get(
+    if message.media_group_id.is_some() {
+        if GroupConfig::get(
             &handler.conn,
             message.chat.id,
             GroupConfigKey::GroupNoAlbums,
         )
         .await?
         .unwrap_or(false)
-    {
-        tracing::trace!("group is ignoring media groups");
+        {
+            tracing::trace!("group is ignoring media groups, skipping message");
+            return Ok(());
+        }
+
+        tracing::debug!("message is part of media group, passing message");
+
+        let data = serde_json::to_value(message)?;
+        let mut job =
+            faktory::Job::new("group_mediagroup_message", vec![data]).on_queue("foxbot_background");
+        job.custom = get_faktory_custom();
+
+        handler.enqueue(job).await;
+
         return Ok(());
     }
 
@@ -353,4 +365,211 @@ async fn is_controlled_channel(
     };
 
     Ok(can_edit)
+}
+
+#[tracing::instrument(skip(handler, job), fields(job_id = job.id(), chat_id, media_group_id))]
+pub async fn process_group_mediagroup_message(
+    handler: Arc<Handler>,
+    job: faktory::Job,
+) -> Result<(), Error> {
+    let data: serde_json::Value = job
+        .args()
+        .iter()
+        .next()
+        .ok_or(Error::MissingData)?
+        .to_owned();
+
+    let message: tgbotapi::Message = serde_json::value::from_value(data)?;
+    tracing::Span::current().record("chat_id", &message.chat.id);
+
+    let media_group_id = message.media_group_id.as_deref().unwrap();
+    tracing::Span::current().record("media_group_id", &media_group_id);
+
+    tracing::debug!("got media group message");
+
+    let stored_id = MediaGroup::add_message(&handler.conn, &message).await?;
+
+    tracing::debug!("queueing group check");
+
+    let data = serde_json::to_value(media_group_id)?;
+    let mut job =
+        faktory::Job::new("group_mediagroup_check", vec![data]).on_queue("foxbot_background");
+    job.custom = get_faktory_custom();
+    job.at = Some(chrono::Utc::now() + chrono::Duration::seconds(10));
+
+    handler.enqueue(job).await;
+
+    let data = serde_json::to_value(stored_id)?;
+    let mut job =
+        faktory::Job::new("group_mediagroup_hash", vec![data]).on_queue("foxbot_background");
+    job.custom = get_faktory_custom();
+
+    handler.enqueue(job).await;
+
+    Ok(())
+}
+
+#[tracing::instrument(skip(handler, job), fields(job_id = job.id()))]
+pub async fn process_group_mediagroup_hash(
+    handler: Arc<Handler>,
+    job: faktory::Job,
+) -> Result<(), Error> {
+    let data: serde_json::Value = job
+        .args()
+        .iter()
+        .next()
+        .ok_or(Error::MissingData)?
+        .to_owned();
+
+    let stored_id: i32 = serde_json::value::from_value(data)?;
+
+    let message = match MediaGroup::get_message(&handler.conn, stored_id).await? {
+        Some(message) => message,
+        None => {
+            tracing::debug!("message was removed before hash could be calculated");
+            return Ok(());
+        }
+    };
+
+    tracing::debug!("finding sources for pending media group item");
+
+    let sizes = message.message.photo.unwrap();
+    let best_photo = find_best_photo(&sizes).unwrap();
+    let mut sources = match_image(
+        &handler.telegram,
+        &handler.redis,
+        &handler.fuzzysearch,
+        best_photo,
+        Some(3),
+    )
+    .await?
+    .1;
+    sort_results(
+        &handler.conn,
+        message.message.from.as_ref().unwrap().id,
+        &mut sources,
+    )
+    .await?;
+
+    tracing::debug!("found sources, saving for media group item");
+
+    MediaGroup::set_message_sources(&handler.conn, stored_id, sources).await;
+
+    Ok(())
+}
+
+#[tracing::instrument(skip(handler, job), fields(job_id = job.id(), media_group_id))]
+pub async fn process_group_mediagroup_check(
+    handler: Arc<Handler>,
+    job: faktory::Job,
+) -> Result<(), Error> {
+    let data: serde_json::Value = job
+        .args()
+        .iter()
+        .next()
+        .ok_or(Error::MissingData)?
+        .to_owned();
+
+    let media_group_id: String = serde_json::from_value(data)?;
+    let media_group_id: &str = &media_group_id;
+    tracing::Span::current().record("media_group_id", &media_group_id);
+
+    tracing::debug!("checking media group age");
+
+    let last_updated_at = match MediaGroup::last_message(&handler.conn, media_group_id).await? {
+        Some(last_updated_at) => last_updated_at,
+        None => {
+            tracing::debug!("media group had already been processed");
+            return Ok(());
+        }
+    };
+
+    tracing::debug!("media group was last updated at {}", last_updated_at);
+
+    if chrono::Utc::now() - last_updated_at < chrono::Duration::seconds(10) {
+        tracing::debug!("group was updated more recently than 10 seconds, requeueing check");
+
+        let data = serde_json::to_value(media_group_id)?;
+        let mut job =
+            faktory::Job::new("group_mediagroup_check", vec![data]).on_queue("foxbot_background");
+        job.custom = get_faktory_custom();
+        job.at = Some(chrono::Utc::now() + chrono::Duration::seconds(10));
+
+        handler.enqueue(job).await;
+
+        return Ok(());
+    }
+
+    let mut messages = MediaGroup::consume_messages(&handler.conn, media_group_id).await?;
+    if messages.is_empty() {
+        tracing::info!("messages was empty, must have already processed");
+        return Ok(());
+    }
+
+    messages.sort_by(|a, b| a.message.message_id.cmp(&b.message.message_id));
+
+    tracing::debug!("found messages");
+
+    for message in &mut messages {
+        if message.sources.is_some() {
+            continue;
+        }
+
+        tracing::debug!(
+            "looking up sources for message {}",
+            message.message.message_id
+        );
+
+        let sizes = message.message.photo.as_ref().unwrap();
+        let best_photo = find_best_photo(sizes).unwrap();
+
+        let mut sources = match_image(
+            &handler.telegram,
+            &handler.redis,
+            &handler.fuzzysearch,
+            best_photo,
+            Some(3),
+        )
+        .await?
+        .1;
+        sort_results(
+            &handler.conn,
+            message.message.from.as_ref().unwrap().id,
+            &mut sources,
+        )
+        .await?;
+        message.sources = Some(sources);
+    }
+
+    let mut buf = String::new();
+
+    for (index, message) in messages.iter().enumerate() {
+        buf.push_str(&format!("Image {}\n", index + 1));
+        let urls = message
+            .sources
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|file| file.url())
+            .take(2)
+            .collect::<Vec<_>>()
+            .join("\n");
+        buf.push_str(&urls);
+        buf.push_str("\n\n");
+    }
+
+    let first_message = &messages.first().as_ref().unwrap().message;
+
+    let send_message = tgbotapi::requests::SendMessage {
+        chat_id: first_message.chat_id(),
+        reply_to_message_id: Some(first_message.message_id),
+        text: buf,
+        disable_web_page_preview: Some(true),
+        disable_notification: Some(true),
+        ..Default::default()
+    };
+
+    handler.telegram.make_request(&send_message).await?;
+
+    Ok(())
 }
