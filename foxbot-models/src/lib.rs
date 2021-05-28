@@ -1,4 +1,5 @@
 use anyhow::Context;
+use tgbotapi::Message;
 
 lazy_static::lazy_static! {
     static ref CACHE_REQUESTS: prometheus::CounterVec = prometheus::register_counter_vec!("foxbot_cache_requests_total", "Number of file cache hits and misses", &["result"]).unwrap();
@@ -816,5 +817,162 @@ impl Subscriptions {
         .await?;
 
         Ok(subscriptions)
+    }
+}
+
+#[derive(serde::Serialize)]
+pub struct MediaGroup {
+    pub id: i32,
+    pub inserted_at: chrono::DateTime<chrono::Utc>,
+    pub message: Message,
+    pub sources: Option<Vec<fuzzysearch::File>>,
+}
+
+impl MediaGroup {
+    /// Store a message as part of a media group, keeping track of when the
+    /// value was inserted.
+    pub async fn add_message(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        message: &Message,
+    ) -> anyhow::Result<i32> {
+        let id = sqlx::query_scalar!(
+            "INSERT INTO media_group (media_group_id, inserted_at, message) VALUES ($1, $2, $3) RETURNING id",
+            message.media_group_id.as_ref().unwrap(),
+            chrono::Utc::now(),
+            serde_json::to_value(message)?,
+        )
+        .fetch_one(conn)
+        .await?;
+        Ok(id)
+    }
+
+    /// Get the time that the last message was inserted to the media group.
+    pub async fn last_message(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        media_group_id: &str,
+    ) -> anyhow::Result<Option<chrono::DateTime<chrono::Utc>>> {
+        let last_inserted_at = sqlx::query_scalar!(
+            r#"SELECT max(inserted_at) FROM media_group WHERE media_group_id = $1"#,
+            media_group_id
+        )
+        .fetch_optional(conn)
+        .await?;
+        Ok(last_inserted_at.flatten())
+    }
+
+    /// Get a specific stored message, if it exists.
+    pub async fn get_message(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        id: i32,
+    ) -> anyhow::Result<Option<MediaGroup>> {
+        let message = sqlx::query!(
+            "SELECT id, inserted_at, message, sources FROM media_group WHERE id = $1",
+            id
+        )
+        .map(|row| MediaGroup {
+            id: row.id,
+            inserted_at: row.inserted_at,
+            message: serde_json::from_value(row.message).unwrap(),
+            sources: row
+                .sources
+                .map(|sources| serde_json::from_value(sources).unwrap()),
+        })
+        .fetch_optional(conn)
+        .await?;
+
+        Ok(message)
+    }
+
+    pub async fn get_messages(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        media_group_id: &str,
+    ) -> anyhow::Result<Vec<MediaGroup>> {
+        let messages = sqlx::query!(
+            "SELECT id, inserted_at, message, sources FROM media_group WHERE media_group_id = $1",
+            media_group_id
+        )
+        .map(|row| MediaGroup {
+            id: row.id,
+            inserted_at: row.inserted_at,
+            message: serde_json::from_value(row.message).unwrap(),
+            sources: row
+                .sources
+                .map(|sources| serde_json::from_value(sources).unwrap()),
+        })
+        .fetch_all(conn)
+        .await?;
+        Ok(messages)
+    }
+
+    /// Update the sources of a stored message, discarding any errors.
+    pub async fn set_message_sources(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        id: i32,
+        sources: Vec<fuzzysearch::File>,
+    ) {
+        let _ = sqlx::query!(
+            "UPDATE media_group SET sources = $1 WHERE id = $2",
+            serde_json::to_value(sources).unwrap(),
+            id
+        )
+        .execute(conn)
+        .await;
+    }
+
+    /// Consume (delete and return) all messages stored in the media group.
+    pub async fn consume_messages(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        media_group_id: &str,
+    ) -> anyhow::Result<Vec<MediaGroup>> {
+        let messages = sqlx::query!(
+            "DELETE FROM media_group WHERE media_group_id = $1 RETURNING id, inserted_at, message, sources",
+            media_group_id
+        )
+        .map(|row| MediaGroup {
+            id: row.id,
+            inserted_at: row.inserted_at,
+            message: serde_json::from_value(row.message).unwrap(),
+            sources: row.sources.map(|sources| serde_json::from_value(sources).unwrap()),
+        })
+        .fetch_all(conn)
+        .await?;
+        Ok(messages)
+    }
+
+    /// Notify database that we are attempting to send a message, and return
+    /// if we're allowed to send it.
+    pub async fn sending_message(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        media_group_id: &str,
+    ) -> anyhow::Result<bool> {
+        let rows_affected = sqlx::query!(
+            "INSERT INTO media_group_sent (media_group_id) VALUES ($1) ON CONFLICT DO NOTHING",
+            media_group_id
+        )
+        .execute(conn)
+        .await?
+        .rows_affected();
+
+        Ok(rows_affected == 1)
+    }
+
+    /// Delete all information related to a media group.
+    pub async fn purge_media_group(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        media_group_id: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query!(
+            "DELETE FROM media_group WHERE media_group_id = $1",
+            media_group_id
+        )
+        .execute(conn)
+        .await?;
+        sqlx::query!(
+            "DELETE FROM media_group_sent WHERE media_group_id = $1",
+            media_group_id
+        )
+        .execute(conn)
+        .await?;
+        Ok(())
     }
 }

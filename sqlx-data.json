@@ -1,5 +1,27 @@
 {
   "db": "PostgreSQL",
+  "0029a3f84dbfc1a1ca301cefd10cc53167f290619591fc3d509129027ee49e8d": {
+    "query": "INSERT INTO media_group (media_group_id, inserted_at, message) VALUES ($1, $2, $3) RETURNING id",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Int4"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text",
+          "Timestamptz",
+          "Jsonb"
+        ]
+      },
+      "nullable": [
+        false
+      ]
+    }
+  },
   "04f264317ab6180a39bf2733b43f40e61a2c3b0add97be42d474e3fa1d03af04": {
     "query": "SELECT value\n            FROM group_config\n            WHERE group_config.chat_id = lookup_chat_by_telegram_id($1) AND name = $2\n            ORDER BY updated_at DESC LIMIT 1",
     "describe": {
@@ -61,6 +83,44 @@
         ]
       },
       "nullable": []
+    }
+  },
+  "1ef65794d39e8a7b34439d241831ecd2696f80d8d9e49920e30e4ccc754138a4": {
+    "query": "DELETE FROM media_group WHERE media_group_id = $1 RETURNING id, inserted_at, message, sources",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 1,
+          "name": "inserted_at",
+          "type_info": "Timestamptz"
+        },
+        {
+          "ordinal": 2,
+          "name": "message",
+          "type_info": "Jsonb"
+        },
+        {
+          "ordinal": 3,
+          "name": "sources",
+          "type_info": "Jsonb"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        false,
+        true
+      ]
     }
   },
   "2d0eb75f282ed83d99e5ef77e8344bb6727742454c9f42b9cf1a9ceab5988e90": {
@@ -205,6 +265,18 @@
       ]
     }
   },
+  "4888531be643a4e44919519751b084b3c91d0a577e98a3d79e71be194364d94b": {
+    "query": "INSERT INTO media_group_sent (media_group_id) VALUES ($1) ON CONFLICT DO NOTHING",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": []
+    }
+  },
   "4bf1e2603910e4ef6f67ad369260e0dc3b903787e0f95bfaf84a74123c652132": {
     "query": "SELECT id, processed, source, url, mp4_url, thumb_url, display_url, display_name, job_id\n            FROM videos\n            WHERE display_name = $1",
     "describe": {
@@ -271,6 +343,18 @@
         false,
         true
       ]
+    }
+  },
+  "4d2d1d5730b30c4d12f6565fdce3d106630c208dab16eb78e340f10e4af74486": {
+    "query": "DELETE FROM media_group_sent WHERE media_group_id = $1",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": []
     }
   },
   "53b1a22850cc91a5b580980621b27c50dfe69ced32161317a31dfdb8d75ee53e": {
@@ -496,6 +580,26 @@
       "nullable": []
     }
   },
+  "7cef969e5789cdf8338c5c592de8850c5305f68f5bf544644322a132a613c4a7": {
+    "query": "SELECT max(inserted_at) FROM media_group WHERE media_group_id = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "max",
+          "type_info": "Timestamptz"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        null
+      ]
+    }
+  },
   "7f9bdd51e9430d93edebd6180a5ac2ad0d7172ebaf5bab5bffd44d447771518a": {
     "query": "UPDATE videos SET job_id = $1 WHERE id = $2",
     "describe": {
@@ -643,6 +747,57 @@
       "nullable": []
     }
   },
+  "afd66774f549521d1689b2e0934601a95976b034f9fde713b66f4fd21b827a62": {
+    "query": "UPDATE media_group SET sources = $1 WHERE id = $2",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Jsonb",
+          "Int4"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "b80505d9c0c51124ba42946e0c36ad1773e109e9eefed1cc7b46e5ac7ba19d23": {
+    "query": "SELECT id, inserted_at, message, sources FROM media_group WHERE id = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 1,
+          "name": "inserted_at",
+          "type_info": "Timestamptz"
+        },
+        {
+          "ordinal": 2,
+          "name": "message",
+          "type_info": "Jsonb"
+        },
+        {
+          "ordinal": 3,
+          "name": "sources",
+          "type_info": "Jsonb"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Int4"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        false,
+        true
+      ]
+    }
+  },
   "be823b9738decf3ac8c9f0574a984a5ee07829a4b67241a567687d92a2f0b76e": {
     "query": "LOCK TABLE chat, chat_telegram IN EXCLUSIVE MODE",
     "describe": {
@@ -674,6 +829,18 @@
         "Left": [
           "Int4",
           "Int8"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "c4121241eeaae9aeb31f32f1a6e885fb65b9ea74f7d98335865d32663f0c8cf4": {
+    "query": "DELETE FROM media_group WHERE media_group_id = $1",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Text"
         ]
       },
       "nullable": []
@@ -727,6 +894,44 @@
         ]
       },
       "nullable": []
+    }
+  },
+  "f024583958ea5c80459dfd5679bb8b44e2a08367a48be9e25bc67eebeac50cb9": {
+    "query": "SELECT id, inserted_at, message, sources FROM media_group WHERE media_group_id = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 1,
+          "name": "inserted_at",
+          "type_info": "Timestamptz"
+        },
+        {
+          "ordinal": 2,
+          "name": "message",
+          "type_info": "Jsonb"
+        },
+        {
+          "ordinal": 3,
+          "name": "sources",
+          "type_info": "Jsonb"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        false,
+        true
+      ]
     }
   },
   "f78fdca94944e40d61b918c5db894566061ea7ac380c3475bc7cc67471edabf7": {

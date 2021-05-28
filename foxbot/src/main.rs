@@ -11,6 +11,7 @@ use foxbot_utils::*;
 
 mod coconut;
 mod handlers;
+mod web;
 
 lazy_static::lazy_static! {
     static ref REQUEST_DURATION: prometheus::Histogram = prometheus::register_histogram!("foxbot_request_duration_seconds", "Time to start processing request").unwrap();
@@ -21,6 +22,7 @@ lazy_static::lazy_static! {
 }
 
 type BoxedHandler = Box<dyn handlers::Handler + Send + Sync>;
+pub type UpdateSender = tokio::sync::mpsc::Sender<(HandlerUpdate, tracing::Span)>;
 
 static CONCURRENT_HANDLERS: usize = 2;
 static INLINE_HANDLERS: usize = 10;
@@ -49,6 +51,7 @@ pub struct Config {
     pub inkbunny_password: String,
     pub e621_login: String,
     pub e621_api_key: String,
+    pub fautil_apitoken: String,
 
     // Twitter config
     pub twitter_consumer_key: String,
@@ -63,10 +66,6 @@ pub struct Config {
 
     // Telegram config
     telegram_apitoken: String,
-    pub use_webhooks: Option<bool>,
-    pub webhook_endpoint: Option<String>,
-    pub http_host: Option<String>,
-    http_secret: Option<String>,
 
     // File storage
     pub s3_endpoint: String,
@@ -76,37 +75,34 @@ pub struct Config {
     pub s3_bucket: String,
     pub s3_url: String,
 
-    pub fautil_apitoken: String,
-
     // Video storage
     b2_account_id: String,
     b2_app_key: String,
     b2_bucket_id: String,
 
+    // Video encoding
     coconut_apitoken: String,
-    coconut_webhook: String,
     coconut_secret: String,
 
-    pub size_images: Option<bool>,
-    pub cache_images: Option<bool>,
+    // Inline image processing options
     pub cache_all_images: Option<bool>,
 
+    // Connections
     redis_dsn: String,
     faktory_url: Option<String>,
+    database_url: String,
 
-    metrics_host: String,
-
-    // Postgres database
-    db_host: String,
-    db_user: String,
-    db_pass: String,
-    db_name: String,
+    // Public URLs and secrets
+    internet_url: String,
+    internal_secret: String,
 }
 
 /// Configure tracing with Jaeger.
 fn configure_tracing(collector: String) {
     use opentelemetry::KeyValue;
     use tracing_subscriber::layer::SubscriberExt;
+
+    tracing_log::LogTracer::init().unwrap();
 
     let env = std::env::var("ENVIRONMENT");
     let env = if let Ok(env) = env.as_ref() {
@@ -150,36 +146,6 @@ fn configure_tracing(collector: String) {
             .with(subscriber);
         tracing::subscriber::set_global_default(subscriber).unwrap();
     }
-}
-
-fn setup_shutdown() -> tokio::sync::mpsc::Receiver<bool> {
-    let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel(1);
-
-    #[cfg(unix)]
-    tokio::spawn(async move {
-        use tokio::signal;
-
-        let mut stream = signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("unable to create terminate signal stream");
-
-        tokio::select! {
-            _ = stream.recv() => shutdown_tx.send(true).await.expect("unable to send shutdown"),
-            _ = signal::ctrl_c() => shutdown_tx.send(true).await.expect("unable to send shutdown"),
-        }
-    });
-
-    #[cfg(not(unix))]
-    tokio::spawn(async move {
-        use tokio::signal;
-
-        signal::ctrl_c().await.expect("unable to await ctrl-c");
-        shutdown_tx
-            .send(true)
-            .await
-            .expect("unable to send shutdown");
-    });
-
-    shutdown_rx
 }
 
 #[cfg(feature = "env")]
@@ -240,10 +206,7 @@ async fn main() {
 
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(8)
-        .connect(&format!(
-            "postgres://{}:{}@{}/{}",
-            config.db_user, config.db_pass, config.db_host, config.db_name
-        ))
+        .connect(&config.database_url)
         .await
         .expect("unable to create database pool");
 
@@ -334,7 +297,7 @@ async fn main() {
 
     let coconut = coconut::Coconut::new(
         config.coconut_apitoken.clone(),
-        config.coconut_webhook.clone(),
+        format!("{}/coconut/{}", config.internet_url, config.coconut_secret),
         config.b2_account_id.clone(),
         config.b2_app_key.clone(),
         config.b2_bucket_id.clone(),
@@ -363,7 +326,7 @@ async fn main() {
         faktory: Arc::new(std::sync::Mutex::new(faktory)),
 
         sites: Mutex::new(sites),
-        conn: pool,
+        conn: pool.clone(),
         redis,
     });
 
@@ -384,53 +347,35 @@ async fn main() {
             .map_or(false, sentry::ClientInitGuard::is_enabled)
     );
 
-    serve_metrics(config.clone()).await;
-
     // Allow buffering more updates than can be run at once
     let (update_tx, update_rx) = tokio::sync::mpsc::channel(CONCURRENT_HANDLERS * 2);
     let (inline_tx, inline_rx) = tokio::sync::mpsc::channel(INLINE_HANDLERS * 2);
 
-    let shutdown = setup_shutdown();
-
-    let use_webhooks = matches!(config.use_webhooks, Some(use_webhooks) if use_webhooks);
-
-    // There are two ways to receive updates, long-polling and webhooks. Polling
-    // is easier for development as it does not require opening ports to the
-    // Internet. Webhooks are more performant. We can support either option by
-    // enabling one or the other method of receiving updates and pushing all
-    // updates into a mpsc channel. Then, we can have generic code to use the
-    // updates received by any method.
-
-    if use_webhooks {
-        let webhook_endpoint = config
-            .webhook_endpoint
-            .as_ref()
-            .expect("Missing WEBHOOK_ENDPOINT");
-        let set_webhook = SetWebhook {
-            url: webhook_endpoint.clone(),
-            allowed_updates: Some(vec![
-                "message".into(),
-                "channel_post".into(),
-                "inline_query".into(),
-                "chosen_inline_result".into(),
-                "callback_query".into(),
-                "my_chat_member".into(),
-                "chat_member".into(),
-            ]),
-        };
-        if let Err(e) = bot.make_request(&set_webhook).await {
-            panic!("unable to set webhook: {:?}", e);
-        }
-
-        receive_webhook(update_tx, inline_tx, shutdown, config).await;
-    } else {
-        let delete_webhook = DeleteWebhook;
-        if let Err(e) = bot.make_request(&delete_webhook).await {
-            panic!("unable to delete webhook: {:?}", e);
-        }
-
-        poll_updates(update_tx, inline_tx, shutdown, bot).await;
+    let webhook_endpoint = format!(
+        "{}/telegram/{}",
+        config.internet_url, config.telegram_apitoken
+    );
+    let set_webhook = SetWebhook {
+        url: webhook_endpoint.clone(),
+        allowed_updates: Some(vec![
+            "message".into(),
+            "channel_post".into(),
+            "inline_query".into(),
+            "chosen_inline_result".into(),
+            "callback_query".into(),
+            "my_chat_member".into(),
+            "chat_member".into(),
+        ]),
+    };
+    if let Err(e) = bot.make_request(&set_webhook).await {
+        panic!("unable to set webhook: {:?}", e);
     }
+
+    std::thread::spawn(|| {
+        actix_web::rt::System::new().block_on(async move {
+            web::serve(config, inline_tx, update_tx, pool, bot).await;
+        });
+    });
 
     // We have broken updates into two categories, inline queries and everything
     // else. Inline queries must be quickly answered otherwise users will assume
@@ -477,393 +422,6 @@ async fn main() {
         .await;
 
     opentelemetry::global::shutdown_tracer_provider();
-}
-
-/// Handle an incoming HTTP POST request to /{token}.
-///
-/// It spawns a handler for each request.
-async fn handle_request(
-    req: hyper::Request<hyper::Body>,
-    update_tx: tokio::sync::mpsc::Sender<(HandlerUpdate, tracing::Span)>,
-    inline_tx: tokio::sync::mpsc::Sender<(HandlerUpdate, tracing::Span)>,
-    secret: &str,
-    fuzzysearch_secret: &str,
-    video_secret: &str,
-    templates: Arc<handlebars::Handlebars<'_>>,
-) -> hyper::Result<hyper::Response<hyper::Body>> {
-    use hyper::{Body, Response, StatusCode};
-
-    tracing::trace!(method = ?req.method(), path = req.uri().path(), "got HTTP request");
-
-    let path = req.uri().path();
-    let uri = req.uri().clone();
-
-    match (req.method(), path) {
-        (&hyper::Method::POST, path) if path == secret => {
-            let _hist = REQUEST_DURATION.start_timer();
-
-            let body = req.into_body();
-            let bytes = hyper::body::to_bytes(body)
-                .await
-                .expect("unable to read body bytes");
-
-            let update: Update = match serde_json::from_slice(&bytes) {
-                Ok(update) => update,
-                Err(err) => {
-                    tracing::error!("error decoding incoming json: {:?}", err);
-                    let mut resp = Response::default();
-                    *resp.status_mut() = StatusCode::BAD_REQUEST;
-                    return Ok(resp);
-                }
-            };
-
-            let update = Box::new(update);
-            if update.inline_query.is_some() {
-                inline_tx
-                    .send((update.into(), tracing::Span::current()))
-                    .await
-                    .unwrap();
-            } else {
-                update_tx
-                    .send((update.into(), tracing::Span::current()))
-                    .await
-                    .unwrap();
-            }
-
-            Ok(Response::new(Body::from("✓")))
-        }
-        (&hyper::Method::POST, path) if path == fuzzysearch_secret => {
-            let body = req.into_body();
-            let bytes = hyper::body::to_bytes(body).await.unwrap();
-
-            let data: serde_json::Value = match serde_json::from_slice(&bytes) {
-                Ok(data) => data,
-                Err(err) => {
-                    tracing::error!("error decoding incoming hash data: {:?}", err);
-                    let mut resp = Response::default();
-                    *resp.status_mut() = StatusCode::BAD_REQUEST;
-                    return Ok(resp);
-                }
-            };
-
-            let hash = if let Some(hash) = data
-                .as_object()
-                .and_then(|obj| obj.get("hash"))
-                .and_then(serde_json::Value::as_str)
-                .map(|hash| {
-                    let mut data = [0u8; 8];
-                    base64::decode_config_slice(&hash, base64::STANDARD, &mut data).ok();
-                    data
-                }) {
-                i64::from_be_bytes(hash)
-            } else {
-                tracing::error!("incoming hash was missing data: {:?}", data);
-                return Ok(Response::new(Body::from("x")));
-            };
-
-            update_tx
-                .send((
-                    HandlerUpdate::Service(ServiceData::NewHash { hash }),
-                    tracing::Span::current(),
-                ))
-                .await
-                .unwrap();
-
-            Ok(Response::new(Body::from("✓")))
-        }
-        (&hyper::Method::GET, "/health") => Ok(Response::new(Body::from("✓"))),
-        (&hyper::Method::POST, path) if path == video_secret => {
-            let body = req.into_body();
-            let bytes = hyper::body::to_bytes(body)
-                .await
-                .expect("Unable to read body bytes");
-
-            let update: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-
-            let url = uri.to_string();
-            let display_name = url.split('=').last().unwrap();
-            let progress = update.get("progress").and_then(serde_json::Value::as_str);
-
-            tracing::debug!(display_name, "Got video update: {:?}", update);
-
-            if let Some(progress) = progress {
-                tracing::debug!("Got video progress, {}", progress);
-
-                update_tx
-                    .send((
-                        HandlerUpdate::Service(ServiceData::VideoProgress {
-                            display_name: display_name.to_owned(),
-                            progress: progress.to_owned(),
-                        }),
-                        tracing::Span::current(),
-                    ))
-                    .await
-                    .unwrap();
-            } else {
-                let output_urls = update.get("output_urls").unwrap().as_object().unwrap();
-
-                let video_url = if let Some(video) = output_urls.get("mp4:720p") {
-                    video
-                } else if let Some(video) = output_urls.get("mp4:480p") {
-                    video
-                } else if let Some(video) = output_urls.get("mp4:360p") {
-                    video
-                } else {
-                    panic!("missing video");
-                }
-                .as_str()
-                .unwrap();
-
-                let thumb_url = output_urls
-                    .get("jpg:250x0")
-                    .unwrap()
-                    .as_array()
-                    .unwrap()
-                    .first()
-                    .unwrap()
-                    .as_str()
-                    .unwrap();
-
-                update_tx
-                    .send((
-                        HandlerUpdate::Service(ServiceData::VideoComplete {
-                            display_name: display_name.to_owned(),
-                            video_url: video_url.to_owned(),
-                            thumb_url: thumb_url.to_owned(),
-                        }),
-                        tracing::Span::current(),
-                    ))
-                    .await
-                    .unwrap();
-            }
-
-            Ok(Response::new(Body::from("OK")))
-        }
-        (&hyper::Method::GET, "/twitter/callback") => {
-            let query: std::collections::HashMap<String, String> = req
-                .uri()
-                .query()
-                .map(|v| {
-                    url::form_urlencoded::parse(v.as_bytes())
-                        .into_owned()
-                        .collect()
-                })
-                .unwrap_or_else(std::collections::HashMap::new);
-
-            let data: Option<()> = None;
-
-            if query.contains_key("denied") {
-                let denied = templates.render("twitter/denied", &data).unwrap();
-                return Ok(Response::new(Body::from(denied)));
-            }
-
-            let (token, verifier) = if let (Some(token), Some(verifier)) =
-                (query.get("oauth_token"), query.get("oauth_verifier"))
-            {
-                (token, verifier)
-            } else {
-                let bad_request = templates.render("400", &data).unwrap();
-                let mut resp = Response::new(Body::from(bad_request));
-                *resp.status_mut() = StatusCode::BAD_REQUEST;
-                return Ok(resp);
-            };
-
-            update_tx
-                .send((
-                    HandlerUpdate::Service(ServiceData::TwitterVerified {
-                        token: token.clone(),
-                        verifier: verifier.clone(),
-                    }),
-                    tracing::Span::current(),
-                ))
-                .await
-                .unwrap();
-
-            let loggedin = templates.render("twitter/loggedin", &data).unwrap();
-            Ok(Response::new(Body::from(loggedin)))
-        }
-        (&hyper::Method::GET, "/") => {
-            let index = templates.render("home", &None::<()>).unwrap();
-            Ok(Response::new(Body::from(index)))
-        }
-        _ => {
-            let not_found = templates.render("404", &None::<()>).unwrap();
-            let mut not_found = Response::new(Body::from(not_found));
-            *not_found.status_mut() = StatusCode::NOT_FOUND;
-            Ok(not_found)
-        }
-    }
-}
-
-/// Start a web server to handle webhooks and pass updates to [handle_request].
-async fn receive_webhook(
-    update_tx: tokio::sync::mpsc::Sender<(HandlerUpdate, tracing::Span)>,
-    inline_tx: tokio::sync::mpsc::Sender<(HandlerUpdate, tracing::Span)>,
-    mut shutdown: tokio::sync::mpsc::Receiver<bool>,
-    config: Config,
-) {
-    let addr = config
-        .http_host
-        .unwrap()
-        .parse()
-        .expect("Invalid HTTP_HOST");
-
-    let secret_path = format!("/{}", config.http_secret.unwrap());
-    let secret_path: &'static str = Box::leak(secret_path.into_boxed_str());
-    let fuzzysearch_secret = format!("/{}", config.fautil_apitoken);
-    let fuzzysearch_secret: &'static str = Box::leak(fuzzysearch_secret.into_boxed_str());
-    let video_secret = format!("/{}", config.coconut_secret);
-    let video_secret: &'static str = Box::leak(video_secret.into_boxed_str());
-
-    let mut hbs = handlebars::Handlebars::new();
-    hbs.set_strict_mode(true);
-    hbs.register_templates_directory(".hbs", "templates/")
-        .expect("templates contained bad data");
-
-    let templates = Arc::new(hbs);
-
-    let make_svc = hyper::service::make_service_fn(move |_conn| {
-        let update_tx = update_tx.clone();
-        let inline_tx = inline_tx.clone();
-        let templates = templates.clone();
-        async move {
-            Ok::<_, hyper::Error>(hyper::service::service_fn(move |req| {
-                use tracing_opentelemetry::OpenTelemetrySpanExt;
-
-                let parent_cx = opentelemetry::global::get_text_map_propagator(|propagator| {
-                    propagator.extract(&opentelemetry_http::HeaderExtractor(req.headers()))
-                });
-
-                let span = tracing::info_span!("handle_request");
-                span.set_parent(parent_cx);
-
-                handle_request(
-                    req,
-                    update_tx.clone(),
-                    inline_tx.clone(),
-                    secret_path,
-                    fuzzysearch_secret,
-                    video_secret,
-                    templates.clone(),
-                )
-                .instrument(span)
-            }))
-        }
-    });
-
-    tokio::spawn(async move {
-        tracing::info!("listening on http://{}", addr);
-
-        let graceful = hyper::Server::bind(&addr)
-            .serve(make_svc)
-            .with_graceful_shutdown(async {
-                shutdown.recv().await;
-                tracing::error!("shutting down http server");
-            });
-
-        if let Err(e) = graceful.await {
-            tracing::error!("server error: {:?}", e);
-        }
-    });
-}
-
-async fn metrics(
-    req: hyper::Request<hyper::Body>,
-) -> Result<hyper::Response<hyper::Body>, std::convert::Infallible> {
-    use hyper::{Body, Response, StatusCode};
-
-    match req.uri().path() {
-        "/health" => Ok(Response::new(Body::from("OK"))),
-        "/metrics" => {
-            tracing::trace!("encoding metrics");
-
-            use prometheus::Encoder;
-            let encoder = prometheus::TextEncoder::new();
-            let metric_families = prometheus::gather();
-            let mut buf = vec![];
-            encoder.encode(&metric_families, &mut buf).unwrap();
-
-            Ok(Response::new(Body::from(buf)))
-        }
-        _ => {
-            let mut not_found = Response::new(Body::default());
-            *not_found.status_mut() = StatusCode::NOT_FOUND;
-            Ok(not_found)
-        }
-    }
-}
-
-async fn serve_metrics(config: Config) {
-    let addr = config.metrics_host.parse().expect("Invalid METRICS_HOST");
-
-    let make_svc = hyper::service::make_service_fn(|_conn| async {
-        Ok::<_, std::convert::Infallible>(hyper::service::service_fn(metrics))
-    });
-
-    tokio::spawn(async move {
-        tracing::info!("metrics listening on http://{}", addr);
-
-        hyper::Server::bind(&addr).serve(make_svc).await.unwrap();
-    });
-}
-
-/// Start polling updates using Bot API long polling.
-async fn poll_updates(
-    update_tx: tokio::sync::mpsc::Sender<(HandlerUpdate, tracing::Span)>,
-    inline_tx: tokio::sync::mpsc::Sender<(HandlerUpdate, tracing::Span)>,
-    mut shutdown: tokio::sync::mpsc::Receiver<bool>,
-    bot: Arc<Telegram>,
-) {
-    let mut update_req = GetUpdates {
-        timeout: Some(30),
-        allowed_updates: Some(vec![
-            "message".into(),
-            "channel_post".into(),
-            "inline_query".into(),
-            "chosen_inline_result".into(),
-            "callback_query".into(),
-            "my_chat_member".into(),
-            "chat_member".into(),
-        ]),
-        ..Default::default()
-    };
-
-    tokio::spawn(async move {
-        loop {
-            let updates = tokio::select! {
-                _ = shutdown.recv() => {
-                    tracing::error!("got shutdown request");
-                    break;
-                }
-
-                updates = bot.make_request(&update_req) => updates,
-            };
-
-            let updates = match updates {
-                Ok(updates) => updates,
-                Err(e) => {
-                    sentry::capture_error(&e);
-                    tracing::error!("unable to get updates: {:?}", e);
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                    continue;
-                }
-            };
-
-            for update in updates {
-                let id = update.update_id;
-                let span = tracing::info_span!("poll_update");
-
-                let update = Box::new(update);
-                if update.inline_query.is_some() {
-                    inline_tx.send((update.into(), span)).await.unwrap();
-                } else {
-                    update_tx.send((update.into(), span)).await.unwrap();
-                }
-
-                update_req.offset = Some(id + 1);
-            }
-        }
-    });
 }
 
 pub struct MessageHandler {

@@ -1,0 +1,47 @@
+{{#*inline "page"}}
+<h1>Media Group Sources</h1>
+
+{{#if items}}
+<p>
+    This page will only exist for around 24 hours after it's creation.
+</p>
+{{/if}}
+
+<style>
+    img {
+        display: inline-block;
+        max-width: 100%;
+    }
+
+    ul {
+        padding: 0;
+        -webkit-padding-start: 0;
+    }
+</style>
+
+{{#each items as |item|}}
+    <section>
+        <p>
+            <img src="{{@root.cdn_url}}/{{@root.cdn_bucket}}/mg/{{item.media_group_id}}/{{item.file_id}}">
+        </p>
+
+        <ul>
+            {{#each item.urls as |url|}}
+                <li><a href="{{url}}">{{url}}</a></li>
+            {{else}}
+                <li>No matches found</li>
+            {{/each}}
+        </ul>
+    </section>
+{{else}}
+    <p>
+        No items were found. It's likely the content here was already deleted.
+    </p>
+
+    <p>
+        Try forwarding the images you're interested in to <a href="https://t.me/FoxBot">@FoxBot</a> directly.
+    </p>
+{{/each}}
+{{/inline}}
+
+{{~> base }}
