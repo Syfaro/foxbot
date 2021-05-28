@@ -577,7 +577,7 @@ impl Twitter {
                                 );
                             }
                         }
-                        _ => (),
+                        err => tracing::warn!("got unknown twitter error: {:?}", err),
                     }
 
                     DisplayableErrorMessage::new("Twitter returned unknown data", err)

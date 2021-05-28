@@ -1,4 +1,4 @@
-name: Rust
+name: Test
 
 on:
   push:
@@ -19,7 +19,7 @@ jobs:
         with:
           path: |
             target/
-          key: ${{ runner.os }}-target
+          key: ${{ runner.os }}-debug-${{ hashFiles('Cargo.lock') }}
 
       - uses: actions-rs/toolchain@v1
         with:

@@ -17,6 +17,7 @@ pub fn generate_id() -> String {
 
     rng.sample_iter(&rand::distributions::Alphanumeric)
         .take(24)
+        .map(char::from)
         .collect()
 }
 

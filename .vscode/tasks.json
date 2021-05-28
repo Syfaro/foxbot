@@ -1,0 +1,31 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "cargo",
+			"command": "run --bin foxbot --features env",
+			"problemMatcher": [
+				"$rustc"
+			],
+			"label": "rust: cargo run foxbot"
+		},
+		{
+			"type": "cargo",
+			"command": "run --bin foxbot-background-worker --features env",
+			"problemMatcher": [
+				"$rustc"
+			],
+			"label": "rust: cargo run foxbot-background-worker"
+		},
+		{
+			"label": "rust: cargo run all",
+			"dependsOn": [
+				"rust: cargo run foxbot",
+				"rust: cargo run foxbot-background-worker"
+			],
+			"problemMatcher": [
+				"$rustc"
+			]
+		}
+	]
+}

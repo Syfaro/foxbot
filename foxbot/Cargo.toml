@@ -1,16 +1,17 @@
 [package]
 name = "foxbot"
-version = "0.1.1"
+version = "0.3.0"
 authors = ["Syfaro <syfaro@huefox.com>"]
 edition = "2018"
+publish = false
 
 [features]
 env = ["dotenv"]
 
 [dependencies]
 reqwest = { version = "0.11", features = ["json", "stream"] }
-linkify = "0.5"
-rand = "0.7"
+linkify = "0.7"
+rand = "0.8"
 async-trait = "0.1"
 fluent = "0.12"
 fluent-langneg = "0.13"
@@ -18,7 +19,7 @@ unic-langid = "0.9"
 hyper = { version = "0.14", features = ["server"] }
 url = "2"
 hamming = "0.1"
-handlebars = { version = "3", features = ["dir_source"] }
+handlebars = { version = "4", features = ["dir_source"] }
 dotenv = { version = "0.15", optional = true }
 base64 = "0.13"
 

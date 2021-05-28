@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Cache target
+        uses: actions/cache@v2
+        with:
+          path: |
+            target/
+          key: ${{ runner.os }}-release-${{ hashFiles('Cargo.lock') }}
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+
+      - uses: actions-rs/cargo@v1
+        with:
+          command: build --release
+
+      - uses: actions/upload-artifact@v2
+        with:
+          path: target/release/foxbot
+
+      - uses: actions/upload-artifact@v2
+        with:
+          path: target/release/foxbot-background-worker

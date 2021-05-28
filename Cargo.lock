@@ -970,7 +970,7 @@ dependencies = [
 
 [[package]]
 name = "foxbot"
-version = "0.1.1"
+version = "0.3.0"
 dependencies = [
  "actix-http",
  "actix-web",
@@ -997,7 +997,7 @@ dependencies = [
  "opentelemetry-http",
  "opentelemetry-jaeger",
  "prometheus",
- "rand 0.7.3",
+ "rand 0.8.3",
  "redis",
  "reqwest",
  "rusoto_core",
@@ -1022,7 +1022,7 @@ dependencies = [
 
 [[package]]
 name = "foxbot-background-worker"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1057,7 +1057,7 @@ dependencies = [
 
 [[package]]
 name = "foxbot-models"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1074,7 +1074,7 @@ dependencies = [
 
 [[package]]
 name = "foxbot-sites"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1096,7 +1096,7 @@ dependencies = [
 
 [[package]]
 name = "foxbot-utils"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1112,7 +1112,7 @@ dependencies = [
  "linkify",
  "opentelemetry",
  "opentelemetry-http",
- "rand 0.7.3",
+ "rand 0.8.3",
  "redis",
  "reqwest",
  "rusoto_s3",
@@ -1359,9 +1359,9 @@ checksum = "65043da274378d68241eb9a8f8f8aa54e349136f7b8e12f63e3ef44043cc30e1"
 
 [[package]]
 name = "handlebars"
-version = "3.5.5"
+version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4498fc115fa7d34de968184e473529abb40eeb6be8bc5f7faba3d08c316cb3e3"
+checksum = "28f0fe89affef47e2c9729030a8f6e79df34cb66b8a44ecf91dad43f31150559"
 dependencies = [
  "log",
  "pest",
@@ -1692,9 +1692,9 @@ checksum = "789da6d93f1b866ffe175afc5322a4d76c038605a1c3319bb57b06967ca98a36"
 
 [[package]]
 name = "linkify"
-version = "0.5.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78d59d732ba6d7eeefc418aab8057dc8e3da4374bd5802ffa95bebc04b4d1dfb"
+checksum = "04d828fdc1ffceb369a5a9183bd4df2dbb3678f40c8b3fbaa9231de32beb29f9"
 dependencies = [
  "memchr",
 ]
