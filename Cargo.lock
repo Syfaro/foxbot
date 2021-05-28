@@ -991,7 +991,6 @@ dependencies = [
  "hamming",
  "handlebars",
  "hyper",
- "infer",
  "lazy_static",
  "linkify",
  "opentelemetry",

@@ -51,6 +51,7 @@ pub struct Config {
     pub inkbunny_password: String,
     pub e621_login: String,
     pub e621_api_key: String,
+    pub fautil_apitoken: String,
 
     // Twitter config
     pub twitter_consumer_key: String,
@@ -65,10 +66,6 @@ pub struct Config {
 
     // Telegram config
     telegram_apitoken: String,
-    pub use_webhooks: Option<bool>,
-    pub webhook_endpoint: Option<String>,
-    pub http_host: Option<String>,
-    http_secret: Option<String>,
 
     // File storage
     pub s3_endpoint: String,
@@ -78,33 +75,29 @@ pub struct Config {
     pub s3_bucket: String,
     pub s3_url: String,
 
-    pub fautil_apitoken: String,
-
     // Video storage
     b2_account_id: String,
     b2_app_key: String,
     b2_bucket_id: String,
 
+    // Video encoding
     coconut_apitoken: String,
     coconut_webhook: String,
     coconut_secret: String,
 
+    // Inline image processing options
     pub size_images: Option<bool>,
     pub cache_images: Option<bool>,
     pub cache_all_images: Option<bool>,
 
+    // Connections
     redis_dsn: String,
     faktory_url: Option<String>,
+    database_url: String,
 
+    // Public URLs and secrets
     internet_url: String,
     internal_secret: String,
-    metrics_host: String,
-
-    // Postgres database
-    db_host: String,
-    db_user: String,
-    db_pass: String,
-    db_name: String,
 }
 
 /// Configure tracing with Jaeger.
@@ -216,10 +209,7 @@ async fn main() {
 
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(8)
-        .connect(&format!(
-            "postgres://{}:{}@{}/{}",
-            config.db_user, config.db_pass, config.db_host, config.db_name
-        ))
+        .connect(&config.database_url)
         .await
         .expect("unable to create database pool");
 
@@ -360,8 +350,6 @@ async fn main() {
             .map_or(false, sentry::ClientInitGuard::is_enabled)
     );
 
-    serve_metrics(config.clone()).await;
-
     // Allow buffering more updates than can be run at once
     let (update_tx, update_rx) = tokio::sync::mpsc::channel(CONCURRENT_HANDLERS * 2);
     let (inline_tx, inline_rx) = tokio::sync::mpsc::channel(INLINE_HANDLERS * 2);
@@ -437,46 +425,6 @@ async fn main() {
         .await;
 
     opentelemetry::global::shutdown_tracer_provider();
-}
-
-async fn metrics(
-    req: hyper::Request<hyper::Body>,
-) -> Result<hyper::Response<hyper::Body>, std::convert::Infallible> {
-    use hyper::{Body, Response, StatusCode};
-
-    match req.uri().path() {
-        "/health" => Ok(Response::new(Body::from("OK"))),
-        "/metrics" => {
-            tracing::trace!("encoding metrics");
-
-            use prometheus::Encoder;
-            let encoder = prometheus::TextEncoder::new();
-            let metric_families = prometheus::gather();
-            let mut buf = vec![];
-            encoder.encode(&metric_families, &mut buf).unwrap();
-
-            Ok(Response::new(Body::from(buf)))
-        }
-        _ => {
-            let mut not_found = Response::new(Body::default());
-            *not_found.status_mut() = StatusCode::NOT_FOUND;
-            Ok(not_found)
-        }
-    }
-}
-
-async fn serve_metrics(config: Config) {
-    let addr = config.metrics_host.parse().expect("Invalid METRICS_HOST");
-
-    let make_svc = hyper::service::make_service_fn(|_conn| async {
-        Ok::<_, std::convert::Infallible>(hyper::service::service_fn(metrics))
-    });
-
-    tokio::spawn(async move {
-        tracing::info!("metrics listening on http://{}", addr);
-
-        hyper::Server::bind(&addr).serve(make_svc).await.unwrap();
-    });
 }
 
 pub struct MessageHandler {

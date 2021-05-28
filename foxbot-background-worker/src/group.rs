@@ -1,4 +1,5 @@
 use anyhow::Context;
+use fluent::fluent_args;
 use rusoto_s3::S3;
 use tgbotapi::requests::GetChat;
 
@@ -546,6 +547,11 @@ pub async fn process_group_mediagroup_check(
     let messages = MediaGroup::get_messages(&handler.conn, &media_group_id).await?;
     let first_message = &messages.first().as_ref().unwrap().message;
 
+    let lang_code = first_message
+        .from
+        .as_ref()
+        .and_then(|from| from.language_code.as_deref());
+
     if GroupConfig::get(
         &handler.conn,
         first_message.chat.id,
@@ -568,13 +574,22 @@ pub async fn process_group_mediagroup_check(
         if has_sources {
             tracing::debug!("media group had sources, sending message");
 
+            let link = format!("{}/mg/{}", handler.config.internet_url, media_group_id);
+            let message = handler
+                .get_fluent_bundle(lang_code, |bundle| {
+                    get_message(
+                        bundle,
+                        "automatic-sources-link",
+                        Some(fluent_args!["link" => link]),
+                    )
+                    .unwrap()
+                })
+                .await;
+
             let send_message = tgbotapi::requests::SendMessage {
                 chat_id: first_message.chat_id(),
                 reply_to_message_id: Some(first_message.message_id),
-                text: format!(
-                    "See sources here: {}/{}",
-                    handler.config.media_group_sources, media_group_id
-                ),
+                text: message,
                 disable_web_page_preview: Some(true),
                 disable_notification: Some(true),
                 ..Default::default()
@@ -646,22 +661,35 @@ pub async fn process_group_mediagroup_check(
 
     let mut buf = String::new();
 
-    for (index, message) in messages.iter().enumerate() {
-        let urls = message
-            .sources
-            .as_ref()
-            .unwrap()
-            .iter()
-            .map(|file| file.url())
-            .take(2)
-            .collect::<Vec<_>>();
-        if urls.is_empty() {
-            continue;
-        }
-        buf.push_str(&format!("Image {}\n", index + 1));
-        buf.push_str(&urls.join("\n"));
-        buf.push_str("\n\n");
-    }
+    handler
+        .get_fluent_bundle(lang_code, |bundle| {
+            for (index, message) in messages.iter().enumerate() {
+                let urls = message
+                    .sources
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .map(|file| file.url())
+                    .take(2)
+                    .collect::<Vec<_>>();
+                if urls.is_empty() {
+                    continue;
+                }
+
+                let image = get_message(
+                    bundle,
+                    "automatic-image-number",
+                    Some(fluent_args!["number" => index + 1]),
+                )
+                .unwrap();
+
+                buf.push_str(&image);
+                buf.push('\n');
+                buf.push_str(&urls.join("\n"));
+                buf.push_str("\n\n");
+            }
+        })
+        .await;
 
     let first_message = &messages.first().as_ref().unwrap().message;
 

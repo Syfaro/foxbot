@@ -283,7 +283,7 @@ struct Config {
     channel_workers: Option<usize>,
     database_url: String,
     redis_dsn: String,
-    media_group_sources: String,
+    internet_url: String,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]

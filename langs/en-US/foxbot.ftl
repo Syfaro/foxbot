@@ -108,6 +108,8 @@ automatic-preview-disable = Sourced image previews disabled.
 automatic-preview-enable = Sourced image previews enabled.
 automatic-album-enable = In-group album sourcing enabled.
 automatic-album-disable = In-group album sourcing disabled.
+automatic-sources-link = I've collected the sources here: { $link }
+automatic-image-number = Image { $number }
 
 # Error Messages
 error-generic = Oh no, something went wrong! Please send a message to my creator, { -creatorName }, saying what happened.

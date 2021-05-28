@@ -21,7 +21,6 @@ hamming = "0.1"
 handlebars = { version = "3", features = ["dir_source"] }
 dotenv = { version = "0.15", optional = true }
 base64 = "0.13"
-infer = "0.5"
 
 sentry = { version = "0.22", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "reqwest", "debug-logs"] }
 uuid = "0.8"
