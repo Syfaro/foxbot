@@ -1,6 +1,6 @@
 [package]
 name = "foxbot"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["Syfaro <syfaro@huefox.com>"]
 edition = "2018"
 publish = false
@@ -60,6 +60,7 @@ rusoto_s3 = "0.46"
 actix-web = "4.0.0-beta.5"
 actix-http = "3.0.0-beta.5"
 tracing-actix-web = "0.4.0-beta.4"
+actix-web-httpauth = "0.6.0-beta.1"
 
 foxbot-sites = { path = "../foxbot-sites" }
 foxbot-models = { path = "../foxbot-models" }

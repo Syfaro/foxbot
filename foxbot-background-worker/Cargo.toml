@@ -1,6 +1,6 @@
 [package]
 name = "foxbot-background-worker"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["Syfaro <syfaro@huefox.com>"]
 edition = "2018"
 publish = false

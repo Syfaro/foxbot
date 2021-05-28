@@ -1,4 +1,8 @@
-use actix_web::{get, guard, post, web, App, HttpResponse, HttpServer, Responder};
+use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
+use actix_web_httpauth::{
+    extractors::AuthenticationError, headers::www_authenticate::basic::Basic,
+    middleware::HttpAuthentication,
+};
 use handlebars::Handlebars;
 use serde::Deserialize;
 use tgbotapi::Update;
@@ -301,7 +305,19 @@ pub async fn serve(
 
     HttpServer::new(move || {
         let internal_resources = web::scope("/_")
-            .guard(guard::Header("x-secret", internal_secret))
+            .wrap(HttpAuthentication::basic(
+                move |req, credentials| async move {
+                    if let Some(password) = credentials.password() {
+                        if *password == internal_secret {
+                            return Ok(req);
+                        }
+                    }
+
+                    Err(actix_web::Error::from(AuthenticationError::new(
+                        Basic::with_realm("FoxBot"),
+                    )))
+                },
+            ))
             .service(health)
             .service(metrics);
 

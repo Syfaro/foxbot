@@ -201,6 +201,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "actix-web-httpauth"
+version = "0.6.0-beta.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7943eed6d24b1bb61f5e3a2162339f7aa7285a51f334442b9e52cb6fc37856a5"
+dependencies = [
+ "actix-service",
+ "actix-web",
+ "base64",
+ "futures-util",
+]
+
+[[package]]
 name = "addr2line"
 version = "0.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -970,10 +982,11 @@ dependencies = [
 
 [[package]]
 name = "foxbot"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "actix-http",
  "actix-web",
+ "actix-web-httpauth",
  "anyhow",
  "async-trait",
  "base64",
@@ -1022,7 +1035,7 @@ dependencies = [
 
 [[package]]
 name = "foxbot-background-worker"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1057,7 +1070,7 @@ dependencies = [
 
 [[package]]
 name = "foxbot-models"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1074,7 +1087,7 @@ dependencies = [
 
 [[package]]
 name = "foxbot-sites"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1096,7 +1109,7 @@ dependencies = [
 
 [[package]]
 name = "foxbot-utils"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "bytes",
