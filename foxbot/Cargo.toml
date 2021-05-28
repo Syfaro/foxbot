@@ -57,8 +57,9 @@ rusoto_core = "0.46"
 rusoto_credential = "0.46"
 rusoto_s3 = "0.46"
 
-actix-web = "4.0.0-beta.6"
-actix-http = "3.0.0-beta.6"
+actix-web = "4.0.0-beta.5"
+actix-http = "3.0.0-beta.5"
+tracing-actix-web = "0.4.0-beta.4"
 
 foxbot-sites = { path = "../foxbot-sites" }
 foxbot-models = { path = "../foxbot-models" }

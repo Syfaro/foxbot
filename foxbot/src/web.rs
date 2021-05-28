@@ -172,11 +172,13 @@ async fn coconut_webhook(
             .send((service_update, tracing::Span::current()))
             .await
             .unwrap();
+
+        return HttpResponse::Ok().body("Updated progress");
     }
 
     let output_urls = match &data.output_urls {
         Some(output_urls) => output_urls,
-        None => return HttpResponse::BadRequest().finish(),
+        None => return HttpResponse::BadRequest().body("No progress and no output URLs"),
     };
 
     let thumb_url = output_urls.thumbnail.as_ref().unwrap();
@@ -188,7 +190,7 @@ async fn coconut_webhook(
     } else if let Some(url) = &output_urls.video_360p {
         url
     } else {
-        return HttpResponse::BadRequest().body("Unknown video format");
+        return HttpResponse::BadRequest().body("All expected video formats empty");
     };
 
     let service_update = HandlerUpdate::Service(ServiceData::VideoComplete {
@@ -304,7 +306,7 @@ pub async fn serve(
             .service(metrics);
 
         App::new()
-            .wrap(actix_web::middleware::Logger::default())
+            .wrap(tracing_actix_web::TracingLogger::default())
             .app_data(hbs.clone())
             .app_data(conn.clone())
             .data(bot.clone())
