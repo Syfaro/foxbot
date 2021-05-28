@@ -82,12 +82,9 @@ pub struct Config {
 
     // Video encoding
     coconut_apitoken: String,
-    coconut_webhook: String,
     coconut_secret: String,
 
     // Inline image processing options
-    pub size_images: Option<bool>,
-    pub cache_images: Option<bool>,
     pub cache_all_images: Option<bool>,
 
     // Connections

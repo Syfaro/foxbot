@@ -83,11 +83,7 @@ fn main() {
 
     tracing::info!("starting channel worker");
 
-    let workers: usize = std::env::var("CHANNEL_WORKERS")
-        .as_deref()
-        .unwrap_or("2")
-        .parse()
-        .unwrap_or(4);
+    let workers: usize = config.background_workers.unwrap_or(4);
 
     tracing::debug!(workers, "got worker count configuration");
 
@@ -280,7 +276,7 @@ struct Config {
     s3_secret: String,
 
     // Worker configuration
-    channel_workers: Option<usize>,
+    background_workers: Option<usize>,
     database_url: String,
     redis_dsn: String,
     internet_url: String,
