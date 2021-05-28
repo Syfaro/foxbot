@@ -1,10 +1,10 @@
 use actix_web::{get, guard, post, web, App, HttpResponse, HttpServer, Responder};
+use handlebars::Handlebars;
 use serde::Deserialize;
 use tgbotapi::Update;
 
-use handlebars::Handlebars;
-
 use crate::{Config, HandlerUpdate, ServiceData, UpdateSender};
+use foxbot_utils::find_best_photo;
 
 #[derive(Deserialize)]
 struct TwitterCallbackRequest {
@@ -218,7 +218,72 @@ async fn metrics() -> impl Responder {
     HttpResponse::Ok().body(buffer)
 }
 
-pub async fn serve(config: Config, high_priority: UpdateSender, low_priority: UpdateSender) {
+#[derive(serde::Deserialize)]
+struct MediaGroupPath {
+    media_group_id: String,
+}
+
+#[derive(serde::Serialize)]
+struct SourceInfo<'a> {
+    media_group_id: &'a str,
+    message_id: i32,
+    file_id: &'a str,
+    urls: Vec<String>,
+}
+
+#[get("/mg/{media_group_id}")]
+async fn mediagroup(
+    path: web::Path<MediaGroupPath>,
+    conn: web::Data<sqlx::Pool<sqlx::Postgres>>,
+    hbs: web::Data<Handlebars<'_>>,
+    config: web::Data<Config>,
+) -> impl Responder {
+    use foxbot_models::MediaGroup;
+
+    let messages = MediaGroup::get_messages(&conn, &path.media_group_id)
+        .await
+        .unwrap();
+
+    let mut source_info: Vec<_> = messages
+        .iter()
+        .map(|message| SourceInfo {
+            media_group_id: message.message.media_group_id.as_ref().unwrap(),
+            message_id: message.message.message_id,
+            file_id: &find_best_photo(&message.message.photo.as_deref().unwrap())
+                .unwrap()
+                .file_id,
+            urls: message
+                .sources
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .map(|file| file.url())
+                .collect(),
+        })
+        .collect();
+    source_info.sort_by(|a, b| a.message_id.cmp(&b.message_id));
+
+    let body = hbs
+        .render(
+            "mediagroup",
+            &serde_json::json!({
+                "cdn_url": config.s3_url,
+                "cdn_bucket": config.s3_bucket,
+                "items": source_info,
+            }),
+        )
+        .unwrap();
+
+    HttpResponse::Ok().body(body)
+}
+
+pub async fn serve(
+    config: Config,
+    high_priority: UpdateSender,
+    low_priority: UpdateSender,
+    conn: sqlx::Pool<sqlx::Postgres>,
+    bot: std::sync::Arc<tgbotapi::Telegram>,
+) {
     tracing::info!("starting web server");
 
     let mut hbs = Handlebars::new();
@@ -226,6 +291,7 @@ pub async fn serve(config: Config, high_priority: UpdateSender, low_priority: Up
     hbs.register_templates_directory(".hbs", "templates/")
         .expect("templates contained bad data");
     let hbs = web::Data::new(hbs);
+    let conn = web::Data::new(conn);
 
     let sender = (high_priority, low_priority);
 
@@ -241,11 +307,14 @@ pub async fn serve(config: Config, high_priority: UpdateSender, low_priority: Up
             .service(telegram_webhook)
             .service(index)
             .service(health)
-            .service(twitter_callback);
+            .service(twitter_callback)
+            .service(mediagroup);
 
         App::new()
             .wrap(actix_web::middleware::Logger::default())
             .app_data(hbs.clone())
+            .app_data(conn.clone())
+            .data(bot.clone())
             .data(sender.clone())
             .data(config.clone())
             .service(internal_resources)

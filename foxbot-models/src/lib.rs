@@ -820,6 +820,7 @@ impl Subscriptions {
     }
 }
 
+#[derive(serde::Serialize)]
 pub struct MediaGroup {
     pub id: i32,
     pub inserted_at: chrono::DateTime<chrono::Utc>,
@@ -882,6 +883,27 @@ impl MediaGroup {
         Ok(message)
     }
 
+    pub async fn get_messages(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        media_group_id: &str,
+    ) -> anyhow::Result<Vec<MediaGroup>> {
+        let messages = sqlx::query!(
+            "SELECT id, inserted_at, message, sources FROM media_group WHERE media_group_id = $1",
+            media_group_id
+        )
+        .map(|row| MediaGroup {
+            id: row.id,
+            inserted_at: row.inserted_at,
+            message: serde_json::from_value(row.message).unwrap(),
+            sources: row
+                .sources
+                .map(|sources| serde_json::from_value(sources).unwrap()),
+        })
+        .fetch_all(conn)
+        .await?;
+        Ok(messages)
+    }
+
     /// Update the sources of a stored message, discarding any errors.
     pub async fn set_message_sources(
         conn: &sqlx::Pool<sqlx::Postgres>,
@@ -915,5 +937,42 @@ impl MediaGroup {
         .fetch_all(conn)
         .await?;
         Ok(messages)
+    }
+
+    /// Notify database that we are attempting to send a message, and return
+    /// if we're allowed to send it.
+    pub async fn sending_message(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        media_group_id: &str,
+    ) -> anyhow::Result<bool> {
+        let rows_affected = sqlx::query!(
+            "INSERT INTO media_group_sent (media_group_id) VALUES ($1) ON CONFLICT DO NOTHING",
+            media_group_id
+        )
+        .execute(conn)
+        .await?
+        .rows_affected();
+
+        Ok(rows_affected == 1)
+    }
+
+    /// Delete all information related to a media group.
+    pub async fn purge_media_group(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        media_group_id: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query!(
+            "DELETE FROM media_group WHERE media_group_id = $1",
+            media_group_id
+        )
+        .execute(conn)
+        .await?;
+        sqlx::query!(
+            "DELETE FROM media_group_sent WHERE media_group_id = $1",
+            media_group_id
+        )
+        .execute(conn)
+        .await?;
+        Ok(())
     }
 }

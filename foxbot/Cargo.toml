@@ -21,6 +21,7 @@ hamming = "0.1"
 handlebars = { version = "3", features = ["dir_source"] }
 dotenv = { version = "0.15", optional = true }
 base64 = "0.13"
+infer = "0.5"
 
 sentry = { version = "0.22", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "reqwest", "debug-logs"] }
 uuid = "0.8"
@@ -56,8 +57,8 @@ rusoto_core = "0.46"
 rusoto_credential = "0.46"
 rusoto_s3 = "0.46"
 
-actix-web = "3"
-actix-http = "2"
+actix-web = "4.0.0-beta.6"
+actix-http = "3.0.0-beta.6"
 
 foxbot-sites = { path = "../foxbot-sites" }
 foxbot-models = { path = "../foxbot-models" }

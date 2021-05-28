@@ -339,7 +339,7 @@ async fn main() {
         faktory: Arc::new(std::sync::Mutex::new(faktory)),
 
         sites: Mutex::new(sites),
-        conn: pool,
+        conn: pool.clone(),
         redis,
     });
 
@@ -387,8 +387,8 @@ async fn main() {
     }
 
     std::thread::spawn(|| {
-        actix_web::rt::System::new("foxbot-web").block_on(async move {
-            web::serve(config, inline_tx, update_tx).await;
+        actix_web::rt::System::new().block_on(async move {
+            web::serve(config, inline_tx, update_tx, pool, bot).await;
         });
     });
 
