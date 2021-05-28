@@ -26,7 +26,7 @@ struct CoconutWebHookRequestQuery {
 #[derive(Deserialize)]
 struct CoconutWebHookRequestBodyOutputUrls {
     #[serde(rename = "jpg:250x0")]
-    thumbnail: Option<String>,
+    thumbnail: Option<Vec<String>>,
     #[serde(rename = "mp4:720p")]
     video_720p: Option<String>,
     #[serde(rename = "mp4:480p")]
@@ -194,7 +194,7 @@ async fn coconut_webhook(
     let service_update = HandlerUpdate::Service(ServiceData::VideoComplete {
         display_name,
         video_url: video_url.to_owned(),
-        thumb_url: thumb_url.to_owned(),
+        thumb_url: thumb_url.first().unwrap().to_owned(),
     });
 
     sender
@@ -311,6 +311,8 @@ pub async fn serve(
             .data(sender.clone())
             .data(config.clone())
             .service(telegram_webhook)
+            .service(coconut_webhook)
+            .service(fuzzysearch_webhook)
             .service(index)
             .service(health)
             .service(twitter_callback)

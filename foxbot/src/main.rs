@@ -310,7 +310,7 @@ async fn main() {
 
     let coconut = coconut::Coconut::new(
         config.coconut_apitoken.clone(),
-        config.coconut_webhook.clone(),
+        format!("{}/coconut/{}", config.internet_url, config.coconut_secret),
         config.b2_account_id.clone(),
         config.b2_app_key.clone(),
         config.b2_bucket_id.clone(),
