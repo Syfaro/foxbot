@@ -22,6 +22,13 @@ fn main() {
     use opentelemetry::KeyValue;
     use tracing_subscriber::layer::SubscriberExt;
 
+    load_env();
+    let config = match envy::from_env::<Config>() {
+        Ok(config) => config,
+        Err(err) => panic!("{:#?}", err),
+    };
+    let config_clone = config.clone();
+
     let runtime = Arc::new(
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -75,14 +82,6 @@ fn main() {
     }
 
     tracing::info!("starting channel worker");
-
-    load_env();
-    let config = match envy::from_env::<Config>() {
-        Ok(config) => config,
-        Err(err) => panic!("{:#?}", err),
-    };
-
-    let config_clone = config.clone();
 
     let workers: usize = std::env::var("CHANNEL_WORKERS")
         .as_deref()

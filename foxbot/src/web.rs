@@ -303,13 +303,6 @@ pub async fn serve(
             .service(health)
             .service(metrics);
 
-        let external_resources = web::scope("/")
-            .service(telegram_webhook)
-            .service(index)
-            .service(health)
-            .service(twitter_callback)
-            .service(mediagroup);
-
         App::new()
             .wrap(actix_web::middleware::Logger::default())
             .app_data(hbs.clone())
@@ -317,8 +310,12 @@ pub async fn serve(
             .data(bot.clone())
             .data(sender.clone())
             .data(config.clone())
+            .service(telegram_webhook)
+            .service(index)
+            .service(health)
+            .service(twitter_callback)
+            .service(mediagroup)
             .service(internal_resources)
-            .service(external_resources)
     })
     .workers(4)
     .bind("0.0.0.0:8080")
