@@ -327,9 +327,12 @@ impl Handler for InlineHandler {
 
         let is_personal = results.iter().any(|result| result.personal);
 
+        let include_tags = inline.query.contains("#tags");
+        let include_info = inline.query.contains("#info") || include_tags;
+
         let mut futs: FuturesOrdered<_> = results
             .iter()
-            .map(|result| process_result(handler, result, &inline.from))
+            .map(|result| process_result(handler, result, &inline.from, include_info, include_tags))
             .collect();
 
         let mut responses: Vec<(ResultType, InlineQueryResult)> = vec![];
@@ -444,6 +447,8 @@ async fn process_result(
     handler: &MessageHandler,
     result: &PostInfo,
     from: &User,
+    include_info: bool,
+    include_tags: bool,
 ) -> anyhow::Result<Option<Vec<(ResultType, InlineQueryResult)>>> {
     let direct = handler
         .get_fluent_bundle(from.language_code.as_deref(), |bundle| {
@@ -477,7 +482,15 @@ async fn process_result(
 
     match result.file_type.as_ref() {
         "png" | "jpeg" | "jpg" => Ok(Some(
-            build_image_result(handler, result, thumb_url, &keyboard).await?,
+            build_image_result(
+                handler,
+                result,
+                thumb_url,
+                &keyboard,
+                include_info,
+                include_tags,
+            )
+            .await?,
         )),
         "webm" => {
             let source = match &result.source_link {
@@ -537,6 +550,8 @@ async fn build_image_result(
     result: &PostInfo,
     thumb_url: String,
     keyboard: &InlineKeyboardMarkup,
+    include_info: bool,
+    include_tags: bool,
 ) -> anyhow::Result<Vec<(ResultType, InlineQueryResult)>> {
     let mut result = result.to_owned();
     result.thumb = Some(thumb_url);
@@ -584,47 +599,57 @@ async fn build_image_result(
         result.url.to_owned(),
         result.thumb.clone().unwrap(),
     );
+
     let mut data = Vec::new();
-    if let Some(title) = result.title {
-        data.push(format!("Title: {}", escape_markdown(title)));
-    }
-    match (result.artist_username, result.artist_url) {
-        (Some(username), None) => data.push(format!("Artist: {}", escape_markdown(username))),
-        (Some(username), Some(url)) => {
-            data.push(format!("Artist: [{}]({})", escape_markdown(username), url))
+
+    if include_info {
+        if let Some(title) = result.title {
+            data.push(format!("Title: {}", escape_markdown(title)));
         }
-        (None, Some(url)) => data.push(format!("Artist: {}", escape_markdown(url))),
-        (None, None) => (),
-    }
-    match result.tags {
-        Some(tags) if !tags.is_empty() => {
-            data.push(format!(
-                "Tags: {}",
-                tags.iter()
-                    // Tags can't be all numbers, and no transformation can fix that
-                    .filter(|tag| tag.parse::<i64>().is_err())
-                    // Escape tags for Markdown formatting and replace unsupported symbols
-                    .map(|tag| escape_markdown(format!(
-                        "#{}",
-                        tag.replace(' ', "_")
-                            .replace('/', "_")
-                            .replace('(', "")
-                            .replace(')', "")
-                            .replace('-', "_")
-                    )))
-                    .take(50)
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            ));
+
+        match (result.artist_username, result.artist_url) {
+            (Some(username), None) => data.push(format!("Artist: {}", escape_markdown(username))),
+            (Some(username), Some(url)) => {
+                data.push(format!("Artist: [{}]({})", escape_markdown(username), url))
+            }
+            (None, Some(url)) => data.push(format!("Artist: {}", escape_markdown(url))),
+            (None, None) => (),
         }
-        _ => (),
     }
+
+    if include_tags {
+        match result.tags {
+            Some(tags) if !tags.is_empty() => {
+                data.push(format!(
+                    "Tags: {}",
+                    tags.iter()
+                        // Tags can't be all numbers, and no transformation can fix that
+                        .filter(|tag| tag.parse::<i64>().is_err())
+                        // Escape tags for Markdown formatting and replace unsupported symbols
+                        .map(|tag| escape_markdown(format!(
+                            "#{}",
+                            tag.replace(' ', "_")
+                                .replace('/', "_")
+                                .replace('(', "")
+                                .replace(')', "")
+                                .replace('-', "_")
+                        )))
+                        .take(50)
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ));
+            }
+            _ => (),
+        }
+    }
+
     if !data.is_empty() {
         if let InlineQueryType::Photo(ref mut photo) = photo.content {
             photo.parse_mode = Some(ParseMode::MarkdownV2);
             photo.caption = Some(data.join("\n"));
         }
     }
+
     photo.reply_markup = Some(keyboard.clone());
 
     if let Some(dims) = result.image_dimensions {
