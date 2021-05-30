@@ -26,5 +26,6 @@ egg-mode = { git = "https://github.com/egg-mode-rs/egg-mode" }
 scraper = "0.12"
 
 fuzzysearch = { git = "https://github.com/Syfaro/fuzzysearch-rs", features = ["trace", "local_hash"] }
+furaffinity-rs = { git = "https://github.com/Syfaro/furaffinity-rs", branch = "main" }
 
 foxbot-models = { path = "../foxbot-models" }

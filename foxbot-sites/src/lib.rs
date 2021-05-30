@@ -313,6 +313,7 @@ struct E621Post {
     id: i32,
     file: E621PostFile,
     preview: E621PostPreview,
+    tags: HashMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -332,9 +333,17 @@ struct E621Data {
     file_url: String,
     file_ext: String,
     preview_url: String,
+    artists: Vec<String>,
 }
 
 impl E621 {
+    const INVALID_ARTISTS: &'static [&'static str] = &[
+        "unknown_artist",
+        "conditional_dnp",
+        "anonymous_artist",
+        "sound_warning",
+    ];
+
     pub fn new(host: E621Host, login: String, api_key: String) -> Self {
         Self {
             show: regex::Regex::new(&format!(r"(?:https?://)?{}/(?:post/show/|posts/)(?P<id>\d+)(?:/(?P<tags>.+))?", host.host())).unwrap(),
@@ -364,6 +373,7 @@ impl E621 {
                             E621PostPreview {
                                 url: Some(preview_url),
                             },
+                        tags,
                         ..
                     }),
             } => Some(E621Data {
@@ -371,6 +381,13 @@ impl E621 {
                 file_url,
                 file_ext,
                 preview_url,
+                artists: tags
+                    .into_iter()
+                    .filter(|(category, _tags)| category == "artist")
+                    .map(|(_category, tags)| tags)
+                    .flatten()
+                    .filter(|tag| !Self::INVALID_ARTISTS.contains(&&**tag))
+                    .collect(),
             }),
             _ => None,
         }
@@ -403,6 +420,7 @@ impl E621 {
                 file_url,
                 file_ext,
                 preview_url,
+                artists,
             } = match Self::get_urls(resp) {
                 Some(vals) => vals,
                 None => continue,
@@ -414,6 +432,11 @@ impl E621 {
                 thumb: Some(preview_url),
                 source_link: Some(format!("https://{}/posts/{}", self.site.host(), id)),
                 site_name: self.name(),
+                artist_username: if !artists.is_empty() {
+                    Some(artists.join(", "))
+                } else {
+                    None
+                },
                 ..Default::default()
             });
         }
@@ -492,6 +515,7 @@ impl Site for E621 {
             file_url,
             file_ext,
             preview_url,
+            artists,
         } = match Self::get_urls(resp) {
             Some(vals) => vals,
             None => return Ok(None),
@@ -503,6 +527,11 @@ impl Site for E621 {
             thumb: Some(preview_url),
             source_link: Some(format!("https://{}/posts/{}", self.site.host(), id)),
             site_name: self.name(),
+            artist_username: if !artists.is_empty() {
+                Some(artists.join(", "))
+            } else {
+                None
+            },
             ..Default::default()
         }]))
     }
@@ -753,7 +782,6 @@ fn get_best_video(media: &egg_mode::entities::MediaEntity) -> Option<&str> {
 pub struct FurAffinity {
     cookies: std::collections::HashMap<String, String>,
     fapi: fuzzysearch::FuzzySearch,
-    submission: scraper::Selector,
     client: reqwest::Client,
     matcher: regex::Regex,
 }
@@ -768,7 +796,6 @@ impl FurAffinity {
         Self {
             cookies: c,
             fapi: fuzzysearch::FuzzySearch::new(util_api),
-            submission: scraper::Selector::parse("#submissionImg").unwrap(),
             client: reqwest::Client::builder()
                 .user_agent(USER_AGENT)
                 .build()
@@ -824,7 +851,7 @@ impl FurAffinity {
         cookies.join("; ")
     }
 
-    async fn load_from_fa(&self, url: &str) -> anyhow::Result<Option<PostInfo>> {
+    async fn load_from_fa(&self, id: i32, url: &str) -> anyhow::Result<Option<PostInfo>> {
         let resp = self
             .client
             .get(url)
@@ -840,23 +867,15 @@ impl FurAffinity {
                 DisplayableErrorMessage::new("FurAffinity returned unknown data", err)
             })?;
 
-        let body = scraper::Html::parse_document(&resp);
-        let img = match body.select(&self.submission).next() {
-            Some(img) => img,
+        let sub = match furaffinity_rs::parse_submission(id, &resp)? {
+            Some(sub) => sub,
             None => return Ok(None),
         };
 
-        let image_url = format!(
-            "https:{}",
-            img.value()
-                .attr("src")
-                .unwrap_fail()
-                .context("furaffinity was missing src")
-                .map_err(|err| DisplayableErrorMessage::new(
-                    "FurAffinity page did not contain image",
-                    err
-                ))?
-        );
+        let image_url = match sub.content {
+            furaffinity_rs::Content::Image(image) => image,
+            _ => return Ok(None),
+        };
 
         let ext = match get_file_ext(&image_url) {
             Some(ext) => ext,
@@ -868,64 +887,12 @@ impl FurAffinity {
             url: image_url.clone(),
             source_link: Some(url.to_string()),
             site_name: self.name(),
+            title: Some(sub.title),
+            artist_username: Some(sub.artist.clone()),
+            artist_url: Some(format!("https://www.furaffinity.net/user/{}/", sub.artist)),
+            tags: Some(sub.tags),
             ..Default::default()
         }))
-    }
-
-    async fn load_from_fuzzy(&self, id: i32) -> anyhow::Result<Option<PostInfo>> {
-        self.fapi
-            .lookup_id(id)
-            .await
-            .map(|files| {
-                files.first().map(|file| {
-                    Some(PostInfo {
-                        file_type: get_file_ext(&file.filename)?.to_string(),
-                        url: file.url.clone(),
-                        source_link: Some(file.url()),
-                        site_name: self.name(),
-                        ..Default::default()
-                    })
-                })
-            })
-            .context("Unable to lookup FurAffinity ID on FuzzySearch")
-            .map(|post| post.flatten())
-    }
-
-    /// Load a submission from the given ID and URL by racing FurAffinity and
-    /// FuzzySearch against each other. The site returning a submission first
-    /// is used, otherwise the other site will be awaited.
-    async fn load_submission(&self, id: i32, url: &str) -> anyhow::Result<Option<PostInfo>> {
-        use futures::{
-            future::{self, Either},
-            pin_mut,
-        };
-
-        let fuzzy = self.load_from_fuzzy(id);
-        let fa = self.load_from_fa(url);
-
-        pin_mut!(fa);
-        pin_mut!(fuzzy);
-
-        let value = match future::select(fuzzy, fa).await {
-            Either::Left((fuzzy, fa)) => {
-                tracing::trace!("FuzzySearch loaded first, with data: {:?}", fuzzy);
-                match fuzzy {
-                    Ok(Some(_)) => fuzzy,
-                    _ => fa.await,
-                }
-            }
-            Either::Right((fa, fuzzy)) => {
-                tracing::trace!("FurAffinity loaded first, with data: {:?}", fa);
-                match fa {
-                    Ok(Some(_)) => fa,
-                    _ => fuzzy.await,
-                }
-            }
-        };
-
-        tracing::debug!("Loaded submission: {:?}", value);
-
-        value
     }
 }
 
@@ -971,7 +938,7 @@ impl Site for FurAffinity {
                 Ok(id) => id,
                 Err(_err) => return Ok(None),
             };
-            self.load_submission(id, url).await
+            self.load_from_fa(id, url).await
         } else {
             return Ok(None);
         };
@@ -1211,6 +1178,7 @@ impl Site for Weasyl {
             return Ok(None);
         }
 
+        let title = Some(resp.title.clone());
         let tags = Some(resp.tags.clone());
         let artist_username = Some(resp.owner.clone());
         let artist_url = Some(format!("https://www.weasyl.com/~{}", resp.owner_login));
@@ -1230,6 +1198,7 @@ impl Site for Weasyl {
                         thumb: Some(thumb_url),
                         source_link: Some(url.to_string()),
                         site_name: self.name(),
+                        title: title.clone(),
                         tags: tags.clone(),
                         artist_username: artist_username.clone(),
                         artist_url: artist_url.clone(),
@@ -1276,6 +1245,7 @@ pub struct InkbunnyKeyword {
 pub struct InkbunnySubmission {
     submission_id: String,
     username: String,
+    title: String,
     files: Vec<InkbunnyFile>,
     keywords: Vec<InkbunnyKeyword>,
 }
@@ -1450,6 +1420,7 @@ impl Site for Inkbunny {
                     thumb: Some(file.thumbnail_url_medium_noncustom.clone()),
                     source_link: Some(url.to_owned()),
                     site_name: self.name(),
+                    title: Some(submission.title.clone()),
                     tags: Some(tags.clone()),
                     artist_username: Some(submission.username.clone()),
                     artist_url: Some(format!("https://inkbunny.net/{}", submission.username)),

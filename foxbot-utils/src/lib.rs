@@ -253,7 +253,7 @@ pub async fn size_post(post: &PostInfo, data: &bytes::Bytes) -> anyhow::Result<P
 /// Download URL from post, calculate image dimensions, convert to JPEG and
 /// generate thumbnail, and upload to S3 bucket. Returns a new PostInfo with
 /// the updated URLs and dimensions.
-#[tracing::instrument(err, skip(conn, s3, s3_bucket, s3_url, data))]
+#[tracing::instrument(err, skip(conn, s3, s3_bucket, s3_url, data, post), fields(post_url = %post.url))]
 pub async fn cache_post(
     conn: &sqlx::Pool<sqlx::Postgres>,
     s3: &rusoto_s3::S3Client,

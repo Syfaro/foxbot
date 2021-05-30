@@ -585,6 +585,9 @@ async fn build_image_result(
         result.thumb.clone().unwrap(),
     );
     let mut data = Vec::new();
+    if let Some(title) = result.title {
+        data.push(format!("Title: {}", escape_markdown(title)));
+    }
     match (result.artist_username, result.artist_url) {
         (Some(username), None) => data.push(format!("Artist: {}", escape_markdown(username))),
         (Some(username), Some(url)) => {
@@ -593,15 +596,23 @@ async fn build_image_result(
         (None, Some(url)) => data.push(format!("Artist: {}", escape_markdown(url))),
         (None, None) => (),
     }
-    if let Some(title) = result.title {
-        data.push(format!("Title: {}", title));
-    }
     match result.tags {
         Some(tags) if !tags.is_empty() => {
             data.push(format!(
                 "Tags: {}",
                 tags.iter()
-                    .map(|tag| escape_markdown(format!("#{}", tag.replace(' ', "_"))))
+                    // Tags can't be all numbers, and no transformation can fix that
+                    .filter(|tag| tag.parse::<i64>().is_err())
+                    // Escape tags for Markdown formatting and replace unsupported symbols
+                    .map(|tag| escape_markdown(format!(
+                        "#{}",
+                        tag.replace(' ', "_")
+                            .replace('/', "_")
+                            .replace('(', "")
+                            .replace(')', "")
+                            .replace('-', "_")
+                    )))
+                    .take(50)
                     .collect::<Vec<_>>()
                     .join(" ")
             ));
