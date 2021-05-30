@@ -1,16 +1,17 @@
 [package]
 name = "foxbot"
-version = "0.1.1"
+version = "0.3.1"
 authors = ["Syfaro <syfaro@huefox.com>"]
 edition = "2018"
+publish = false
 
 [features]
 env = ["dotenv"]
 
 [dependencies]
 reqwest = { version = "0.11", features = ["json", "stream"] }
-linkify = "0.5"
-rand = "0.7"
+linkify = "0.7"
+rand = "0.8"
 async-trait = "0.1"
 fluent = "0.12"
 fluent-langneg = "0.13"
@@ -18,7 +19,7 @@ unic-langid = "0.9"
 hyper = { version = "0.14", features = ["server"] }
 url = "2"
 hamming = "0.1"
-handlebars = { version = "3", features = ["dir_source"] }
+handlebars = { version = "4", features = ["dir_source"] }
 dotenv = { version = "0.15", optional = true }
 base64 = "0.13"
 
@@ -42,6 +43,7 @@ tgbotapi = { git = "https://github.com/Syfaro/tgbotapi-rs" }
 fuzzysearch = { git = "https://github.com/Syfaro/fuzzysearch-rs", features = ["trace", "local_hash"] }
 
 tracing = "0.1"
+tracing-log = "0.1.2"
 tracing-subscriber = "0.2"
 opentelemetry = { version = "0.13", features = ["rt-tokio"] }
 opentelemetry-jaeger = { version = "0.12", features = ["tokio"] }
@@ -54,6 +56,11 @@ sqlx = { version = "0.5", default-features = false, features = ["runtime-tokio-r
 rusoto_core = "0.46"
 rusoto_credential = "0.46"
 rusoto_s3 = "0.46"
+
+actix-web = "4.0.0-beta.5"
+actix-http = "3.0.0-beta.5"
+tracing-actix-web = "0.4.0-beta.4"
+actix-web-httpauth = "0.6.0-beta.1"
 
 foxbot-sites = { path = "../foxbot-sites" }
 foxbot-models = { path = "../foxbot-models" }

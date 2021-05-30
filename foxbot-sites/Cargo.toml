@@ -1,8 +1,9 @@
 [package]
 name = "foxbot-sites"
-version = "0.1.0"
+version = "0.3.1"
 authors = ["Syfaro <syfaro@huefox.com>"]
 edition = "2018"
+publish = false
 
 [dependencies]
 anyhow = "1"
