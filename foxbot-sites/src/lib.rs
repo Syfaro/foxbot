@@ -1,7 +1,6 @@
 use anyhow::Context;
 use async_trait::async_trait;
 use fuzzysearch::MatchType;
-use reqwest::header;
 use serde::Deserialize;
 use std::collections::HashMap;
 use thiserror::Error;
@@ -780,26 +779,19 @@ fn get_best_video(media: &egg_mode::entities::MediaEntity) -> Option<&str> {
 ///
 /// It converts direct image URLs back into submission URLs using FuzzySearch.
 pub struct FurAffinity {
-    cookies: std::collections::HashMap<String, String>,
     fapi: fuzzysearch::FuzzySearch,
-    client: reqwest::Client,
     matcher: regex::Regex,
+    fa: furaffinity_rs::FurAffinity,
 }
 
 impl FurAffinity {
     pub fn new(cookies: (String, String), util_api: String) -> Self {
-        let mut c = std::collections::HashMap::new();
-
-        c.insert("a".into(), cookies.0);
-        c.insert("b".into(), cookies.1);
+        let fa =
+            furaffinity_rs::FurAffinity::new(cookies.0, cookies.1, USER_AGENT.to_string(), None);
 
         Self {
-            cookies: c,
             fapi: fuzzysearch::FuzzySearch::new(util_api),
-            client: reqwest::Client::builder()
-                .user_agent(USER_AGENT)
-                .build()
-                .unwrap(),
+            fa,
             matcher: regex::Regex::new(
                 r#"(?:https?://)?(?:(?:www\.)?furaffinity\.net/(?:view|full)/(?P<id>\d+)/?|(?:d\.furaffinity\.net|d\.facdn\.net)/art/\w+/(?P<file_id>\d+)/(?P<file_name>\S+))"#,
             )
@@ -841,33 +833,11 @@ impl FurAffinity {
         }))
     }
 
-    /// Convert provided cookies into a string suitable for sending with a
-    /// HTTP request.
-    fn stringify_cookies(&self) -> String {
-        let mut cookies = vec![];
-        for (name, value) in &self.cookies {
-            cookies.push(format!("{}={}", name, value));
-        }
-        cookies.join("; ")
-    }
-
     async fn load_from_fa(&self, id: i32, url: &str) -> anyhow::Result<Option<PostInfo>> {
-        let resp = self
-            .client
-            .get(url)
-            .header(header::COOKIE, self.stringify_cookies())
-            .send()
-            .await
-            .context("unable to request furaffinity submission")
-            .map_err(|err| DisplayableErrorMessage::new("Unable to connect to FurAffinity", err))?
-            .text()
-            .await
-            .context("unable to get text from furaffinity submission")
-            .map_err(|err| {
-                DisplayableErrorMessage::new("FurAffinity returned unknown data", err)
-            })?;
-
-        let sub = match furaffinity_rs::parse_submission(id, &resp)? {
+        let sub = self.fa.get_submission(id).await.map_err(|err| {
+            DisplayableErrorMessage::new("Unable to get FurAffinity submission", err)
+        })?;
+        let sub = match sub {
             Some(sub) => sub,
             None => return Ok(None),
         };
