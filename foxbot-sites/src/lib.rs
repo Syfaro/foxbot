@@ -1090,7 +1090,7 @@ impl Weasyl {
     pub fn new(api_key: String) -> Self {
         Self {
             api_key,
-            matcher: regex::Regex::new(r#"https?://www\.weasyl\.com/(?:(?:~|%7)(?:\w+)/submissions|submission)/(?P<id>\d+)(?:/\S+)"#).unwrap(),
+            matcher: regex::Regex::new(r#"https?://www\.weasyl\.com/(?:(?:(?:~|%7)(?:\w+)/submissions|submission)|view)/(?P<id>\d+)(?:/\S+)?"#).unwrap(),
             client: reqwest::Client::builder().user_agent(USER_AGENT).build().unwrap(),
         }
     }

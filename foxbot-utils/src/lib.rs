@@ -777,10 +777,7 @@ pub fn link_was_seen(
 
     links.iter().any(
         |link| match sites.iter().find_map(|site| site.url_id(link)) {
-            Some(link_id) => {
-                tracing::debug!("{} - {}", link, link_id);
-                link_id == source_id
-            }
+            Some(link_id) => link_id == source_id,
             _ => false,
         },
     )
