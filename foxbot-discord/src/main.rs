@@ -291,30 +291,13 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
 
             tracing::debug!("Added reaction: {:?}", reaction);
 
-            let attachment = match get_cached_attachment(
-                &ctx,
-                reaction.channel_id,
-                reaction.message_id,
-            )
-            .await?
-            {
-                Some(attachment) => attachment,
-                None => {
-                    tracing::debug!("Message had no attachments");
-                    return Ok(());
-                }
-            };
+            let attachments =
+                get_cached_attachments(&ctx, reaction.channel_id, reaction.message_id).await?;
 
-            let hash = hash_attachment(&attachment.proxy_url).await?;
-            let files = lookup_hash(&ctx.fuzzysearch, hash, Some(3)).await?;
-
-            if files.is_empty() {
-                tracing::debug!("No matches were found");
+            if attachments.is_empty() {
+                tracing::debug!("Message had no attachments");
                 return Ok(());
             }
-
-            let embed = sources_embed(&attachment, &files)
-                .map_err(|err| UserErrorMessage::new(err, "Unable to properly respond"))?;
 
             let private_channel = match ctx.http.create_private_channel(reaction.user_id).await {
                 Ok(private_channel) => private_channel,
@@ -324,13 +307,26 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
                 }
             };
 
-            if let Err(err) = ctx
-                .http
-                .create_message(private_channel.id)
-                .embed(embed)?
-                .await
-            {
-                tracing::warn!("Unable to send private message: {:?}", err);
+            for attachment in attachments {
+                let hash = hash_attachment(&attachment.proxy_url).await?;
+                let files = lookup_hash(&ctx.fuzzysearch, hash, Some(3)).await?;
+
+                if files.is_empty() {
+                    tracing::debug!("No matches were found");
+                    return Ok(());
+                }
+
+                let embed = sources_embed(&attachment, &files)
+                    .map_err(|err| UserErrorMessage::new(err, "Unable to properly respond"))?;
+
+                if let Err(err) = ctx
+                    .http
+                    .create_message(private_channel.id)
+                    .embed(embed)?
+                    .await
+                {
+                    tracing::warn!("Unable to send private message: {:?}", err);
+                }
             }
         }
         _ => (),
@@ -509,18 +505,13 @@ fn link_embed(post: &foxbot_sites::PostInfo) -> anyhow::Result<Embed> {
 
 /// Get the attachment from a given channel and message ID, loading from the
 /// cache if possible.
-async fn get_cached_attachment(
+async fn get_cached_attachments(
     ctx: &Context,
     channel_id: ChannelId,
     message_id: MessageId,
-) -> Result<Option<Attachment>, UserErrorMessage<'static>> {
+) -> Result<Vec<Attachment>, UserErrorMessage<'static>> {
     if let Some(message) = ctx.cache.message(channel_id, message_id) {
-        let attachment = message
-            .attachments
-            .first()
-            .map(|attachment| attachment.to_owned());
-
-        return Ok(attachment);
+        return Ok(message.attachments.clone());
     }
 
     let message = match ctx
@@ -532,16 +523,11 @@ async fn get_cached_attachment(
         Some(message) => message,
         None => {
             tracing::warn!("Could not get message");
-            return Ok(None);
+            return Ok(vec![]);
         }
     };
 
-    let attachment = message
-        .attachments
-        .first()
-        .map(|attachment| attachment.to_owned());
-
-    Ok(attachment)
+    Ok(message.attachments)
 }
 
 async fn allow_nsfw(ctx: &Context, channel_id: ChannelId) -> Option<bool> {
