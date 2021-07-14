@@ -61,6 +61,7 @@ impl Handler for CommandHandler {
             "/error" => Err(anyhow::anyhow!("a test error message")),
             "/groupsource" => self.enable_group_source(handler, message).await,
             "/grouppreviews" => self.group_nopreviews(handler, message).await,
+            "/groupalbums" => self.group_noalbums(handler, message).await,
             _ => {
                 tracing::info!(command = ?command.name, "unknown command");
                 return Ok(Ignored);
@@ -696,6 +697,38 @@ impl CommandHandler {
             "automatic-preview-enable"
         } else {
             "automatic-preview-disable"
+        };
+
+        handler.send_generic_reply(message, name).await?;
+
+        Ok(())
+    }
+
+    async fn group_noalbums(
+        &self,
+        handler: &MessageHandler,
+        message: &Message,
+    ) -> anyhow::Result<()> {
+        if !self.is_valid_admin_group(handler, message, false).await? {
+            return Ok(());
+        }
+
+        let result = GroupConfig::get(&handler.conn, &message.chat, GroupConfigKey::GroupNoAlbums)
+            .await?
+            .unwrap_or(false);
+
+        GroupConfig::set(
+            &handler.conn,
+            GroupConfigKey::GroupNoAlbums,
+            &message.chat,
+            !result,
+        )
+        .await?;
+
+        let name = if result {
+            "automatic-album-enable"
+        } else {
+            "automatic-album-disable"
         };
 
         handler.send_generic_reply(message, name).await?;

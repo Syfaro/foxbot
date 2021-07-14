@@ -10,21 +10,24 @@ discord = ["twilight-model"]
 
 [dependencies]
 anyhow = "1"
+thiserror = "1"
 bigdecimal = "0.2"
-chrono = "0.4"
+
 prometheus = "0.12"
+chrono = "0.4"
 
 lazy_static = "1"
 
 serde = "1"
 serde_json = "1"
 
-tgbotapi = {git = "https://github.com/Syfaro/tgbotapi-rs"}
-
 redis = {version = "0.20", features = ["connection-manager", "tokio-comp"]}
 twilight-model = {version = "0.4", optional = true}
 
+tgbotapi = { git = "https://github.com/Syfaro/tgbotapi-rs" }
+fuzzysearch = { git = "https://github.com/Syfaro/fuzzysearch-rs", features = ["trace", "local_hash"] }
+
 [dependencies.sqlx]
 default-features = false
-features = ["runtime-tokio-rustls", "macros", "postgres", "offline", "json", "migrate", "time", "bigdecimal"]
+features = ["runtime-tokio-rustls", "macros", "postgres", "offline", "json", "migrate", "time", "chrono", "bigdecimal"]
 version = "0.5"

@@ -1,8 +1,9 @@
 [package]
 name = "foxbot-utils"
-version = "0.1.0"
+version = "0.3.1"
 authors = ["Syfaro <syfaro@huefox.com>"]
 edition = "2018"
+publish = false
 
 [dependencies]
 anyhow = "1"
@@ -19,7 +20,7 @@ futures = "0.3"
 tokio = { version = "1", features = ["sync"] }
 tokio-stream = "0.1"
 
-rand = "0.7"
+rand = "0.8"
 fluent = "0.12"
 fluent-langneg = "0.13"
 unic-langid = "0.9"
@@ -44,4 +45,4 @@ foxbot-sites = { path = "../foxbot-sites" }
 foxbot-models = { path = "../foxbot-models" }
 
 [dev-dependencies]
-linkify = "0.5"
+linkify = "0.7"

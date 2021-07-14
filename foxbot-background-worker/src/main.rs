@@ -22,6 +22,13 @@ fn main() {
     use opentelemetry::KeyValue;
     use tracing_subscriber::layer::SubscriberExt;
 
+    load_env();
+    let config = match envy::from_env::<Config>() {
+        Ok(config) => config,
+        Err(err) => panic!("{:#?}", err),
+    };
+    let config_clone = config.clone();
+
     let runtime = Arc::new(
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -76,17 +83,7 @@ fn main() {
 
     tracing::info!("starting channel worker");
 
-    load_env();
-    let config = match envy::from_env::<Config>() {
-        Ok(config) => config,
-        Err(err) => panic!("{:#?}", err),
-    };
-
-    let workers: usize = std::env::var("CHANNEL_WORKERS")
-        .as_deref()
-        .unwrap_or("2")
-        .parse()
-        .unwrap_or(2);
+    let workers: usize = config.background_workers.unwrap_or(4);
 
     tracing::debug!(workers, "got worker count configuration");
 
@@ -122,6 +119,16 @@ fn main() {
         .block_on(redis::aio::ConnectionManager::new(redis))
         .expect("unable to open redis connection");
 
+    let region = rusoto_core::Region::Custom {
+        name: config.s3_region,
+        endpoint: config.s3_endpoint,
+    };
+
+    let client = rusoto_core::request::HttpClient::new().unwrap();
+    let provider =
+        rusoto_credential::StaticProvider::new_minimal(config.s3_token, config.s3_secret);
+    let s3 = rusoto_s3::S3Client::new_with(client, provider, region);
+
     let producer = faktory::Producer::connect(None).unwrap();
 
     let bot_user = runtime
@@ -138,6 +145,8 @@ fn main() {
         redis,
         langs: load_langs(),
         best_langs: Default::default(),
+        s3,
+        config: config_clone,
     });
 
     let mut worker_environment = WorkerEnvironment::new(faktory, runtime, handler);
@@ -146,6 +155,22 @@ fn main() {
     worker_environment.register("channel_edit", channel::process_channel_edit);
     worker_environment.register("group_photo", group::process_group_photo);
     worker_environment.register("group_source", group::process_group_source);
+    worker_environment.register(
+        "group_mediagroup_message",
+        group::process_group_mediagroup_message,
+    );
+    worker_environment.register(
+        "group_mediagroup_check",
+        group::process_group_mediagroup_check,
+    );
+    worker_environment.register(
+        "group_mediagroup_hash",
+        group::process_group_mediagroup_hash,
+    );
+    worker_environment.register(
+        "group_mediagroup_prune",
+        group::process_group_mediagroup_prune,
+    );
     worker_environment.register("hash_new", subscribe::process_hash_new);
     worker_environment.register("hash_notify", subscribe::process_hash_notify);
 
@@ -243,10 +268,18 @@ struct Config {
     // FuzzySearch config
     fautil_apitoken: String,
 
+    // S3 compatible storage config
+    s3_bucket: String,
+    s3_endpoint: String,
+    s3_region: String,
+    s3_token: String,
+    s3_secret: String,
+
     // Worker configuration
-    channel_workers: Option<usize>,
+    background_workers: Option<usize>,
     database_url: String,
     redis_dsn: String,
+    internet_url: String,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -269,6 +302,7 @@ pub struct Handler {
 
     langs: Langs,
     best_langs: tokio::sync::RwLock<BestLangs>,
+    config: Config,
 
     producer: Arc<Mutex<faktory::Producer<std::net::TcpStream>>>,
     telegram: Arc<tgbotapi::Telegram>,
@@ -276,6 +310,7 @@ pub struct Handler {
     fuzzysearch: fuzzysearch::FuzzySearch,
     conn: sqlx::Pool<sqlx::Postgres>,
     redis: redis::aio::ConnectionManager,
+    s3: rusoto_s3::S3Client,
 }
 
 impl Handler {

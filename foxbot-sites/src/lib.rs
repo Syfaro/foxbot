@@ -1,12 +1,11 @@
 use anyhow::Context;
 use async_trait::async_trait;
 use fuzzysearch::MatchType;
-use reqwest::header;
 use serde::Deserialize;
 use std::collections::HashMap;
 use thiserror::Error;
 
-use foxbot_models::{Twitter as TwitterModel, User};
+use foxbot_models::{DisplayableErrorMessage, Twitter as TwitterModel, User};
 
 /// User agent used with all HTTP requests to sites.
 const USER_AGENT: &str = concat!(
@@ -41,6 +40,11 @@ pub struct PostInfo {
     pub image_dimensions: Option<(u32, u32)>,
     /// Size of image in bytes, if available
     pub image_size: Option<usize>,
+
+    pub artist_username: Option<String>,
+    pub artist_url: Option<String>,
+    pub submission_title: Option<String>,
+    pub tags: Option<Vec<String>>,
 }
 
 /// A basic attempt to get the extension from a given URL. It assumes the URL
@@ -304,6 +308,7 @@ struct E621Post {
     id: i32,
     file: E621PostFile,
     preview: E621PostPreview,
+    tags: HashMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -323,9 +328,17 @@ struct E621Data {
     file_url: String,
     file_ext: String,
     preview_url: String,
+    artists: Vec<String>,
 }
 
 impl E621 {
+    const INVALID_ARTISTS: &'static [&'static str] = &[
+        "unknown_artist",
+        "conditional_dnp",
+        "anonymous_artist",
+        "sound_warning",
+    ];
+
     pub fn new(host: E621Host, login: String, api_key: String) -> Self {
         Self {
             show: regex::Regex::new(&format!(r"(?:https?://)?{}/(?:post/show/|posts/)(?P<id>\d+)(?:/(?P<tags>.+))?", host.host())).unwrap(),
@@ -355,6 +368,7 @@ impl E621 {
                             E621PostPreview {
                                 url: Some(preview_url),
                             },
+                        tags,
                         ..
                     }),
             } => Some(E621Data {
@@ -362,6 +376,13 @@ impl E621 {
                 file_url,
                 file_ext,
                 preview_url,
+                artists: tags
+                    .into_iter()
+                    .filter(|(category, _tags)| category == "artist")
+                    .map(|(_category, tags)| tags)
+                    .flatten()
+                    .filter(|tag| !Self::INVALID_ARTISTS.contains(&&**tag))
+                    .collect(),
             }),
             _ => None,
         }
@@ -394,6 +415,7 @@ impl E621 {
                 file_url,
                 file_ext,
                 preview_url,
+                artists,
             } = match Self::get_urls(resp) {
                 Some(vals) => vals,
                 None => continue,
@@ -405,6 +427,11 @@ impl E621 {
                 thumb: Some(preview_url),
                 source_link: Some(format!("https://{}/posts/{}", self.site.host(), id)),
                 site_name: self.name(),
+                artist_username: if !artists.is_empty() {
+                    Some(artists.join(", "))
+                } else {
+                    None
+                },
                 ..Default::default()
             });
         }
@@ -427,10 +454,10 @@ impl E621 {
             .basic_auth(&self.auth.0, Some(&self.auth.1))
             .send()
             .await
-            .context("unable to request e621 api")?
+            .map_err(|err| DisplayableErrorMessage::new("Could not connect to e621", err))?
             .json()
             .await
-            .context("unable to parse e621 json")?;
+            .map_err(|err| DisplayableErrorMessage::new("e621 returned unknown data", err))?;
 
         Ok(resp)
     }
@@ -483,6 +510,7 @@ impl Site for E621 {
             file_url,
             file_ext,
             preview_url,
+            artists,
         } = match Self::get_urls(resp) {
             Some(vals) => vals,
             None => return Ok(None),
@@ -494,6 +522,11 @@ impl Site for E621 {
             thumb: Some(preview_url),
             source_link: Some(format!("https://{}/posts/{}", self.site.host(), id)),
             site_name: self.name(),
+            artist_username: if !artists.is_empty() {
+                Some(artists.join(", "))
+            } else {
+                None
+            },
             ..Default::default()
         }]))
     }
@@ -507,6 +540,12 @@ pub struct Twitter {
     consumer: egg_mode::KeyPair,
     token: egg_mode::Token,
     conn: sqlx::Pool<sqlx::Postgres>,
+}
+
+struct TwitterData {
+    user: Box<egg_mode::user::TwitterUser>,
+    media: Vec<egg_mode::entities::MediaEntity>,
+    hashtags: Option<Vec<String>>,
 }
 
 impl Twitter {
@@ -538,24 +577,78 @@ impl Twitter {
         &self,
         token: &egg_mode::Token,
         captures: &regex::Captures<'_>,
-    ) -> Option<(
-        Box<egg_mode::user::TwitterUser>,
-        Vec<egg_mode::entities::MediaEntity>,
-    )> {
+    ) -> anyhow::Result<Option<TwitterData>> {
         if let Some(Ok(id)) = captures.name("id").map(|id| id.as_str().parse::<u64>()) {
-            let tweet = egg_mode::tweet::show(id, token).await.ok()?.response;
+            let tweet = egg_mode::tweet::show(id, token)
+                .await
+                .map_err(|err| {
+                    match &err {
+                        egg_mode::error::Error::TwitterError(_headers, twitter_errors) => {
+                            let codes: std::collections::HashSet<i32> = twitter_errors
+                                .errors
+                                .iter()
+                                .map(|error| error.code)
+                                .collect();
 
-            let user = tweet.user?;
-            let media = tweet.extended_entities?.media;
+                            tracing::warn!("got twitter error codes: {:?}", codes);
 
-            Some((user, media))
+                            if codes.contains(&34)
+                                || codes.contains(&144)
+                                || codes.contains(&421)
+                                || codes.contains(&422)
+                            {
+                                return DisplayableErrorMessage::new("Tweet not found", err);
+                            } else if codes.contains(&50) || codes.contains(&63) {
+                                return DisplayableErrorMessage::new("Twitter user not found", err);
+                            } else if codes.contains(&179) {
+                                return DisplayableErrorMessage::new(
+                                    "Tweet is from locked account",
+                                    err,
+                                );
+                            }
+                        }
+                        err => tracing::warn!("got unknown twitter error: {:?}", err),
+                    }
+
+                    DisplayableErrorMessage::new("Twitter returned unknown data", err)
+                })?
+                .response;
+
+            let user = match tweet.user {
+                Some(user) => user,
+                None => return Ok(None),
+            };
+            let media = match tweet.extended_entities {
+                Some(entities) => entities.media,
+                None => return Ok(None),
+            };
+
+            let hashtags = tweet
+                .entities
+                .hashtags
+                .iter()
+                .map(|hashtag| hashtag.text.clone())
+                .collect();
+
+            Ok(Some(TwitterData {
+                user,
+                media,
+                hashtags: Some(hashtags),
+            }))
         } else {
             let user = captures["screen_name"].to_owned();
             let timeline =
                 egg_mode::tweet::user_timeline(user, false, false, token).with_page_size(200);
-            let (_timeline, feed) = timeline.start().await.ok()?;
+            let (_timeline, feed) = timeline.start().await?;
 
-            let user = feed.iter().next()?.user.as_ref()?.to_owned();
+            let first_tweet = match feed.iter().next() {
+                Some(tweet) => tweet,
+                None => return Ok(None),
+            };
+            let user = match &first_tweet.user {
+                Some(user) => Box::new(user.as_ref().to_owned()),
+                None => return Ok(None),
+            };
 
             let media = feed
                 .into_iter()
@@ -564,7 +657,11 @@ impl Twitter {
                 .flatten()
                 .collect();
 
-            Some((user, media))
+            Ok(Some(TwitterData {
+                user,
+                media,
+                hashtags: None,
+            }))
         }
     }
 }
@@ -611,7 +708,11 @@ impl Site for Twitter {
             _ => self.token.clone(),
         };
 
-        let (user, media) = match self.get_media(&token, &captures).await {
+        let TwitterData {
+            user,
+            media,
+            hashtags,
+        } = match self.get_media(&token, &captures).await? {
             None => return Ok(None),
             Some(data) => data,
         };
@@ -628,6 +729,9 @@ impl Site for Twitter {
                         personal: user.protected,
                         title: Some(user.screen_name.clone()),
                         site_name: self.name(),
+                        tags: hashtags.clone(),
+                        artist_username: Some(user.screen_name.clone()),
+                        artist_url: Some(format!("https://twitter.com/{}", user.screen_name)),
                         ..Default::default()
                     }),
                     None => Some(PostInfo {
@@ -637,6 +741,9 @@ impl Site for Twitter {
                         source_link: Some(item.expanded_url),
                         personal: user.protected,
                         site_name: self.name(),
+                        tags: hashtags.clone(),
+                        artist_username: Some(user.screen_name.clone()),
+                        artist_url: Some(format!("https://twitter.com/{}", user.screen_name)),
                         ..Default::default()
                     }),
                 })
@@ -664,28 +771,19 @@ fn get_best_video(media: &egg_mode::entities::MediaEntity) -> Option<&str> {
 ///
 /// It converts direct image URLs back into submission URLs using FuzzySearch.
 pub struct FurAffinity {
-    cookies: std::collections::HashMap<String, String>,
     fapi: fuzzysearch::FuzzySearch,
-    submission: scraper::Selector,
-    client: reqwest::Client,
     matcher: regex::Regex,
+    fa: furaffinity_rs::FurAffinity,
 }
 
 impl FurAffinity {
     pub fn new(cookies: (String, String), util_api: String) -> Self {
-        let mut c = std::collections::HashMap::new();
-
-        c.insert("a".into(), cookies.0);
-        c.insert("b".into(), cookies.1);
+        let fa =
+            furaffinity_rs::FurAffinity::new(cookies.0, cookies.1, USER_AGENT.to_string(), None);
 
         Self {
-            cookies: c,
             fapi: fuzzysearch::FuzzySearch::new(util_api),
-            submission: scraper::Selector::parse("#submissionImg").unwrap(),
-            client: reqwest::Client::builder()
-                .user_agent(USER_AGENT)
-                .build()
-                .unwrap(),
+            fa,
             matcher: regex::Regex::new(
                 r#"(?:https?://)?(?:(?:www\.)?furaffinity\.net/(?:view|full)/(?P<id>\d+)/?|(?:d\.furaffinity\.net|d\.facdn\.net)/art/\w+/(?P<file_id>\d+)/(?P<file_name>\S+))"#,
             )
@@ -727,41 +825,19 @@ impl FurAffinity {
         }))
     }
 
-    /// Convert provided cookies into a string suitable for sending with a
-    /// HTTP request.
-    fn stringify_cookies(&self) -> String {
-        let mut cookies = vec![];
-        for (name, value) in &self.cookies {
-            cookies.push(format!("{}={}", name, value));
-        }
-        cookies.join("; ")
-    }
-
-    async fn load_from_fa(&self, url: &str) -> anyhow::Result<Option<PostInfo>> {
-        let resp = self
-            .client
-            .get(url)
-            .header(header::COOKIE, self.stringify_cookies())
-            .send()
-            .await
-            .context("unable to request furaffinity submission")?
-            .text()
-            .await
-            .context("unable to get text from furaffinity submission")?;
-
-        let body = scraper::Html::parse_document(&resp);
-        let img = match body.select(&self.submission).next() {
-            Some(img) => img,
+    async fn load_from_fa(&self, id: i32, url: &str) -> anyhow::Result<Option<PostInfo>> {
+        let sub = self.fa.get_submission(id).await.map_err(|err| {
+            DisplayableErrorMessage::new("Unable to get FurAffinity submission", err)
+        })?;
+        let sub = match sub {
+            Some(sub) => sub,
             None => return Ok(None),
         };
 
-        let image_url = format!(
-            "https:{}",
-            img.value()
-                .attr("src")
-                .unwrap_fail()
-                .context("furaffinity was missing src")?
-        );
+        let image_url = match sub.content {
+            furaffinity_rs::Content::Image(image) => image,
+            _ => return Ok(None),
+        };
 
         let ext = match get_file_ext(&image_url) {
             Some(ext) => ext,
@@ -773,64 +849,12 @@ impl FurAffinity {
             url: image_url.clone(),
             source_link: Some(url.to_string()),
             site_name: self.name(),
+            title: Some(sub.title),
+            artist_username: Some(sub.artist.clone()),
+            artist_url: Some(format!("https://www.furaffinity.net/user/{}/", sub.artist)),
+            tags: Some(sub.tags),
             ..Default::default()
         }))
-    }
-
-    async fn load_from_fuzzy(&self, id: i32) -> anyhow::Result<Option<PostInfo>> {
-        self.fapi
-            .lookup_id(id)
-            .await
-            .map(|files| {
-                files.first().map(|file| {
-                    Some(PostInfo {
-                        file_type: get_file_ext(&file.filename)?.to_string(),
-                        url: file.url.clone(),
-                        source_link: Some(file.url()),
-                        site_name: self.name(),
-                        ..Default::default()
-                    })
-                })
-            })
-            .context("Unable to lookup FurAffinity ID on FuzzySearch")
-            .map(|post| post.flatten())
-    }
-
-    /// Load a submission from the given ID and URL by racing FurAffinity and
-    /// FuzzySearch against each other. The site returning a submission first
-    /// is used, otherwise the other site will be awaited.
-    async fn load_submission(&self, id: i32, url: &str) -> anyhow::Result<Option<PostInfo>> {
-        use futures::{
-            future::{self, Either},
-            pin_mut,
-        };
-
-        let fuzzy = self.load_from_fuzzy(id);
-        let fa = self.load_from_fa(url);
-
-        pin_mut!(fa);
-        pin_mut!(fuzzy);
-
-        let value = match future::select(fuzzy, fa).await {
-            Either::Left((fuzzy, fa)) => {
-                tracing::trace!("FuzzySearch loaded first, with data: {:?}", fuzzy);
-                match fuzzy {
-                    Ok(Some(_)) => fuzzy,
-                    _ => fa.await,
-                }
-            }
-            Either::Right((fa, fuzzy)) => {
-                tracing::trace!("FurAffinity loaded first, with data: {:?}", fa);
-                match fa {
-                    Ok(Some(_)) => fa,
-                    _ => fuzzy.await,
-                }
-            }
-        };
-
-        tracing::debug!("Loaded submission: {:?}", value);
-
-        value
     }
 }
 
@@ -876,7 +900,7 @@ impl Site for FurAffinity {
                 Ok(id) => id,
                 Err(_err) => return Ok(None),
             };
-            self.load_submission(id, url).await
+            self.load_from_fa(id, url).await
         } else {
             return Ok(None);
         };
@@ -989,10 +1013,16 @@ impl Site for Mastodon {
             .get(&format!("{}/api/v1/statuses/{}", base, status_id))
             .send()
             .await
-            .context("unable to request mastodon api")?
+            .context("unable to request mastodon api")
+            .map_err(|err| {
+                DisplayableErrorMessage::new("Unable to connect to Mastodon instance", err)
+            })?
             .json()
             .await
-            .context("unable to decode mastodon api")?;
+            .context("unable to decode mastodon api")
+            .map_err(|err| {
+                DisplayableErrorMessage::new("Mastodon instance returned unknown data", err)
+            })?;
 
         if json.media_attachments.is_empty() {
             return Ok(None);
@@ -1016,6 +1046,31 @@ impl Site for Mastodon {
     }
 }
 
+#[derive(serde::Deserialize, Debug)]
+struct WeasylSubmission {
+    title: String,
+    owner: String,
+    owner_login: String,
+    tags: Vec<String>,
+    media: WeasylMedia,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct WeasylMedia {
+    submission: Vec<WeasylMediaSubmission>,
+    thumbnail: Vec<WeasylMediaThumbnail>,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct WeasylMediaSubmission {
+    url: String,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct WeasylMediaThumbnail {
+    url: String,
+}
+
 /// A loader for Weasyl.
 pub struct Weasyl {
     api_key: String,
@@ -1027,7 +1082,7 @@ impl Weasyl {
     pub fn new(api_key: String) -> Self {
         Self {
             api_key,
-            matcher: regex::Regex::new(r#"https?://www\.weasyl\.com/(?:(?:~|%7)(?:\w+)/submissions|submission)/(?P<id>\d+)(?:/\S+)"#).unwrap(),
+            matcher: regex::Regex::new(r#"https?://www\.weasyl\.com/(?:(?:(?:~|%7)(?:\w+)/submissions|submission)|view)/(?P<id>\d+)(?:/\S+)?"#).unwrap(),
             client: reqwest::Client::builder().user_agent(USER_AGENT).build().unwrap(),
         }
     }
@@ -1065,7 +1120,7 @@ impl Site for Weasyl {
         let captures = self.matcher.captures(url).unwrap();
         let sub_id = captures["id"].to_owned();
 
-        let resp: serde_json::Value = self
+        let resp: WeasylSubmission = self
             .client
             .get(&format!(
                 "https://www.weasyl.com/api/submissions/{}/view",
@@ -1074,53 +1129,41 @@ impl Site for Weasyl {
             .header("X-Weasyl-API-Key", self.api_key.as_bytes())
             .send()
             .await
-            .context("unable to request weasyl api")?
+            .context("unable to request weasyl api")
+            .map_err(|err| DisplayableErrorMessage::new("Unable to connect to Weasyl", err))?
             .json()
             .await
-            .context("unable to parse weasyl json api")?;
+            .context("unable to parse weasyl json api")
+            .map_err(|err| DisplayableErrorMessage::new("Weasyl returned unknown data", err))?;
 
-        let submissions = resp
-            .as_object()
-            .unwrap_fail()?
-            .get("media")
-            .unwrap_fail()?
-            .as_object()
-            .unwrap_fail()?
-            .get("submission")
-            .unwrap_fail()?
-            .as_array()
-            .unwrap_fail()?;
-
-        if submissions.is_empty() {
+        if resp.media.submission.is_empty() {
             return Ok(None);
         }
 
-        let thumbs = resp
-            .as_object()
-            .unwrap_fail()?
-            .get("media")
-            .unwrap_fail()?
-            .as_object()
-            .unwrap_fail()?
-            .get("thumbnail")
-            .unwrap_fail()?
-            .as_array()
-            .unwrap_fail()?;
+        let title = Some(resp.title.clone());
+        let tags = Some(resp.tags.clone());
+        let artist_username = Some(resp.owner.clone());
+        let artist_url = Some(format!("https://www.weasyl.com/~{}", resp.owner_login));
 
         Ok(Some(
-            submissions
-                .iter()
-                .zip(thumbs)
+            resp.media
+                .submission
+                .into_iter()
+                .zip(resp.media.thumbnail)
                 .filter_map(|(sub, thumb)| {
-                    let sub_url = sub.get("url")?.as_str()?.to_owned();
-                    let thumb_url = thumb.get("url")?.as_str()?.to_owned();
+                    let sub_url = sub.url;
+                    let thumb_url = thumb.url;
 
                     Some(PostInfo {
                         file_type: get_file_ext(&sub_url)?.to_owned(),
-                        url: sub_url.clone(),
+                        url: sub_url,
                         thumb: Some(thumb_url),
                         source_link: Some(url.to_string()),
                         site_name: self.name(),
+                        title: title.clone(),
+                        tags: tags.clone(),
+                        artist_username: artist_username.clone(),
+                        artist_url: artist_url.clone(),
                         ..Default::default()
                     })
                 })
@@ -1156,9 +1199,17 @@ pub struct InkbunnyFile {
 }
 
 #[derive(Deserialize, Debug)]
+pub struct InkbunnyKeyword {
+    keyword_name: String,
+}
+
+#[derive(Deserialize, Debug)]
 pub struct InkbunnySubmission {
     submission_id: String,
+    username: String,
+    title: String,
     files: Vec<InkbunnyFile>,
+    keywords: Vec<InkbunnyKeyword>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -1194,20 +1245,22 @@ impl Inkbunny {
                 ("password", &self.password),
             ])
             .send()
-            .await?
+            .await
+            .map_err(|err| DisplayableErrorMessage::new("Unable to connect to Inkbunny", err))?
             .json()
-            .await?;
+            .await
+            .map_err(|err| DisplayableErrorMessage::new("Inkbunny returned unknown data", err))?;
 
         let login = match resp {
             InkbunnyResponse::Success(login) => login,
             InkbunnyResponse::Error { error_code: 0 } => {
-                panic!("Invalid Inkbunny username/password")
+                anyhow::bail!("Inkbunny username/password was incorrect")
             }
-            _ => panic!("Unhandled Inkbunny error code"),
+            _ => anyhow::bail!("Unhandled Inkbunny error code"),
         };
 
         if login.ratingsmask != "11111" {
-            panic!("Inkbunny user is missing viewing permissions");
+            anyhow::bail!("Inkbunny account was missing permissions");
         }
 
         self.sid = Some(login.sid.clone());
@@ -1231,9 +1284,13 @@ impl Inkbunny {
                 .post(Self::API_SUBMISSIONS)
                 .form(&vec![("sid", &sid), ("submission_ids", &ids)])
                 .send()
-                .await?
+                .await
+                .map_err(|err| DisplayableErrorMessage::new("Unable to connect to Inkbunny", err))?
                 .json()
-                .await?;
+                .await
+                .map_err(|err| {
+                    DisplayableErrorMessage::new("Inkbunny returned unknown data", err)
+                })?;
 
             match resp {
                 InkbunnyResponse::Success(submissions) => break submissions,
@@ -1242,7 +1299,7 @@ impl Inkbunny {
                     self.sid = None;
                     continue;
                 }
-                _ => panic!("Unhandled Inkbunny error"),
+                _ => anyhow::bail!("Inkbunny returned unknown data"),
             };
         };
 
@@ -1307,6 +1364,12 @@ impl Site for Inkbunny {
         let mut results = Vec::with_capacity(1);
 
         for submission in submissions.submissions {
+            let tags: Vec<String> = submission
+                .keywords
+                .iter()
+                .map(|kw| kw.keyword_name.clone())
+                .collect();
+
             for file in submission.files {
                 let ext = match get_file_ext(&file.file_url_screen) {
                     Some(ext) => ext,
@@ -1319,6 +1382,10 @@ impl Site for Inkbunny {
                     thumb: Some(file.thumbnail_url_medium_noncustom.clone()),
                     source_link: Some(url.to_owned()),
                     site_name: self.name(),
+                    title: Some(submission.title.clone()),
+                    tags: Some(tags.clone()),
+                    artist_username: Some(submission.username.clone()),
+                    artist_url: Some(format!("https://inkbunny.net/{}", submission.username)),
                     ..Default::default()
                 });
             }
@@ -1381,6 +1448,10 @@ struct DeviantArtOEmbed {
     thumbnail_url: String,
     width: AlwaysNum,
     height: AlwaysNum,
+    title: String,
+    tags: String,
+    author_name: String,
+    author_url: String,
 }
 
 impl DeviantArt {
@@ -1431,7 +1502,15 @@ impl Site for DeviantArt {
         let mut endpoint = url::Url::parse("https://backend.deviantart.com/oembed").unwrap();
         endpoint.query_pairs_mut().append_pair("url", url);
 
-        let resp: DeviantArtOEmbed = self.client.get(endpoint).send().await?.json().await?;
+        let resp: DeviantArtOEmbed = self
+            .client
+            .get(endpoint)
+            .send()
+            .await
+            .map_err(|err| DisplayableErrorMessage::new("Unable to connect to DeviantArt", err))?
+            .json()
+            .await
+            .map_err(|err| DisplayableErrorMessage::new("DeviantArt returned unknown data", err))?;
 
         if resp.file_type != "photo" {
             return Ok(None);
@@ -1444,6 +1523,15 @@ impl Site for DeviantArt {
             source_link: Some(url.to_owned()),
             site_name: self.name(),
             image_dimensions: Some((resp.width.0, resp.height.0)),
+            artist_username: Some(resp.author_name),
+            artist_url: Some(resp.author_url),
+            title: Some(resp.title),
+            tags: Some(
+                resp.tags
+                    .split(", ")
+                    .map(std::string::ToString::to_string)
+                    .collect(),
+            ),
             ..Default::default()
         }]))
     }

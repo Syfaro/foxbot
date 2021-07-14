@@ -1,5 +1,27 @@
 {
   "db": "PostgreSQL",
+  "0029a3f84dbfc1a1ca301cefd10cc53167f290619591fc3d509129027ee49e8d": {
+    "query": "INSERT INTO media_group (media_group_id, inserted_at, message) VALUES ($1, $2, $3) RETURNING id",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Int4"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text",
+          "Timestamptz",
+          "Jsonb"
+        ]
+      },
+      "nullable": [
+        false
+      ]
+    }
+  },
   "072f943d0d5ded261ee897034ca49d9e119c66e494dc9097b667bc4e1b099dc3": {
     "query": "UPDATE chat_administrator SET chat_id = $1 WHERE chat_id = $2",
     "describe": {
@@ -81,6 +103,44 @@
         true,
         false,
         false
+      ]
+    }
+  },
+  "1ef65794d39e8a7b34439d241831ecd2696f80d8d9e49920e30e4ccc754138a4": {
+    "query": "DELETE FROM media_group WHERE media_group_id = $1 RETURNING id, inserted_at, message, sources",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 1,
+          "name": "inserted_at",
+          "type_info": "Timestamptz"
+        },
+        {
+          "ordinal": 2,
+          "name": "message",
+          "type_info": "Jsonb"
+        },
+        {
+          "ordinal": 3,
+          "name": "sources",
+          "type_info": "Jsonb"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        false,
+        true
       ]
     }
   },
@@ -207,6 +267,18 @@
       ]
     }
   },
+  "4888531be643a4e44919519751b084b3c91d0a577e98a3d79e71be194364d94b": {
+    "query": "INSERT INTO media_group_sent (media_group_id) VALUES ($1) ON CONFLICT DO NOTHING",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": []
+    }
+  },
   "4bf1e2603910e4ef6f67ad369260e0dc3b903787e0f95bfaf84a74123c652132": {
     "query": "SELECT id, processed, source, url, mp4_url, thumb_url, display_url, display_name, job_id\n            FROM videos\n            WHERE display_name = $1",
     "describe": {
@@ -275,6 +347,18 @@
       ]
     }
   },
+  "4d2d1d5730b30c4d12f6565fdce3d106630c208dab16eb78e340f10e4af74486": {
+    "query": "DELETE FROM media_group_sent WHERE media_group_id = $1",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": []
+    }
+  },
   "4e0eb86a8698b5f3de421d034ca89d743ebe447d5c4334cd25d8371f2eff4432": {
     "query": "SELECT consumer_key, consumer_secret\n            FROM twitter_account\n            WHERE twitter_account.account_id = lookup_account($1, $2)",
     "describe": {
@@ -299,6 +383,32 @@
       "nullable": [
         false,
         false
+      ]
+    }
+  },
+  "53b1a22850cc91a5b580980621b27c50dfe69ced32161317a31dfdb8d75ee53e": {
+    "query": "SELECT\n                message_id,\n                (\n                    SELECT chat_telegram.telegram_id\n                    FROM chat_telegram\n                    WHERE chat_id = video_job_message.chat_id\n                    ORDER BY abs(chat_telegram.telegram_id) DESC\n                    LIMIT 1\n                ) as \"chat_id!\"\n            FROM video_job_message\n            WHERE video_id = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "message_id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 1,
+          "name": "chat_id!",
+          "type_info": "Int8"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Int4"
+        ]
+      },
+      "nullable": [
+        false,
+        null
       ]
     }
   },
@@ -527,6 +637,26 @@
       "nullable": []
     }
   },
+  "7cef969e5789cdf8338c5c592de8850c5305f68f5bf544644322a132a613c4a7": {
+    "query": "SELECT max(inserted_at) FROM media_group WHERE media_group_id = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "max",
+          "type_info": "Timestamptz"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        null
+      ]
+    }
+  },
   "7f9bdd51e9430d93edebd6180a5ac2ad0d7172ebaf5bab5bffd44d447771518a": {
     "query": "UPDATE videos SET job_id = $1 WHERE id = $2",
     "describe": {
@@ -566,26 +696,6 @@
         ]
       },
       "nullable": []
-    }
-  },
-  "86d9f856585958d5a3980996fd2a3f04a21f60ac7a2a759537284947ae57588f": {
-    "query": "SELECT message_id\n            FROM video_job_message\n            WHERE video_id = $1",
-    "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "message_id",
-          "type_info": "Int4"
-        }
-      ],
-      "parameters": {
-        "Left": [
-          "Int4"
-        ]
-      },
-      "nullable": [
-        false
-      ]
     }
   },
   "95930ce19cbe76cac13da523052de2e53d47f302653ea2fa4c63f93f5a3086b1": {
@@ -653,6 +763,57 @@
       "nullable": []
     }
   },
+  "afd66774f549521d1689b2e0934601a95976b034f9fde713b66f4fd21b827a62": {
+    "query": "UPDATE media_group SET sources = $1 WHERE id = $2",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Jsonb",
+          "Int4"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "b80505d9c0c51124ba42946e0c36ad1773e109e9eefed1cc7b46e5ac7ba19d23": {
+    "query": "SELECT id, inserted_at, message, sources FROM media_group WHERE id = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 1,
+          "name": "inserted_at",
+          "type_info": "Timestamptz"
+        },
+        {
+          "ordinal": 2,
+          "name": "message",
+          "type_info": "Jsonb"
+        },
+        {
+          "ordinal": 3,
+          "name": "sources",
+          "type_info": "Jsonb"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Int4"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        false,
+        true
+      ]
+    }
+  },
   "be823b9738decf3ac8c9f0574a984a5ee07829a4b67241a567687d92a2f0b76e": {
     "query": "LOCK TABLE chat, chat_telegram IN EXCLUSIVE MODE",
     "describe": {
@@ -684,6 +845,18 @@
         "Left": [
           "Int4",
           "Int8"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "c4121241eeaae9aeb31f32f1a6e885fb65b9ea74f7d98335865d32663f0c8cf4": {
+    "query": "DELETE FROM media_group WHERE media_group_id = $1",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Text"
         ]
       },
       "nullable": []
@@ -734,24 +907,6 @@
           "Text",
           "Text"
         ]
-      },
-      "nullable": [
-        false
-      ]
-    }
-  },
-  "d3d3cc97bad752504d1604aa4004aac0abb5d8975ec6787ce11025107403d304": {
-    "query": "SELECT chat_telegram.telegram_id\n            FROM chat_telegram\n            ORDER BY abs(chat_telegram.telegram_id) DESC\n            LIMIT 1",
-    "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "telegram_id",
-          "type_info": "Int8"
-        }
-      ],
-      "parameters": {
-        "Left": []
       },
       "nullable": [
         false
@@ -819,6 +974,44 @@
         ]
       },
       "nullable": []
+    }
+  },
+  "f024583958ea5c80459dfd5679bb8b44e2a08367a48be9e25bc67eebeac50cb9": {
+    "query": "SELECT id, inserted_at, message, sources FROM media_group WHERE media_group_id = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 1,
+          "name": "inserted_at",
+          "type_info": "Timestamptz"
+        },
+        {
+          "ordinal": 2,
+          "name": "message",
+          "type_info": "Jsonb"
+        },
+        {
+          "ordinal": 3,
+          "name": "sources",
+          "type_info": "Jsonb"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        false,
+        true
+      ]
     }
   },
   "ff16be327927d1d9b38d922e52782a38bb6bea34955cad826ae2d162006e40e1": {
