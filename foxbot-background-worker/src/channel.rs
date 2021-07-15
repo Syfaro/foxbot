@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
 use anyhow::Context;
-use foxbot_models::{GroupConfig, GroupConfigKey};
 use tgbotapi::requests::GetChatMember;
+
+use foxbot_models::{GroupConfig, GroupConfigKey};
+use foxbot_utils::has_similar_hash;
 
 use crate::*;
 
@@ -299,61 +301,6 @@ async fn already_had_source(
     );
 
     Ok(source_count > added_links)
-}
-
-/// Check if any of the provided image URLs have a hash similar to the given
-/// input.
-#[tracing::instrument(skip(urls))]
-async fn has_similar_hash(to: i64, urls: &[&str]) -> bool {
-    let to = to.to_be_bytes();
-
-    for url in urls {
-        let check_size = CheckFileSize::new(url, 50_000_000);
-        let bytes = match check_size.into_bytes().await {
-            Ok(bytes) => bytes,
-            Err(err) => {
-                tracing::warn!("unable to download image: {:?}", err);
-
-                continue;
-            }
-        };
-
-        let hash = tokio::task::spawn_blocking(move || {
-            use std::convert::TryInto;
-
-            let hasher = fuzzysearch::get_hasher();
-
-            let im = match image::load_from_memory(&bytes) {
-                Ok(im) => im,
-                Err(err) => {
-                    tracing::warn!("unable to load image: {:?}", err);
-
-                    return None;
-                }
-            };
-
-            let hash = hasher.hash_image(&im);
-            let bytes: [u8; 8] = hash.as_bytes().try_into().unwrap_or_default();
-
-            Some(bytes)
-        })
-        .in_current_span()
-        .await
-        .unwrap_or_default();
-
-        let hash = match hash {
-            Some(hash) => hash,
-            _ => continue,
-        };
-
-        if hamming::distance_fast(&to, &hash).unwrap() <= 3 {
-            tracing::debug!(url, hash = i64::from_be_bytes(hash), "hashes were similar");
-
-            return true;
-        }
-    }
-
-    false
 }
 
 /// Store if bot has edit permissions in channel.

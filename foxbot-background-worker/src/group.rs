@@ -5,6 +5,7 @@ use tgbotapi::requests::GetChat;
 
 use crate::*;
 use foxbot_models::{FileCache, GroupConfig, GroupConfigKey, MediaGroup};
+use foxbot_utils::has_similar_hash;
 
 #[tracing::instrument(skip(handler, job), fields(job_id = job.id(), chat_id))]
 pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Result<(), Error> {
@@ -83,15 +84,14 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
     }
 
     let best_photo = find_best_photo(photo_sizes).unwrap();
-    let mut matches = match_image(
+    let (searched_hash, mut matches) = match_image(
         &handler.telegram,
         &handler.redis,
         &handler.fuzzysearch,
         best_photo,
         Some(3),
     )
-    .await?
-    .1;
+    .await?;
     sort_results(
         &handler.conn,
         message.from.as_ref().unwrap().id,
@@ -110,7 +110,7 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
     }
 
     let links = extract_links(&message);
-    let sites = handler.sites.lock().await;
+    let mut sites = handler.sites.lock().await;
 
     if wanted_matches
         .iter()
@@ -118,6 +118,23 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
     {
         tracing::debug!("group message already contained valid links");
         return Ok(());
+    }
+
+    if !links.is_empty() {
+        let mut results: Vec<foxbot_sites::PostInfo> = Vec::new();
+        let _ = find_images(&tgbotapi::User::default(), links, &mut sites, &mut |info| {
+            results.extend(info.results);
+        })
+        .await;
+
+        let urls: Vec<_> = results
+            .iter()
+            .map::<&str, _>(|result| &result.url)
+            .collect();
+        if has_similar_hash(searched_hash, &urls).await {
+            tracing::debug!("url in post contained similar hash");
+            return Ok(());
+        }
     }
 
     drop(sites);
