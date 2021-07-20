@@ -79,14 +79,9 @@ async fn main() {
 
     let temp_admin: Option<UserId> = config.temp_admin.map(|admin| admin.into());
 
-    let cluster = cluster.build().await.expect("Unable to create cluster");
+    let (cluster, mut events) = cluster.build().await.expect("Unable to create cluster");
 
-    {
-        let cluster = cluster.clone();
-        tokio::spawn(async move {
-            cluster.up().await;
-        });
-    }
+    cluster.up().await;
 
     let http = HttpClient::new(&config.discord_token);
 
@@ -94,7 +89,6 @@ async fn main() {
         .resource_types(ResourceType::all())
         .build();
 
-    let mut events = cluster.events();
     let semaphore = Arc::new(tokio::sync::Semaphore::new(4));
 
     while let Some((_shard_id, event)) = events.next().await {
@@ -322,7 +316,7 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
                 if let Err(err) = ctx
                     .http
                     .create_message(private_channel.id)
-                    .embed(embed)?
+                    .embeds([embed])?
                     .await
                 {
                     tracing::warn!("Unable to send private message: {:?}", err);
@@ -427,7 +421,7 @@ fn get_event_channel(event: &Event) -> Option<(ChannelId, Option<MessageId>)> {
 async fn is_pm(ctx: &Context, channel_id: ChannelId) -> Result<bool, UserErrorMessage<'static>> {
     if let Some(channel) = ctx.cache.guild_channel(channel_id) {
         return Ok(
-            matches!(&*channel, GuildChannel::Text(text) if text.kind == ChannelType::Private),
+            matches!(channel, GuildChannel::Text(text) if text.kind == ChannelType::Private),
         );
     }
 
@@ -536,7 +530,7 @@ async fn allow_nsfw(ctx: &Context, channel_id: ChannelId) -> Option<bool> {
     }
 
     let channel = ctx.cache.guild_channel(channel_id)?;
-    Some(matches!(&*channel, GuildChannel::Text(channel) if channel.nsfw))
+    Some(matches!(channel, GuildChannel::Text(channel) if channel.nsfw))
 }
 
 async fn source_attachments(
@@ -595,7 +589,7 @@ async fn source_attachments(
         ctx.http
             .create_message(channel_id)
             .reply(content_id)
-            .embed(embed)?
+            .embeds([embed])?
             .await?;
     }
 
@@ -701,7 +695,7 @@ async fn mirror_links(
         ctx.http
             .create_message(channel_id)
             .reply(content_id)
-            .embed(link_embed(&result)?)?
+            .embeds([link_embed(&result)?])?
             .await?;
     }
 
