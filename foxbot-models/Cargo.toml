@@ -18,7 +18,7 @@ serde = "1"
 serde_json = "1"
 
 sqlx = { version = "0.5", default-features = false, features = ["runtime-tokio-rustls", "macros", "postgres", "offline", "json", "migrate", "time", "chrono"] }
-redis = { version = "0.20", features = ["connection-manager", "tokio-comp"] }
+redis = { version = "0.21", features = ["connection-manager", "tokio-comp"] }
 
 tgbotapi = { git = "https://github.com/Syfaro/tgbotapi-rs" }
 fuzzysearch = { git = "https://github.com/Syfaro/fuzzysearch-rs", features = ["trace", "local_hash"] }
