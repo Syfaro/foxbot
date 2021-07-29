@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::{collections::HashMap, future::Future};
 
 use opentelemetry::propagation::TextMapPropagator;
+use sentry::SentryFutureExt;
 use tgbotapi::{
     requests::{EditMessageCaption, EditMessageReplyMarkup, GetMe, ReplyMarkup},
     InlineKeyboardButton, InlineKeyboardMarkup,
@@ -34,6 +35,23 @@ fn main() {
             .enable_all()
             .build()
             .unwrap(),
+    );
+
+    let _guard = config.worker_sentry_dsn.as_ref().map(|sentry_dsn| {
+        sentry::init(sentry::ClientOptions {
+            dsn: Some(sentry_dsn.parse().unwrap()),
+            release: sentry::release_name!(),
+            attach_stacktrace: true,
+            session_mode: sentry::SessionMode::Request,
+            ..Default::default()
+        })
+    });
+
+    tracing::info!(
+        "sentry enabled: {}",
+        _guard
+            .as_ref()
+            .map_or(false, sentry::ClientInitGuard::is_enabled)
     );
 
     let env = std::env::var("ENVIRONMENT");
@@ -70,6 +88,7 @@ fn main() {
         let subscriber = tracing_subscriber::Registry::default()
             .with(env_filter)
             .with(trace)
+            .with(sentry_tracing::layer())
             .with(subscriber);
         tracing::subscriber::set_global_default(subscriber).unwrap();
     } else {
@@ -77,6 +96,7 @@ fn main() {
         let subscriber = tracing_subscriber::Registry::default()
             .with(env_filter)
             .with(trace)
+            .with(sentry_tracing::layer())
             .with(subscriber);
         tracing::subscriber::set_global_default(subscriber).unwrap();
     }
@@ -217,9 +237,17 @@ impl WorkerEnvironment {
 
         self.faktory
             .register(name, move |job| -> Result<(), Error> {
+                sentry::start_session();
+
                 let span = get_custom_span(&job);
 
-                runtime.block_on(f(handler.clone(), job).instrument(span))?;
+                runtime.block_on(
+                    f(handler.clone(), job)
+                        .instrument(span)
+                        .bind_hub(sentry::Hub::current()),
+                )?;
+
+                sentry::end_session();
 
                 Ok(())
             });
@@ -280,6 +308,7 @@ struct Config {
     database_url: String,
     redis_dsn: String,
     internet_url: String,
+    worker_sentry_dsn: Option<String>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]

@@ -1,6 +1,6 @@
 [package]
 name = "foxbot"
-version = "0.3.1"
+version = "0.4.0"
 authors = ["Syfaro <syfaro@huefox.com>"]
 edition = "2018"
 publish = false
@@ -23,7 +23,8 @@ handlebars = { version = "4", features = ["dir_source"] }
 dotenv = { version = "0.15", optional = true }
 base64 = "0.13"
 
-sentry = { version = "0.23", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "reqwest", "debug-logs"] }
+sentry = { version = "0.23", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "reqwest", "rustls"] }
+sentry-tracing = "0.23"
 uuid = "0.8"
 anyhow = "1"
 lazy_static = "1"

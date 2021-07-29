@@ -323,9 +323,19 @@ pub fn add_sentry_tracing(scope: &mut sentry::Scope) {
         )
     });
 
-    let header_value = headers.get("uber-trace-id").unwrap();
-    let trace_id = header_value.to_str().unwrap();
-    scope.set_extra("uber-trace-id", trace_id.to_owned().into());
+    for (name, value) in headers {
+        let name = match name {
+            Some(name) => name,
+            None => continue,
+        };
+
+        let value = match value.to_str() {
+            Ok(value) => value,
+            Err(_err) => continue,
+        };
+
+        scope.set_extra(&name.to_string(), value.into());
+    }
 }
 
 /// Tags to add to a sentry event.

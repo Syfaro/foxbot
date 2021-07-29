@@ -999,7 +999,7 @@ dependencies = [
 
 [[package]]
 name = "foxbot"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "actix-http",
  "actix-web",
@@ -1034,6 +1034,7 @@ dependencies = [
  "rusoto_credential",
  "rusoto_s3",
  "sentry",
+ "sentry-tracing",
  "serde",
  "serde_json",
  "sqlx",
@@ -1052,7 +1053,7 @@ dependencies = [
 
 [[package]]
 name = "foxbot-background-worker"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1073,6 +1074,8 @@ dependencies = [
  "rusoto_core",
  "rusoto_credential",
  "rusoto_s3",
+ "sentry",
+ "sentry-tracing",
  "serde",
  "serde_json",
  "sqlx",
@@ -1561,6 +1564,21 @@ dependencies = [
  "tower-service",
  "tracing",
  "want",
+]
+
+[[package]]
+name = "hyper-rustls"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f9f7a97316d44c0af9b0301e65010573a853a9fc97046d7331d7f6bc0fd5a64"
+dependencies = [
+ "futures-util",
+ "hyper",
+ "log",
+ "rustls",
+ "tokio",
+ "tokio-rustls",
+ "webpki",
 ]
 
 [[package]]
@@ -2648,6 +2666,7 @@ dependencies = [
  "http",
  "http-body",
  "hyper",
+ "hyper-rustls",
  "hyper-tls",
  "ipnet",
  "js-sys",
@@ -2658,15 +2677,18 @@ dependencies = [
  "native-tls",
  "percent-encoding",
  "pin-project-lite",
+ "rustls",
  "serde",
  "serde_json",
  "serde_urlencoded",
  "tokio",
  "tokio-native-tls",
+ "tokio-rustls",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "webpki-roots",
  "winreg",
 ]
 
@@ -2993,7 +3015,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "546b9b6f76c26c60ffbcf0b7136e15169fe13d43949b4aadb7c1edc1c3f3a26f"
 dependencies = [
  "httpdate",
- "log",
  "reqwest",
  "sentry-anyhow",
  "sentry-backtrace",
@@ -3049,7 +3070,6 @@ checksum = "f9a957270c9a430218f8031c866493061a27e35a70250e9527f093563a33ce6b"
 dependencies = [
  "chrono",
  "lazy_static",
- "log",
  "rand 0.8.4",
  "sentry-types",
  "serde",
@@ -3064,6 +3084,17 @@ checksum = "692bf989f0c99f025e33d7f58e62822c3771f56d189698c66dcc863122255d95"
 dependencies = [
  "sentry-backtrace",
  "sentry-core",
+]
+
+[[package]]
+name = "sentry-tracing"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d291df287241b0ef97f5bf9e9a595691ef8dfb49bc6acfd55b9dc2ade681f1c9"
+dependencies = [
+ "sentry-core",
+ "tracing-core",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -4225,9 +4256,9 @@ checksum = "85e60b0d1b5f99db2556934e21937020776a5d31520bf169e851ac44e6420214"
 
 [[package]]
 name = "xml-rs"
-version = "0.8.3"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b07db065a5cf61a7e4ba64f29e67db906fb1787316516c4e6e5ff0fea1efcd8a"
+checksum = "d2d7d3948613f75c98fd9328cfdcc45acc4d360655289d0a7d4ec931392200a3"
 
 [[package]]
 name = "zeroize"

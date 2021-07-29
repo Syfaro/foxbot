@@ -1,6 +1,6 @@
 [package]
 name = "foxbot-background-worker"
-version = "0.3.1"
+version = "0.4.0"
 authors = ["Syfaro <syfaro@huefox.com>"]
 edition = "2018"
 publish = false
@@ -13,6 +13,9 @@ tracing-subscriber = "0.2"
 opentelemetry = { version = "0.15", features = ["rt-tokio"] }
 opentelemetry-jaeger = { version = "0.14", features = ["tokio"] }
 tracing-opentelemetry = "0.14"
+
+sentry = { version = "0.23", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "reqwest", "rustls"] }
+sentry-tracing = "0.23"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -136,6 +136,7 @@ fn configure_tracing(collector: String) {
         let subscriber = tracing_subscriber::Registry::default()
             .with(env_filter)
             .with(trace)
+            .with(sentry_tracing::layer())
             .with(subscriber);
         tracing::subscriber::set_global_default(subscriber).unwrap();
     } else {
@@ -143,6 +144,7 @@ fn configure_tracing(collector: String) {
         let subscriber = tracing_subscriber::Registry::default()
             .with(env_filter)
             .with(trace)
+            .with(sentry_tracing::layer())
             .with(subscriber);
         tracing::subscriber::set_global_default(subscriber).unwrap();
     }
@@ -333,9 +335,9 @@ async fn main() {
     let _guard = config.sentry_dsn.as_ref().map(|sentry_dsn| {
         sentry::init(sentry::ClientOptions {
             dsn: Some(sentry_dsn.parse().unwrap()),
-            debug: true,
-            release: option_env!("RELEASE").map(std::borrow::Cow::from),
+            release: sentry::release_name!(),
             attach_stacktrace: true,
+            session_mode: sentry::SessionMode::Request,
             ..Default::default()
         })
     });
@@ -702,6 +704,7 @@ impl MessageHandler {
 
         tracing::trace!(?handler_update, "handling update");
 
+        sentry::start_session();
         sentry::configure_scope(|mut scope| {
             add_sentry_tracing(&mut scope);
         });
@@ -724,6 +727,16 @@ impl MessageHandler {
 
         let user = user_from_update(&update);
         let chat = chat_from_update(&update);
+
+        if let Some(user) = user {
+            sentry::configure_scope(|scope| {
+                scope.set_user(Some(sentry::User {
+                    id: Some(user.id.to_string()),
+                    username: user.username.clone(),
+                    ..Default::default()
+                }));
+            });
+        }
 
         if let Some(user) = user {
             tracing::Span::current().record("user_id", &user.id);
@@ -763,9 +776,6 @@ impl MessageHandler {
                     hist.stop_and_record();
 
                     let mut tags = vec![("handler", handler.name().to_string())];
-                    if let Some(user) = user {
-                        tags.push(("user_id", user.id.to_string()));
-                    }
                     if let Some(chat) = chat {
                         tags.push(("chat_id", chat.id.to_string()));
                     }
@@ -787,6 +797,8 @@ impl MessageHandler {
                 }
             }
         }
+
+        sentry::end_session();
     }
 
     pub async fn make_request<T>(&self, request: &T) -> Result<T::Response, Error>
