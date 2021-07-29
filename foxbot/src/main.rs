@@ -704,7 +704,6 @@ impl MessageHandler {
 
         tracing::trace!(?handler_update, "handling update");
 
-        sentry::start_session();
         sentry::configure_scope(|mut scope| {
             add_sentry_tracing(&mut scope);
         });
@@ -745,6 +744,8 @@ impl MessageHandler {
         if let Some(chat) = chat {
             tracing::Span::current().record("chat_id", &chat.id);
         }
+
+        sentry::start_session();
 
         let command = update
             .message

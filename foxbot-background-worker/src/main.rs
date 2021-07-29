@@ -237,19 +237,24 @@ impl WorkerEnvironment {
 
         self.faktory
             .register(name, move |job| -> Result<(), Error> {
-                sentry::start_session();
+                let _guard = get_custom_span(&job).entered();
 
-                let span = get_custom_span(&job);
+                sentry::configure_scope(|mut scope| {
+                    add_sentry_tracing(&mut scope);
+                });
 
-                runtime.block_on(
+                let result = runtime.block_on(
                     f(handler.clone(), job)
-                        .instrument(span)
+                        .in_current_span()
                         .bind_hub(sentry::Hub::current()),
-                )?;
+                );
 
-                sentry::end_session();
+                if let Err(err) = &result {
+                    tracing::error!("job encountered error: {}", err);
+                    sentry::capture_error(&err);
+                }
 
-                Ok(())
+                result
             });
     }
 
