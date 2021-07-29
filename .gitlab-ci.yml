@@ -27,7 +27,6 @@ test:latest: &base_test
 
         - export RELEASE=$CI_COMMIT_SHA
     script:
-        # Build, test, and show stats
         - cargo build --verbose
         - cargo test --verbose
         - cargo test --verbose -- --ignored
@@ -38,7 +37,7 @@ test:nightly:
     image: rustlang/rust:nightly-slim
     allow_failure: true
 
-build:bot: &base_build
+build:
     <<: *base_test
     stage: build
     cache:
@@ -49,21 +48,14 @@ build:bot: &base_build
         expire_in: 1 day
         paths:
             - ./foxbot/foxbot
+            - ./foxbot-background-worker/foxbot-background-worker
     script:
         - cargo build --verbose --release --bin foxbot
         - mv ./target/release/foxbot ./foxbot/foxbot
-
-build:background-worker:
-    <<: *base_build
-    artifacts:
-        expire_in: 1 day
-        paths:
-            - ./foxbot-background-worker/foxbot-background-worker
-    script:
         - cargo build --verbose --release --bin foxbot-background-worker
         - mv ./target/release/foxbot-background-worker ./foxbot-background-worker/foxbot-background-worker
 
-misc:base:
+misc:
     stage: misc
     image:
         name: gcr.io/kaniko-project/executor:debug
@@ -75,7 +67,7 @@ misc:base:
     script:
         - /kaniko/executor --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/Dockerfile --destination $CI_REGISTRY_IMAGE/base:$CI_COMMIT_SHA --destination $CI_REGISTRY_IMAGE/base:latest --cache=true
 
-image:bot: &base_images
+docker:
     stage: image
     image:
         name: gcr.io/kaniko-project/executor:debug
@@ -83,12 +75,7 @@ image:bot: &base_images
     before_script:
         - mkdir -p /kaniko/.docker
         - echo "{\"auths\":{\"$CI_REGISTRY\":{\"auth\":\"$(echo -n ${CI_REGISTRY_USER}:${CI_REGISTRY_PASSWORD} | base64)\"}}}" > /kaniko/.docker/config.json
-    needs: ['build:bot', 'misc:base']
+    needs: ['build', 'misc']
     script:
         - /kaniko/executor --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/foxbot/Dockerfile --destination $CI_REGISTRY_IMAGE/bot:$CI_COMMIT_SHA --destination $CI_REGISTRY_IMAGE/bot:latest --cache=true
-
-image:background-worker:
-    <<: *base_images
-    needs: ['build:background-worker', 'misc:base']
-    script:
         - /kaniko/executor --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/foxbot-background-worker/Dockerfile --destination $CI_REGISTRY_IMAGE/background-worker:$CI_COMMIT_SHA --destination $CI_REGISTRY_IMAGE/background-worker:latest --cache=true
