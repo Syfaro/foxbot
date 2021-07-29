@@ -1288,7 +1288,7 @@ dependencies = [
 [[package]]
 name = "fuzzysearch"
 version = "0.2.0"
-source = "git+https://github.com/Syfaro/fuzzysearch-rs#64f2db117c56a2d1da185827209344b34539cb61"
+source = "git+https://github.com/Syfaro/fuzzysearch-rs#07bdb44f86b09cfebc35e8481247f5fcf95f8788"
 dependencies = [
  "image",
  "img_hash",
@@ -2093,11 +2093,12 @@ dependencies = [
 
 [[package]]
 name = "opentelemetry"
-version = "0.13.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b91cea1dfd50064e52db033179952d18c770cbc5dfefc8eba45d619357ba3914"
+checksum = "ff27b33e30432e7b9854936693ca103d8591b0501f7ae9f633de48cda3bf2a67"
 dependencies = [
  "async-trait",
+ "crossbeam-channel",
  "futures",
  "js-sys",
  "lazy_static",
@@ -2111,21 +2112,22 @@ dependencies = [
 
 [[package]]
 name = "opentelemetry-http"
-version = "0.2.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba72bd27f28377a2e4f0f15a040c06ab0e70ea73df0689f8adf4d22d04591a1a"
+checksum = "1eeb0d4b230c69aa425f9c3aadf02ce7aa4b2bc9a4e9fbe59614108232078263"
 dependencies = [
  "async-trait",
+ "bytes",
+ "futures-util",
  "http",
  "opentelemetry",
- "thiserror",
 ]
 
 [[package]]
 name = "opentelemetry-jaeger"
-version = "0.12.1"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ddd4984441954f9ebbe3eebdfc6fd4fa95be6400d403171228779b949f3cd918"
+checksum = "09a9fc8192722e7daa0c56e59e2336b797122fb8598383dcb11c8852733b435c"
 dependencies = [
  "async-trait",
  "lazy_static",
@@ -3101,9 +3103,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.64"
+version = "1.0.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "799e97dc9fdae36a5c8b8f2cae9ce2ee9fdce2058c57a93e6099d919fd982f79"
+checksum = "28c5e91e4240b46c4c19219d6cc84784444326131a4210f496f948d5cc827a29"
 dependencies = [
  "indexmap",
  "itoa",
@@ -3203,9 +3205,9 @@ dependencies = [
 
 [[package]]
 name = "siphasher"
-version = "0.3.5"
+version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cbce6d4507c7e4a3962091436e56e95290cb71fa302d0d270e32130b75fbff27"
+checksum = "729a25c17d72b06c68cb47955d44fda88ad2d3e7d77e025663fdd69b93dd71a1"
 
 [[package]]
 name = "slab"
@@ -3221,9 +3223,9 @@ checksum = "fe0f37c9e8f3c5a4a66ad655a93c74daac4ad00c441533bf5c6e7990bb42604e"
 
 [[package]]
 name = "socket2"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e3dfc207c526015c632472a77be09cf1b6e46866581aecae5cc38fb4235dea2"
+checksum = "765f090f0e423d2b55843402a07915add955e7d60657db13707a159727326cad"
 dependencies = [
  "libc",
  "winapi",
@@ -3768,8 +3770,10 @@ checksum = "c794ee03ca18c0d149e6928db480700644ab405f553f55dc0650f541e73dc180"
 dependencies = [
  "actix-web",
  "futures",
+ "opentelemetry",
  "tracing",
  "tracing-futures",
+ "tracing-opentelemetry",
  "uuid",
 ]
 
@@ -3816,9 +3820,9 @@ dependencies = [
 
 [[package]]
 name = "tracing-opentelemetry"
-version = "0.12.0"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99003208b647dae59dcefc49c98aecaa3512fbc29351685d4b9ef23a9218458e"
+checksum = "c47440f2979c4cd3138922840eec122e3c0ba2148bc290f756bd7fd60fc97fff"
 dependencies = [
  "opentelemetry",
  "tracing",
