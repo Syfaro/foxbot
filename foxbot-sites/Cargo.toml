@@ -22,10 +22,9 @@ url = "2"
 
 sqlx = { version = "0.5", default-features = false, features = ["runtime-tokio-rustls", "macros", "postgres", "json"] }
 
-egg-mode = { git = "https://github.com/egg-mode-rs/egg-mode" }
-scraper = "0.12"
+egg-mode = "0.16"
 
 fuzzysearch = { git = "https://github.com/Syfaro/fuzzysearch-rs", features = ["trace", "local_hash"] }
-furaffinity-rs = { git = "https://github.com/Syfaro/furaffinity-rs", branch = "main" }
+furaffinity-rs = { git = "https://github.com/Syfaro/furaffinity-rs" }
 
 foxbot-models = { path = "../foxbot-models" }

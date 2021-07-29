@@ -285,9 +285,9 @@ checksum = "23b62fc65de8e4e7f52534fb52b0f3ed04746ae267519eef2a83941e8085068b"
 
 [[package]]
 name = "async-trait"
-version = "0.1.50"
+version = "0.1.51"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b98e84bbb4cbcdd97da190ba0c58a1bb0de2c1fdf67d159e192ed766aeca722"
+checksum = "44318e776df68115a881de9a8fd1b9e53368d7a4a5ce4cc48517da3393233a5e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -808,7 +808,8 @@ dependencies = [
 [[package]]
 name = "egg-mode"
 version = "0.16.0"
-source = "git+https://github.com/egg-mode-rs/egg-mode#d9db2d458aa9bb0eb878a775bae5c542cdce39e2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb96b3df2a1dd9fe043e58eed7ba1c835a23561e777e243e8cc08aa4178aec79"
 dependencies = [
  "base64",
  "chrono",
@@ -1114,7 +1115,6 @@ dependencies = [
  "fuzzysearch",
  "regex",
  "reqwest",
- "scraper",
  "serde",
  "serde_json",
  "sqlx",
@@ -1168,7 +1168,7 @@ checksum = "fed34cd105917e91daa4da6b3728c47b068749d6a62c59811f06ed2ac71d9da7"
 [[package]]
 name = "furaffinity-rs"
 version = "0.1.0"
-source = "git+https://github.com/Syfaro/furaffinity-rs?branch=main#9825e488e7c6737686e5f95dbcb56146aea6382e"
+source = "git+https://github.com/Syfaro/furaffinity-rs#9825e488e7c6737686e5f95dbcb56146aea6382e"
 dependencies = [
  "chrono",
  "image",
