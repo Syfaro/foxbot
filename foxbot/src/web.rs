@@ -255,7 +255,7 @@ async fn mediagroup(
         .map(|message| SourceInfo {
             media_group_id: message.message.media_group_id.as_ref().unwrap(),
             message_id: message.message.message_id,
-            file_id: &find_best_photo(&message.message.photo.as_deref().unwrap())
+            file_id: &find_best_photo(message.message.photo.as_deref().unwrap())
                 .unwrap()
                 .file_id,
             urls: message

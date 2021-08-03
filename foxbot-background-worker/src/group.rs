@@ -561,7 +561,7 @@ pub async fn process_group_mediagroup_check(
         return Ok(());
     }
 
-    let messages = MediaGroup::get_messages(&handler.conn, &media_group_id).await?;
+    let messages = MediaGroup::get_messages(&handler.conn, media_group_id).await?;
     let first_message = &messages.first().as_ref().unwrap().message;
 
     let lang_code = first_message
@@ -749,7 +749,7 @@ pub async fn process_group_mediagroup_prune(
             message_id = message.message.message_id,
             "deleting photo from message"
         );
-        let best_photo = find_best_photo(&message.message.photo.as_deref().unwrap()).unwrap();
+        let best_photo = find_best_photo(message.message.photo.as_deref().unwrap()).unwrap();
 
         let path = format!("mg/{}/{}", media_group_id, best_photo.file_id);
         let delete = rusoto_s3::DeleteObjectRequest {

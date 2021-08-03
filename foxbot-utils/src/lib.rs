@@ -483,7 +483,7 @@ pub fn continuous_action(
                         if let Err(e) = bot.make_request(&chat_action).await {
                             tracing::warn!("unable to send chat action: {:?}", e);
                             with_user_scope(user.as_ref(), &e.into(), None, |err| {
-                                sentry::integrations::anyhow::capture_anyhow(&err);
+                                sentry::integrations::anyhow::capture_anyhow(err);
                             });
                         }
                     }),

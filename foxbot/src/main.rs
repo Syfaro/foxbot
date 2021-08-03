@@ -573,7 +573,7 @@ impl MessageHandler {
                 Err(e) => {
                     tracing::error!("unable to get error message-id to edit: {:?}", e);
                     with_user_scope(message.from.as_ref(), &e.into(), None, |err| {
-                        sentry::integrations::anyhow::capture_anyhow(&err);
+                        sentry::integrations::anyhow::capture_anyhow(err);
                     });
 
                     return;
@@ -592,7 +592,7 @@ impl MessageHandler {
             if let Err(e) = self.make_request(&edit_message).await {
                 tracing::error!("unable to edit error message to user: {:?}", e);
                 with_user_scope(message.from.as_ref(), &e.into(), None, |err| {
-                    sentry::integrations::anyhow::capture_anyhow(&err);
+                    sentry::integrations::anyhow::capture_anyhow(err);
                 });
 
                 let _ = conn.del::<_, ()>(&key_list).await;
@@ -621,7 +621,7 @@ impl MessageHandler {
                 Err(e) => {
                     tracing::error!("unable to send error message to user: {:?}", e);
                     with_user_scope(message.from.as_ref(), &e.into(), None, |err| {
-                        sentry::integrations::anyhow::capture_anyhow(&err);
+                        sentry::integrations::anyhow::capture_anyhow(err);
                     });
                 }
             }
@@ -785,7 +785,7 @@ impl MessageHandler {
                     }
 
                     if let Some(msg) = &update.message {
-                        self.report_error(msg, err, Some(tags), |err| capture_anyhow(&err))
+                        self.report_error(msg, err, Some(tags), |err| capture_anyhow(err))
                             .await;
                     } else {
                         capture_anyhow(&err);
