@@ -435,30 +435,6 @@
       ]
     }
   },
-  "66f224396a3d4330a584349bea657f0eca671234070accce35ef3c8efa9d8aa9": {
-    "query": "INSERT INTO cached_post (post_url, thumb, cdn_url, width, height) VALUES\n                ($1, $2, $3, $4, $5) RETURNING id",
-    "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "id",
-          "type_info": "Int4"
-        }
-      ],
-      "parameters": {
-        "Left": [
-          "Text",
-          "Bool",
-          "Text",
-          "Int4",
-          "Int4"
-        ]
-      },
-      "nullable": [
-        false
-      ]
-    }
-  },
   "68a84647d56342e43c5e49025cd3f0129452ebec9106d98101566730507914dd": {
     "query": "SELECT id, post_url, thumb, cdn_url, width, height\n            FROM cached_post\n            WHERE post_url = $1 AND thumb = $2",
     "describe": {
@@ -598,6 +574,22 @@
       "nullable": [
         null
       ]
+    }
+  },
+  "7e48c8b3a748b8e1943ab8e3289f752ff5801bae741f66d2698d44fd49f8a772": {
+    "query": "INSERT INTO cached_post (post_url, thumb, cdn_url, width, height) VALUES\n                ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Text",
+          "Bool",
+          "Text",
+          "Int4",
+          "Int4"
+        ]
+      },
+      "nullable": []
     }
   },
   "7f9bdd51e9430d93edebd6180a5ac2ad0d7172ebaf5bab5bffd44d447771518a": {
