@@ -56,8 +56,6 @@ build:
         policy: pull-push
     needs: ["test:latest"]
     services: []
-    only:
-        - tags
     artifacts:
         expire_in: 1 day
         paths:
@@ -74,8 +72,6 @@ misc:
     image:
         name: gcr.io/kaniko-project/executor:debug
         entrypoint: [""]
-    only:
-        - tags
     before_script:
         - mkdir -p /kaniko/.docker
         - echo "{\"auths\":{\"$CI_REGISTRY\":{\"auth\":\"$(echo -n ${CI_REGISTRY_USER}:${CI_REGISTRY_PASSWORD} | base64)\"}}}" > /kaniko/.docker/config.json
@@ -88,8 +84,6 @@ docker:
     image:
         name: gcr.io/kaniko-project/executor:debug
         entrypoint: [""]
-    only:
-        - tags
     before_script:
         - mkdir -p /kaniko/.docker
         - echo "{\"auths\":{\"$CI_REGISTRY\":{\"auth\":\"$(echo -n ${CI_REGISTRY_USER}:${CI_REGISTRY_PASSWORD} | base64)\"}}}" > /kaniko/.docker/config.json
