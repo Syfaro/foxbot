@@ -1,9 +1,7 @@
 stages:
     - test
     - build
-    - misc
     - image
-    - deploy
 
 variables:
     CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
@@ -25,8 +23,7 @@ test:latest: &base_test
         policy: pull-push
     before_script:
         - apt-get update -y
-        - apt-get install -y wget libssl-dev pkg-config libavcodec-dev libavformat-dev libavutil-dev libavdevice-dev clang llvm python3 python3-pip
-
+        - apt-get install -y pkg-config libssl-dev
         - export RELEASE=$CI_COMMIT_SHA
     script:
         - cargo build --verbose
@@ -67,18 +64,6 @@ build:
         - cargo build --verbose --release --bin foxbot-background-worker
         - mv ./target/release/foxbot-background-worker ./foxbot-background-worker/foxbot-background-worker
 
-misc:
-    stage: misc
-    image:
-        name: gcr.io/kaniko-project/executor:debug
-        entrypoint: [""]
-    before_script:
-        - mkdir -p /kaniko/.docker
-        - echo "{\"auths\":{\"$CI_REGISTRY\":{\"auth\":\"$(echo -n ${CI_REGISTRY_USER}:${CI_REGISTRY_PASSWORD} | base64)\"}}}" > /kaniko/.docker/config.json
-    needs: []
-    script:
-        - /kaniko/executor --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/Dockerfile --destination $CI_REGISTRY_IMAGE/base:$CI_COMMIT_SHA --destination $CI_REGISTRY_IMAGE/base:latest --cache=true
-
 docker:
     stage: image
     image:
@@ -87,7 +72,7 @@ docker:
     before_script:
         - mkdir -p /kaniko/.docker
         - echo "{\"auths\":{\"$CI_REGISTRY\":{\"auth\":\"$(echo -n ${CI_REGISTRY_USER}:${CI_REGISTRY_PASSWORD} | base64)\"}}}" > /kaniko/.docker/config.json
-    needs: ["build", "misc"]
+    needs: ["build"]
     script:
         - /kaniko/executor --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/foxbot/Dockerfile --destination $CI_REGISTRY_IMAGE/bot:$CI_COMMIT_SHA --destination $CI_REGISTRY_IMAGE/bot:latest --cache=true
         - /kaniko/executor --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/foxbot-background-worker/Dockerfile --destination $CI_REGISTRY_IMAGE/background-worker:$CI_COMMIT_SHA --destination $CI_REGISTRY_IMAGE/background-worker:latest --cache=true
