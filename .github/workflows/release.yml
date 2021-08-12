@@ -2,8 +2,6 @@ name: Release
 
 on:
   push:
-    branches:
-      - main
 
 env:
   CARGO_TERM_COLOR: always
@@ -11,6 +9,9 @@ env:
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
 
     steps:
       - uses: actions/checkout@v2
@@ -22,19 +23,69 @@ jobs:
             target/
           key: ${{ runner.os }}-release-${{ hashFiles('Cargo.lock') }}
 
-      - uses: actions-rs/toolchain@v1
+      - name: Get stable toolchain
+        uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
 
-      - uses: actions-rs/cargo@v1
+      - name: Build binaries
+        uses: actions-rs/cargo@v1
         with:
           command: build
           args: --release
 
-      - uses: actions/upload-artifact@v2
-        with:
-          path: target/release/foxbot
+      - name: Move binaries
+        run: |
+          mv target/release/foxbot foxbot/foxbot
+          mv target/release/foxbot-background-worker foxbot-background-worker/foxbot-background-worker
 
-      - uses: actions/upload-artifact@v2
+      - name: Upload binaries
+        uses: actions/upload-artifact@v2
         with:
-          path: target/release/foxbot-background-worker
+          name: binaries
+          path: |
+            foxbot/foxbot
+            foxbot-background-worker/foxbot-background-worker
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v1
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract FoxBot metadata for Docker
+        id: meta-foxbot
+        uses: docker/metadata-action@v3
+        with:
+          images: ghcr.io/syfaro/foxbot
+          tags: |
+            type=raw,value=latest
+            type=sha,enable=true,priority=100,prefix=,suffix=,format=long
+
+      - name: Extract FoxBot Background Worker metadata for Docker
+        id: meta-foxbot-background-worker
+        uses: docker/metadata-action@v3
+        with:
+          images: ghcr.io/syfaro/foxbot-background-worker
+          tags: |
+            type=raw,value=latest
+            type=sha,enable=true,priority=100,prefix=,suffix=,format=long
+
+      - name: Build and push FoxBot Docker image
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta-foxbot.outputs.tags }}
+          labels: ${{ steps.meta-foxbot.outputs.labels }}
+          file: foxbot/Dockerfile
+
+      - name: Build and push FoxBot Background Worker Docker image
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta-foxbot-background-worker.outputs.tags }}
+          labels: ${{ steps.meta-foxbot-background-worker.outputs.labels }}
+          file: foxbot-background-worker/Dockerfile
