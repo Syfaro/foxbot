@@ -8,7 +8,7 @@ env:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     permissions:
       contents: read
       packages: write
@@ -59,18 +59,12 @@ jobs:
         uses: docker/metadata-action@v3
         with:
           images: ghcr.io/syfaro/foxbot
-          tags: |
-            type=raw,value=latest
-            type=sha,enable=true,priority=100,prefix=,suffix=,format=long
 
       - name: Extract FoxBot Background Worker metadata for Docker
         id: meta-foxbot-background-worker
         uses: docker/metadata-action@v3
         with:
           images: ghcr.io/syfaro/foxbot-background-worker
-          tags: |
-            type=raw,value=latest
-            type=sha,enable=true,priority=100,prefix=,suffix=,format=long
 
       - name: Build and push FoxBot Docker image
         uses: docker/build-push-action@v2
