@@ -14,7 +14,7 @@ opentelemetry = { version = "0.15", features = ["rt-tokio"] }
 opentelemetry-jaeger = { version = "0.14", features = ["tokio"] }
 tracing-opentelemetry = "0.14"
 
-sentry = { version = "0.23", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "reqwest", "rustls"] }
+sentry = { version = "0.23", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "reqwest"] }
 sentry-tracing = "0.23"
 
 serde = { version = "1", features = ["derive"] }
@@ -25,7 +25,7 @@ fluent = "0.12"
 unic-langid = "0.9"
 dotenv = { version = "0.15", optional = true }
 
-sqlx = { version = "0.5", default-features = false, features = ["runtime-tokio-rustls", "macros", "postgres", "offline", "json"] }
+sqlx = { version = "0.5", default-features = false, features = ["runtime-tokio-native-tls", "macros", "postgres", "offline", "json"] }
 
 rusoto_core = "0.47"
 rusoto_credential = "0.47"

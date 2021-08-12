@@ -23,7 +23,7 @@ handlebars = { version = "4", features = ["dir_source"] }
 dotenv = { version = "0.15", optional = true }
 base64 = "0.13"
 
-sentry = { version = "0.23", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "reqwest", "rustls"] }
+sentry = { version = "0.23", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "reqwest"] }
 sentry-tracing = "0.23"
 uuid = "0.8"
 anyhow = "1"
@@ -52,7 +52,7 @@ tracing-opentelemetry = "0.14"
 opentelemetry-http = "0.4"
 
 redis = { version = "0.21", features = ["connection-manager", "tokio-comp"] }
-sqlx = { version = "0.5", default-features = false, features = ["runtime-tokio-rustls", "macros", "postgres", "offline", "json", "migrate", "time"] }
+sqlx = { version = "0.5", default-features = false, features = ["runtime-tokio-native-tls", "macros", "postgres", "offline", "json", "migrate", "time"] }
 
 rusoto_core = "0.47"
 rusoto_credential = "0.47"
