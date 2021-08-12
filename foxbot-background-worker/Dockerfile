@@ -1,4 +1,4 @@
-FROM registry.huefox.com/project/foxbot/base
+FROM debian:slim
 WORKDIR /app
 COPY ./langs ./langs
 COPY ./foxbot-background-worker/foxbot-background-worker /bin/foxbot-background-worker
