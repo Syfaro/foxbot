@@ -1,6 +1,6 @@
 [package]
 name = "foxbot"
-version = "0.3.1"
+version = "0.4.1"
 authors = ["Syfaro <syfaro@huefox.com>"]
 edition = "2018"
 publish = false
@@ -23,7 +23,8 @@ handlebars = { version = "4", features = ["dir_source"] }
 dotenv = { version = "0.15", optional = true }
 base64 = "0.13"
 
-sentry = { version = "0.22", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "reqwest", "debug-logs"] }
+sentry = { version = "0.23", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "reqwest"] }
+sentry-tracing = "0.23"
 uuid = "0.8"
 anyhow = "1"
 lazy_static = "1"
@@ -33,7 +34,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 envy = "0.4"
 
-egg-mode = { git = "https://github.com/egg-mode-rs/egg-mode" }
+egg-mode = "0.16"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 futures = "0.3"
@@ -45,21 +46,21 @@ fuzzysearch = { git = "https://github.com/Syfaro/fuzzysearch-rs", features = ["t
 tracing = "0.1"
 tracing-log = "0.1.2"
 tracing-subscriber = "0.2"
-opentelemetry = { version = "0.13", features = ["rt-tokio"] }
-opentelemetry-jaeger = { version = "0.12", features = ["tokio"] }
-tracing-opentelemetry = "0.12"
-opentelemetry-http = "0.2"
+opentelemetry = { version = "0.15", features = ["rt-tokio"] }
+opentelemetry-jaeger = { version = "0.14", features = ["tokio"] }
+tracing-opentelemetry = "0.14"
+opentelemetry-http = "0.4"
 
-redis = { version = "0.20", features = ["connection-manager", "tokio-comp"] }
-sqlx = { version = "0.5", default-features = false, features = ["runtime-tokio-rustls", "macros", "postgres", "offline", "json", "migrate", "time"] }
+redis = { version = "0.21", features = ["connection-manager", "tokio-comp"] }
+sqlx = { version = "0.5", default-features = false, features = ["runtime-tokio-native-tls", "macros", "postgres", "offline", "json", "migrate", "time"] }
 
-rusoto_core = "0.46"
-rusoto_credential = "0.46"
-rusoto_s3 = "0.46"
+rusoto_core = "0.47"
+rusoto_credential = "0.47"
+rusoto_s3 = "0.47"
 
 actix-web = "4.0.0-beta.5"
 actix-http = "3.0.0-beta.5"
-tracing-actix-web = "0.4.0-beta.4"
+tracing-actix-web = { version = "0.4.0-beta.4", features = ["opentelemetry_0_15"] }
 actix-web-httpauth = "0.6.0-beta.1"
 
 foxbot-sites = { path = "../foxbot-sites" }

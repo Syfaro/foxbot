@@ -136,6 +136,7 @@ fn configure_tracing(collector: String) {
         let subscriber = tracing_subscriber::Registry::default()
             .with(env_filter)
             .with(trace)
+            .with(sentry_tracing::layer())
             .with(subscriber);
         tracing::subscriber::set_global_default(subscriber).unwrap();
     } else {
@@ -143,6 +144,7 @@ fn configure_tracing(collector: String) {
         let subscriber = tracing_subscriber::Registry::default()
             .with(env_filter)
             .with(trace)
+            .with(sentry_tracing::layer())
             .with(subscriber);
         tracing::subscriber::set_global_default(subscriber).unwrap();
     }
@@ -333,9 +335,9 @@ async fn main() {
     let _guard = config.sentry_dsn.as_ref().map(|sentry_dsn| {
         sentry::init(sentry::ClientOptions {
             dsn: Some(sentry_dsn.parse().unwrap()),
-            debug: true,
-            release: option_env!("RELEASE").map(std::borrow::Cow::from),
+            release: sentry::release_name!(),
             attach_stacktrace: true,
+            session_mode: sentry::SessionMode::Request,
             ..Default::default()
         })
     });
@@ -571,7 +573,7 @@ impl MessageHandler {
                 Err(e) => {
                     tracing::error!("unable to get error message-id to edit: {:?}", e);
                     with_user_scope(message.from.as_ref(), &e.into(), None, |err| {
-                        sentry::integrations::anyhow::capture_anyhow(&err);
+                        sentry::integrations::anyhow::capture_anyhow(err);
                     });
 
                     return;
@@ -590,7 +592,7 @@ impl MessageHandler {
             if let Err(e) = self.make_request(&edit_message).await {
                 tracing::error!("unable to edit error message to user: {:?}", e);
                 with_user_scope(message.from.as_ref(), &e.into(), None, |err| {
-                    sentry::integrations::anyhow::capture_anyhow(&err);
+                    sentry::integrations::anyhow::capture_anyhow(err);
                 });
 
                 let _ = conn.del::<_, ()>(&key_list).await;
@@ -619,7 +621,7 @@ impl MessageHandler {
                 Err(e) => {
                     tracing::error!("unable to send error message to user: {:?}", e);
                     with_user_scope(message.from.as_ref(), &e.into(), None, |err| {
-                        sentry::integrations::anyhow::capture_anyhow(&err);
+                        sentry::integrations::anyhow::capture_anyhow(err);
                     });
                 }
             }
@@ -726,12 +728,24 @@ impl MessageHandler {
         let chat = chat_from_update(&update);
 
         if let Some(user) = user {
+            sentry::configure_scope(|scope| {
+                scope.set_user(Some(sentry::User {
+                    id: Some(user.id.to_string()),
+                    username: user.username.clone(),
+                    ..Default::default()
+                }));
+            });
+        }
+
+        if let Some(user) = user {
             tracing::Span::current().record("user_id", &user.id);
         }
 
         if let Some(chat) = chat {
             tracing::Span::current().record("chat_id", &chat.id);
         }
+
+        sentry::start_session();
 
         let command = update
             .message
@@ -763,9 +777,6 @@ impl MessageHandler {
                     hist.stop_and_record();
 
                     let mut tags = vec![("handler", handler.name().to_string())];
-                    if let Some(user) = user {
-                        tags.push(("user_id", user.id.to_string()));
-                    }
                     if let Some(chat) = chat {
                         tags.push(("chat_id", chat.id.to_string()));
                     }
@@ -774,7 +785,7 @@ impl MessageHandler {
                     }
 
                     if let Some(msg) = &update.message {
-                        self.report_error(msg, err, Some(tags), |err| capture_anyhow(&err))
+                        self.report_error(msg, err, Some(tags), |err| capture_anyhow(err))
                             .await;
                     } else {
                         capture_anyhow(&err);
@@ -787,6 +798,8 @@ impl MessageHandler {
                 }
             }
         }
+
+        sentry::end_session();
     }
 
     pub async fn make_request<T>(&self, request: &T) -> Result<T::Response, Error>

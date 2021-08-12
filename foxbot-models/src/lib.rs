@@ -751,20 +751,20 @@ impl CachedPost {
         cdn_url: &str,
         thumb: bool,
         dimensions: (u32, u32),
-    ) -> anyhow::Result<i32> {
-        let row = sqlx::query!(
+    ) -> anyhow::Result<()> {
+        sqlx::query!(
             "INSERT INTO cached_post (post_url, thumb, cdn_url, width, height) VALUES
-                ($1, $2, $3, $4, $5) RETURNING id",
+                ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
             post_url,
             thumb,
             cdn_url,
             dimensions.0 as i64,
             dimensions.1 as i64
         )
-        .fetch_one(conn)
+        .execute(conn)
         .await?;
 
-        Ok(row.id)
+        Ok(())
     }
 }
 

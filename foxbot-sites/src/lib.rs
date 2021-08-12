@@ -1449,7 +1449,7 @@ struct DeviantArtOEmbed {
     width: AlwaysNum,
     height: AlwaysNum,
     title: String,
-    tags: String,
+    tags: Option<String>,
     author_name: String,
     author_url: String,
 }
@@ -1526,12 +1526,11 @@ impl Site for DeviantArt {
             artist_username: Some(resp.author_name),
             artist_url: Some(resp.author_url),
             title: Some(resp.title),
-            tags: Some(
-                resp.tags
-                    .split(", ")
+            tags: resp.tags.map(|tags| {
+                tags.split(", ")
                     .map(std::string::ToString::to_string)
-                    .collect(),
-            ),
+                    .collect()
+            }),
             ..Default::default()
         }]))
     }

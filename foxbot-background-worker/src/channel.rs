@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
 use anyhow::Context;
-use foxbot_models::{GroupConfig, GroupConfigKey};
 use tgbotapi::requests::GetChatMember;
+
+use foxbot_models::{GroupConfig, GroupConfigKey};
+use foxbot_utils::has_similar_hash;
 
 use crate::*;
 
@@ -17,6 +19,8 @@ pub async fn process_channel_update(handler: Arc<Handler>, job: faktory::Job) ->
     let message: tgbotapi::Message = serde_json::value::from_value(data)?;
 
     tracing::trace!("got enqueued message: {:?}", message);
+
+    let has_linked_chat = crate::group::store_linked_chat(&handler, &message).await?;
 
     // Photos should exist for job to be enqueued.
     let sizes = match &message.photo {
@@ -102,7 +106,11 @@ pub async fn process_channel_update(handler: Arc<Handler>, job: faktory::Job) ->
         firsts,
     })?;
 
-    let mut job = faktory::Job::new("channel_edit", vec![data]).on_queue("foxbot_background");
+    let mut job = faktory::Job::new(
+        "channel_edit",
+        vec![data, serde_json::to_value(has_linked_chat).unwrap()],
+    )
+    .on_queue("foxbot_background");
     job.custom = get_faktory_custom();
 
     handler.enqueue(job).await;
@@ -112,12 +120,9 @@ pub async fn process_channel_update(handler: Arc<Handler>, job: faktory::Job) ->
 
 #[tracing::instrument(skip(handler, job), fields(job_id = job.id()))]
 pub async fn process_channel_edit(handler: Arc<Handler>, job: faktory::Job) -> Result<(), Error> {
-    let data: serde_json::Value = job
-        .args()
-        .iter()
-        .next()
-        .ok_or(Error::MissingData)?
-        .to_owned();
+    let mut args = job.args().iter();
+
+    let data: serde_json::Value = args.next().ok_or(Error::MissingData)?.to_owned();
 
     tracing::trace!("got enqueued edit: {:?}", data);
 
@@ -141,9 +146,17 @@ pub async fn process_channel_edit(handler: Arc<Handler>, job: faktory::Job) -> R
         return Ok(());
     }
 
+    let has_linked_chat: bool = args
+        .next()
+        .map(|has_linked_chat| has_linked_chat.to_owned())
+        .map(|has_linked_chat| serde_json::from_value(has_linked_chat).unwrap())
+        .unwrap_or(false);
+
+    tracing::trace!(has_linked_chat, "evaluating if chat is linked");
+
     // If this photo was part of a media group, we should set a caption on
     // the image because we can't make an inline keyboard on it.
-    let resp = if media_group_id.is_some() {
+    let resp = if has_linked_chat || media_group_id.is_some() {
         let caption = firsts
             .into_iter()
             .map(|(_site, url)| url)
@@ -299,61 +312,6 @@ async fn already_had_source(
     );
 
     Ok(source_count > added_links)
-}
-
-/// Check if any of the provided image URLs have a hash similar to the given
-/// input.
-#[tracing::instrument(skip(urls))]
-async fn has_similar_hash(to: i64, urls: &[&str]) -> bool {
-    let to = to.to_be_bytes();
-
-    for url in urls {
-        let check_size = CheckFileSize::new(url, 50_000_000);
-        let bytes = match check_size.into_bytes().await {
-            Ok(bytes) => bytes,
-            Err(err) => {
-                tracing::warn!("unable to download image: {:?}", err);
-
-                continue;
-            }
-        };
-
-        let hash = tokio::task::spawn_blocking(move || {
-            use std::convert::TryInto;
-
-            let hasher = fuzzysearch::get_hasher();
-
-            let im = match image::load_from_memory(&bytes) {
-                Ok(im) => im,
-                Err(err) => {
-                    tracing::warn!("unable to load image: {:?}", err);
-
-                    return None;
-                }
-            };
-
-            let hash = hasher.hash_image(&im);
-            let bytes: [u8; 8] = hash.as_bytes().try_into().unwrap_or_default();
-
-            Some(bytes)
-        })
-        .in_current_span()
-        .await
-        .unwrap_or_default();
-
-        let hash = match hash {
-            Some(hash) => hash,
-            _ => continue,
-        };
-
-        if hamming::distance_fast(&to, &hash).unwrap() <= 3 {
-            tracing::debug!(url, hash = i64::from_be_bytes(hash), "hashes were similar");
-
-            return true;
-        }
-    }
-
-    false
 }
 
 /// Store if bot has edit permissions in channel.

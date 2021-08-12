@@ -328,9 +328,19 @@ pub fn add_sentry_tracing(scope: &mut sentry::Scope) {
         )
     });
 
-    let header_value = headers.get("uber-trace-id").unwrap();
-    let trace_id = header_value.to_str().unwrap();
-    scope.set_extra("uber-trace-id", trace_id.to_owned().into());
+    for (name, value) in headers {
+        let name = match name {
+            Some(name) => name,
+            None => continue,
+        };
+
+        let value = match value.to_str() {
+            Ok(value) => value,
+            Err(_err) => continue,
+        };
+
+        scope.set_extra(&name.to_string(), value.into());
+    }
 }
 
 /// Tags to add to a sentry event.
@@ -478,7 +488,7 @@ pub fn continuous_action(
                         if let Err(e) = bot.make_request(&chat_action).await {
                             tracing::warn!("unable to send chat action: {:?}", e);
                             with_user_scope(user.as_ref(), &e.into(), None, |err| {
-                                sentry::integrations::anyhow::capture_anyhow(&err);
+                                sentry::integrations::anyhow::capture_anyhow(err);
                             });
                         }
                     }),
@@ -655,6 +665,61 @@ pub fn sort_results_by(order: &[Sites], results: &mut [fuzzysearch::File], site_
             a_dist.cmp(&b_dist)
         }
     });
+}
+
+/// Check if any of the provided image URLs have a hash similar to the given
+/// input.
+#[tracing::instrument(skip(urls))]
+pub async fn has_similar_hash(to: i64, urls: &[&str]) -> bool {
+    let to = to.to_be_bytes();
+
+    for url in urls {
+        let check_size = CheckFileSize::new(url, 50_000_000);
+        let bytes = match check_size.into_bytes().await {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                tracing::warn!("unable to download image: {:?}", err);
+
+                continue;
+            }
+        };
+
+        let hash = tokio::task::spawn_blocking(move || {
+            use std::convert::TryInto;
+
+            let hasher = fuzzysearch::get_hasher();
+
+            let im = match image::load_from_memory(&bytes) {
+                Ok(im) => im,
+                Err(err) => {
+                    tracing::warn!("unable to load image: {:?}", err);
+
+                    return None;
+                }
+            };
+
+            let hash = hasher.hash_image(&im);
+            let bytes: [u8; 8] = hash.as_bytes().try_into().unwrap_or_default();
+
+            Some(bytes)
+        })
+        .in_current_span()
+        .await
+        .unwrap_or_default();
+
+        let hash = match hash {
+            Some(hash) => hash,
+            _ => continue,
+        };
+
+        if hamming::distance_fast(&to, &hash).unwrap() <= 3 {
+            tracing::debug!(url, hash = i64::from_be_bytes(hash), "hashes were similar");
+
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Get the first match for each site.

@@ -10,11 +10,11 @@ anyhow = "1"
 tracing = "0.1"
 tracing-futures = "0.2"
 
-opentelemetry = "0.13"
-tracing-opentelemetry = "0.12"
-opentelemetry-http = "0.2"
+opentelemetry = "0.15"
+tracing-opentelemetry = "0.14"
+opentelemetry-http = "0.4"
 
-sentry = { version = "0.22", features = ["anyhow"] }
+sentry = { version = "0.23", features = ["anyhow"] }
 
 futures = "0.3"
 tokio = { version = "1", features = ["sync"] }
@@ -32,11 +32,11 @@ hex = "0.4"
 hamming = "0.1"
 serde_json = "1"
 
-sqlx = { version = "0.5", default-features = false, features = ["runtime-tokio-rustls", "macros", "postgres", "json"] }
-redis = { version = "0.20", features = ["connection-manager", "tokio-comp"] }
+sqlx = { version = "0.5", default-features = false, features = ["macros", "postgres", "json"] }
+redis = { version = "0.21", features = ["connection-manager", "tokio-comp"] }
 
 reqwest = { version = "0.11", features = ["json"] }
-rusoto_s3 = "0.46"
+rusoto_s3 = "0.47"
 
 tgbotapi = { git = "https://github.com/Syfaro/tgbotapi-rs" }
 fuzzysearch = { git = "https://github.com/Syfaro/fuzzysearch-rs", features = ["trace", "local_hash"] }

@@ -5,6 +5,7 @@ use tgbotapi::requests::GetChat;
 
 use crate::*;
 use foxbot_models::{FileCache, GroupConfig, GroupConfigKey, MediaGroup};
+use foxbot_utils::has_similar_hash;
 
 #[tracing::instrument(skip(handler, job), fields(job_id = job.id(), chat_id))]
 pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Result<(), Error> {
@@ -26,7 +27,7 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
 
     if let Err(err) = store_linked_chat(&handler, &message).await {
         tracing::error!(
-            "could not update bot knowledge of chat linked channel: {:?}",
+            "could not update bot knowledge of chat linked chat: {:?}",
             err
         );
     }
@@ -83,15 +84,14 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
     }
 
     let best_photo = find_best_photo(photo_sizes).unwrap();
-    let mut matches = match_image(
+    let (searched_hash, mut matches) = match_image(
         &handler.telegram,
         &handler.redis,
         &handler.fuzzysearch,
         best_photo,
         Some(3),
     )
-    .await?
-    .1;
+    .await?;
     sort_results(&handler.conn, message.from.as_ref().unwrap(), &mut matches).await?;
 
     let wanted_matches = matches
@@ -105,7 +105,7 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
     }
 
     let links = extract_links(&message);
-    let sites = handler.sites.lock().await;
+    let mut sites = handler.sites.lock().await;
 
     if wanted_matches
         .iter()
@@ -113,6 +113,23 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
     {
         tracing::debug!("group message already contained valid links");
         return Ok(());
+    }
+
+    if !links.is_empty() {
+        let mut results: Vec<foxbot_sites::PostInfo> = Vec::new();
+        let _ = find_images(&tgbotapi::User::default(), links, &mut sites, &mut |info| {
+            results.extend(info.results);
+        })
+        .await;
+
+        let urls: Vec<_> = results
+            .iter()
+            .map::<&str, _>(|result| &result.url)
+            .collect();
+        if has_similar_hash(searched_hash, &urls).await {
+            tracing::debug!("url in post contained similar hash");
+            return Ok(());
+        }
     }
 
     drop(sites);
@@ -270,20 +287,24 @@ pub async fn process_group_source(handler: Arc<Handler>, job: faktory::Job) -> R
     }
 }
 
-/// Check if group is linked to a channel.
+/// Check if one chat is linked to another chat.
+///
+/// Returns if the message was sent to a chat linked to a different chat.
 #[tracing::instrument(skip(handler, message))]
-async fn store_linked_chat(handler: &Handler, message: &tgbotapi::Message) -> anyhow::Result<()> {
-    if GroupConfig::get::<Option<i64>, _>(
+pub async fn store_linked_chat(
+    handler: &Handler,
+    message: &tgbotapi::Message,
+) -> anyhow::Result<bool> {
+    if let Some(linked_chat) = GroupConfig::get::<Option<i64>, _>(
         &handler.conn,
         &message.chat,
         GroupConfigKey::HasLinkedChat,
     )
     .await
-    .context("could not check if chat had known linked channel")?
-    .is_some()
+    .context("could not check if had known linked chat")?
     {
-        tracing::trace!("already knew if chat had linked channel");
-        return Ok(());
+        tracing::trace!("already knew if had linked chat");
+        return Ok(linked_chat.is_some());
     }
 
     let chat = handler
@@ -295,9 +316,9 @@ async fn store_linked_chat(handler: &Handler, message: &tgbotapi::Message) -> an
         .context("could not get chat information")?;
 
     if let Some(linked_chat_id) = chat.linked_chat_id {
-        tracing::debug!(linked_chat_id, "discovered chat had linked channel");
+        tracing::debug!(linked_chat_id, "discovered linked chat");
     } else {
-        tracing::debug!("chat did not have linked channel");
+        tracing::debug!("no linked chat found");
     }
 
     GroupConfig::set(
@@ -309,7 +330,7 @@ async fn store_linked_chat(handler: &Handler, message: &tgbotapi::Message) -> an
     .await
     .context("could not save linked chat information")?;
 
-    Ok(())
+    Ok(chat.linked_chat_id.is_some())
 }
 
 /// Check if the message was a forward from a chat, and if it was, check if we
@@ -539,7 +560,7 @@ pub async fn process_group_mediagroup_check(
         return Ok(());
     }
 
-    let messages = MediaGroup::get_messages(&handler.conn, &media_group_id).await?;
+    let messages = MediaGroup::get_messages(&handler.conn, media_group_id).await?;
     let first_message = &messages.first().as_ref().unwrap().message;
 
     let lang_code = first_message
@@ -727,7 +748,7 @@ pub async fn process_group_mediagroup_prune(
             message_id = message.message.message_id,
             "deleting photo from message"
         );
-        let best_photo = find_best_photo(&message.message.photo.as_deref().unwrap()).unwrap();
+        let best_photo = find_best_photo(message.message.photo.as_deref().unwrap()).unwrap();
 
         let path = format!("mg/{}/{}", media_group_id, best_photo.file_id);
         let delete = rusoto_s3::DeleteObjectRequest {

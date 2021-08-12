@@ -194,7 +194,7 @@ async fn save_sessions(path: &Option<String>, sessions: Sessions) -> anyhow::Res
 
     let contents = serde_json::to_string(&sessions)?;
     let mut f = tokio::fs::File::create(path).await?;
-    f.write_all(&contents.as_bytes()).await?;
+    f.write_all(contents.as_bytes()).await?;
     Ok(())
 }
 
@@ -234,7 +234,7 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
                 return Ok(());
             }
 
-            if !is_pm(&ctx, msg.channel_id).await? && !is_mention(&ctx, &msg).await? {
+            if !is_pm(&ctx, msg.channel_id).await? && !is_mention(&ctx, msg).await? {
                 return Ok(());
             }
 
@@ -379,7 +379,7 @@ impl std::fmt::Display for UserErrorMessage<'_> {
 /// Download an attachment up to 50MB, attempt to load the image, and hash the
 /// contents into something suitable for FuzzySearch.
 async fn hash_attachment<'a>(proxy_url: &str) -> Result<i64, UserErrorMessage<'a>> {
-    let check_bytes = CheckFileSize::new(&proxy_url, 50_000_000);
+    let check_bytes = CheckFileSize::new(proxy_url, 50_000_000);
     let bytes = check_bytes
         .into_bytes()
         .await
@@ -400,7 +400,7 @@ fn lookup_hash(
     distance: Option<i64>,
 ) -> impl std::future::Future<Output = Result<Vec<fuzzysearch::File>, UserErrorMessage<'static>>> + '_
 {
-    lookup_single_hash(&fuzzysearch, hash, distance)
+    lookup_single_hash(fuzzysearch, hash, distance)
         .map_err(|err| UserErrorMessage::new(err, "Unable to look up sources"))
 }
 
@@ -505,7 +505,7 @@ async fn get_cached_attachments(
     message_id: MessageId,
 ) -> Result<Vec<Attachment>, UserErrorMessage<'static>> {
     if let Some(message) = ctx.cache.message(channel_id, message_id) {
-        return Ok(message.attachments.clone());
+        return Ok(message.attachments);
     }
 
     let message = match ctx
@@ -525,7 +525,7 @@ async fn get_cached_attachments(
 }
 
 async fn allow_nsfw(ctx: &Context, channel_id: ChannelId) -> Option<bool> {
-    if is_pm(&ctx, channel_id).await.ok()? {
+    if is_pm(ctx, channel_id).await.ok()? {
         return Some(true);
     }
 
@@ -541,7 +541,7 @@ async fn source_attachments(
     content_id: MessageId,
     attachments: &[Attachment],
 ) -> anyhow::Result<()> {
-    let allow_nsfw = allow_nsfw(&ctx, channel_id).await.unwrap_or(false);
+    let allow_nsfw = allow_nsfw(ctx, channel_id).await.unwrap_or(false);
     let mut skip_delete = false;
 
     for attachment in attachments {
@@ -583,7 +583,7 @@ async fn source_attachments(
             continue;
         }
 
-        let embed = sources_embed(&attachment, &files)
+        let embed = sources_embed(attachment, &files)
             .map_err(|err| UserErrorMessage::new(err, "Unable to properly respond"))?;
 
         ctx.http
@@ -594,7 +594,7 @@ async fn source_attachments(
     }
 
     if !skip_delete
-        && matches!(guild_id, Some(guild_id) if summoning_id != content_id && can_manage_messages(&ctx, guild_id).unwrap_or(false))
+        && matches!(guild_id, Some(guild_id) if summoning_id != content_id && can_manage_messages(ctx, guild_id).unwrap_or(false))
     {
         ctx.http.delete_message(channel_id, summoning_id).await?;
     }
@@ -606,7 +606,7 @@ async fn source_attachments(
 fn extract_links(content: &str) -> Option<Vec<&str>> {
     let finder = linkify::LinkFinder::new();
 
-    let links: Vec<_> = finder.links(&content).map(|link| link.as_str()).collect();
+    let links: Vec<_> = finder.links(content).map(|link| link.as_str()).collect();
 
     if links.is_empty() {
         None
@@ -640,7 +640,7 @@ where
                 match images {
                     Some(results) => {
                         callback(SiteCallback {
-                            site: &site,
+                            site,
                             link,
                             duration: start.elapsed().as_millis() as i64,
                             results,
@@ -686,7 +686,7 @@ async fn mirror_links(
 ) -> anyhow::Result<()> {
     let mut results: Vec<foxbot_sites::PostInfo> = Vec::with_capacity(links.len());
 
-    let _missing = get_images(&ctx, user_id, links, &mut |info| {
+    let _missing = get_images(ctx, user_id, links, &mut |info| {
         results.extend(info.results);
     })
     .await?;
@@ -699,7 +699,7 @@ async fn mirror_links(
             .await?;
     }
 
-    if matches!(guild_id, Some(guild_id) if summoning_id != content_id && can_manage_messages(&ctx, guild_id).unwrap_or(false))
+    if matches!(guild_id, Some(guild_id) if summoning_id != content_id && can_manage_messages(ctx, guild_id).unwrap_or(false))
     {
         ctx.http.delete_message(channel_id, summoning_id).await?;
     }

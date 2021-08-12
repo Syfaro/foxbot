@@ -657,6 +657,22 @@
       ]
     }
   },
+  "7e48c8b3a748b8e1943ab8e3289f752ff5801bae741f66d2698d44fd49f8a772": {
+    "query": "INSERT INTO cached_post (post_url, thumb, cdn_url, width, height) VALUES\n                ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Text",
+          "Bool",
+          "Text",
+          "Int4",
+          "Int4"
+        ]
+      },
+      "nullable": []
+    }
+  },
   "7f9bdd51e9430d93edebd6180a5ac2ad0d7172ebaf5bab5bffd44d447771518a": {
     "query": "UPDATE videos SET job_id = $1 WHERE id = $2",
     "describe": {
