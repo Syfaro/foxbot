@@ -27,7 +27,7 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
 
     if let Err(err) = store_linked_chat(&handler, &message).await {
         tracing::error!(
-            "could not update bot knowledge of chat linked channel: {:?}",
+            "could not update bot knowledge of chat linked chat: {:?}",
             err
         );
     }
@@ -292,20 +292,24 @@ pub async fn process_group_source(handler: Arc<Handler>, job: faktory::Job) -> R
     }
 }
 
-/// Check if group is linked to a channel.
+/// Check if one chat is linked to another chat.
+///
+/// Returns if the message was sent to a chat linked to a different chat.
 #[tracing::instrument(skip(handler, message))]
-async fn store_linked_chat(handler: &Handler, message: &tgbotapi::Message) -> anyhow::Result<()> {
-    if GroupConfig::get::<Option<i64>>(
+pub async fn store_linked_chat(
+    handler: &Handler,
+    message: &tgbotapi::Message,
+) -> anyhow::Result<bool> {
+    if let Some(linked_chat) = GroupConfig::get::<Option<i64>>(
         &handler.conn,
         message.chat.id,
         GroupConfigKey::HasLinkedChat,
     )
     .await
-    .context("could not check if chat had known linked channel")?
-    .is_some()
+    .context("could not check if had known linked chat")?
     {
-        tracing::trace!("already knew if chat had linked channel");
-        return Ok(());
+        tracing::trace!("already knew if had linked chat");
+        return Ok(linked_chat.is_some());
     }
 
     let chat = handler
@@ -317,9 +321,9 @@ async fn store_linked_chat(handler: &Handler, message: &tgbotapi::Message) -> an
         .context("could not get chat information")?;
 
     if let Some(linked_chat_id) = chat.linked_chat_id {
-        tracing::debug!(linked_chat_id, "discovered chat had linked channel");
+        tracing::debug!(linked_chat_id, "discovered linked chat");
     } else {
-        tracing::debug!("chat did not have linked channel");
+        tracing::debug!("no linked chat found");
     }
 
     GroupConfig::set(
@@ -331,7 +335,7 @@ async fn store_linked_chat(handler: &Handler, message: &tgbotapi::Message) -> an
     .await
     .context("could not save linked chat information")?;
 
-    Ok(())
+    Ok(chat.linked_chat_id.is_some())
 }
 
 /// Check if the message was a forward from a chat, and if it was, check if we

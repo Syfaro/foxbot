@@ -2,8 +2,8 @@ name: Release
 
 on:
   push:
-    tags:
-      - "*"
+    branches:
+      - main
 
 env:
   CARGO_TERM_COLOR: always

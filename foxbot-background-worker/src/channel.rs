@@ -20,6 +20,8 @@ pub async fn process_channel_update(handler: Arc<Handler>, job: faktory::Job) ->
 
     tracing::trace!("got enqueued message: {:?}", message);
 
+    let has_linked_chat = crate::group::store_linked_chat(&handler, &message).await?;
+
     // Photos should exist for job to be enqueued.
     let sizes = match &message.photo {
         Some(photo) => photo,
@@ -104,7 +106,11 @@ pub async fn process_channel_update(handler: Arc<Handler>, job: faktory::Job) ->
         firsts,
     })?;
 
-    let mut job = faktory::Job::new("channel_edit", vec![data]).on_queue("foxbot_background");
+    let mut job = faktory::Job::new(
+        "channel_edit",
+        vec![data, serde_json::to_value(has_linked_chat).unwrap()],
+    )
+    .on_queue("foxbot_background");
     job.custom = get_faktory_custom();
 
     handler.enqueue(job).await;
@@ -114,12 +120,9 @@ pub async fn process_channel_update(handler: Arc<Handler>, job: faktory::Job) ->
 
 #[tracing::instrument(skip(handler, job), fields(job_id = job.id()))]
 pub async fn process_channel_edit(handler: Arc<Handler>, job: faktory::Job) -> Result<(), Error> {
-    let data: serde_json::Value = job
-        .args()
-        .iter()
-        .next()
-        .ok_or(Error::MissingData)?
-        .to_owned();
+    let mut args = job.args().iter();
+
+    let data: serde_json::Value = args.next().ok_or(Error::MissingData)?.to_owned();
 
     tracing::trace!("got enqueued edit: {:?}", data);
 
@@ -143,9 +146,17 @@ pub async fn process_channel_edit(handler: Arc<Handler>, job: faktory::Job) -> R
         return Ok(());
     }
 
+    let has_linked_chat: bool = args
+        .next()
+        .map(|has_linked_chat| has_linked_chat.to_owned())
+        .map(|has_linked_chat| serde_json::from_value(has_linked_chat).unwrap())
+        .unwrap_or(false);
+
+    tracing::trace!(has_linked_chat, "evaluating if chat is linked");
+
     // If this photo was part of a media group, we should set a caption on
     // the image because we can't make an inline keyboard on it.
-    let resp = if media_group_id.is_some() {
+    let resp = if has_linked_chat || media_group_id.is_some() {
         let caption = firsts
             .into_iter()
             .map(|(_site, url)| url)
