@@ -207,7 +207,7 @@ async fn upload_image(
     };
 
     use rusoto_s3::S3;
-    s3.put_object(put).await.unwrap();
+    s3.put_object(put).await?;
 
     let cdn_url = format!("{}/{}/{}", s3_url, s3_bucket, key);
 
