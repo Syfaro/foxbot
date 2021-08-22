@@ -3,11 +3,11 @@ use std::sync::Arc;
 use fluent::fluent_args;
 
 use crate::*;
-use foxbot_models::Subscriptions;
+use foxbot_models::{Subscriptions, User};
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct HashNotify {
-    user_id: i64,
+    telegram_id: i64,
     text: String,
     message_id: Option<i32>,
     photo_id: Option<String>,
@@ -105,7 +105,7 @@ pub async fn process_hash_new(handler: Arc<Handler>, job: faktory::Job) -> Resul
 
     for sub in subscriptions {
         let data = serde_json::to_value(&HashNotify {
-            user_id: sub.user_id,
+            telegram_id: sub.telegram_id,
             text: text.clone(),
             searched_hash: sub.hash,
             message_id: sub.message_id,
@@ -138,7 +138,7 @@ pub async fn process_hash_notify(handler: Arc<Handler>, job: faktory::Job) -> Re
     if let Some(photo_id) = notify.photo_id {
         let send_photo = SendPhoto {
             photo: tgbotapi::FileType::FileID(photo_id),
-            chat_id: notify.user_id.into(),
+            chat_id: notify.telegram_id.into(),
             reply_to_message_id: notify.message_id,
             allow_sending_without_reply: Some(true),
             caption: Some(notify.text.clone()),
@@ -152,7 +152,7 @@ pub async fn process_hash_notify(handler: Arc<Handler>, job: faktory::Job) -> Re
 
     if !was_sent {
         let send_message = SendMessage {
-            chat_id: notify.user_id.into(),
+            chat_id: notify.telegram_id.into(),
             reply_to_message_id: notify.message_id,
             text: notify.text,
             allow_sending_without_reply: Some(true),
@@ -161,7 +161,12 @@ pub async fn process_hash_notify(handler: Arc<Handler>, job: faktory::Job) -> Re
         handler.telegram.make_request(&send_message).await?;
     }
 
-    Subscriptions::remove_subscription(&handler.conn, notify.user_id, notify.searched_hash).await?;
+    Subscriptions::remove_subscription(
+        &handler.conn,
+        User::Telegram(notify.telegram_id),
+        notify.searched_hash,
+    )
+    .await?;
 
     Ok(())
 }

@@ -98,7 +98,7 @@ impl SubscribeHandler {
 
         if let Err(err) = Subscriptions::add_subscription(
             &handler.conn,
-            callback_query.from.id,
+            &callback_query.from,
             hash,
             message_id,
             photo_id.as_deref(),

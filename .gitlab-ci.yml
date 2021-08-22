@@ -59,10 +59,10 @@ build:
             - ./foxbot/foxbot
             - ./foxbot-background-worker/foxbot-background-worker
     script:
-        - cargo build --verbose --release --bin foxbot
+        - cargo build --verbose --release
         - mv ./target/release/foxbot ./foxbot/foxbot
-        - cargo build --verbose --release --bin foxbot-background-worker
         - mv ./target/release/foxbot-background-worker ./foxbot-background-worker/foxbot-background-worker
+        - mv ./target/release/foxbot-discord ./foxbot-discord/foxbot-discord
 
 docker:
     stage: image
@@ -76,3 +76,4 @@ docker:
     script:
         - /kaniko/executor --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/foxbot/Dockerfile --destination $CI_REGISTRY_IMAGE/bot:$CI_COMMIT_SHA --destination $CI_REGISTRY_IMAGE/bot:latest --cache=true
         - /kaniko/executor --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/foxbot-background-worker/Dockerfile --destination $CI_REGISTRY_IMAGE/background-worker:$CI_COMMIT_SHA --destination $CI_REGISTRY_IMAGE/background-worker:latest --cache=true
+        - /kaniko/executor --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/foxbot-discord/Dockerfile --destination $CI_REGISTRY_IMAGE/discord:$CI_COMMIT_SHA --destination $CI_REGISTRY_IMAGE/discord:latest --cache=true

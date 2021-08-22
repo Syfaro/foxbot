@@ -73,7 +73,7 @@ impl InlineHandler {
         };
         let sent = handler.make_request(&send_message).await?;
 
-        Video::add_message_id(&handler.conn, video.id, sent.chat.id, sent.message_id).await?;
+        Video::add_message_id(&handler.conn, video.id, &sent.chat, sent.message_id).await?;
 
         Ok(())
     }

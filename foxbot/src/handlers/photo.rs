@@ -58,12 +58,7 @@ impl Handler for PhotoHandler {
             Some(3),
         )
         .await?;
-        sort_results(
-            &handler.conn,
-            message.from.as_ref().unwrap().id,
-            &mut matches,
-        )
-        .await?;
+        sort_results(&handler.conn, message.from.as_ref().unwrap(), &mut matches).await?;
 
         // Typically the response for no sources is handled by the source_reply
         // function, but we need custom handling to allow for subscribing to
@@ -112,9 +107,9 @@ impl Handler for PhotoHandler {
 
         drop(action);
 
-        let disable_preview = GroupConfig::get::<bool>(
+        let disable_preview = GroupConfig::get::<bool, _>(
             &handler.conn,
-            message.chat.id,
+            &message.chat,
             GroupConfigKey::GroupNoPreviews,
         )
         .await?
