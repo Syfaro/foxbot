@@ -122,9 +122,15 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
 
     if !links.is_empty() {
         let mut results: Vec<foxbot_sites::PostInfo> = Vec::new();
-        let _ = find_images(&tgbotapi::User::default(), links, &mut sites, &mut |info| {
-            results.extend(info.results);
-        })
+        let _ = find_images(
+            &tgbotapi::User::default(),
+            links,
+            &mut sites,
+            &handler.redis,
+            &mut |info| {
+                results.extend(info.results);
+            },
+        )
         .await;
 
         let urls: Vec<_> = results
