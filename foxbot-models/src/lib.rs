@@ -98,7 +98,7 @@ impl UserConfigKey {
     fn as_str(&self) -> &str {
         match self {
             UserConfigKey::SiteSortOrder => "site-sort-order",
-            &UserConfigKey::InlineHistory => "inline-history",
+            UserConfigKey::InlineHistory => "inline-history",
         }
     }
 }
