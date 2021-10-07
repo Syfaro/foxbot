@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use anyhow::Context;
 use async_trait::async_trait;
 use futures::{stream::FuturesOrdered, StreamExt};
@@ -11,7 +13,7 @@ use super::{
     Status::{self, *},
 };
 use crate::{MessageHandler, ServiceData};
-use foxbot_models::{DisplayableErrorMessage, Video};
+use foxbot_models::{DisplayableErrorMessage, UserConfig, UserConfigKey, Video};
 use foxbot_sites::PostInfo;
 use foxbot_utils::*;
 
@@ -247,6 +249,49 @@ impl InlineHandler {
     }
 }
 
+/// Get links recently searched by the given user.
+///
+/// This also resets the expire time of the set of recent links and removes
+/// expired entries.
+async fn get_inline_history(
+    user: i64,
+    redis: &mut redis::aio::ConnectionManager,
+) -> anyhow::Result<Vec<String>> {
+    let key = format!("inline-history:{}", user);
+
+    let now = chrono::Utc::now().timestamp();
+
+    let links: Vec<String> = redis
+        .zrevrangebyscore_limit(&key, "+inf", now, 0, 50)
+        .await?;
+    redis.zrembyscore(&key, "-inf", now).await?;
+    redis.expire(key, 60 * 60 * 24).await?;
+
+    Ok(links)
+}
+
+/// Add links to a user's inline query history.
+async fn add_inline_history(
+    user: i64,
+    links: &[Cow<'_, str>],
+    redis: &mut redis::aio::ConnectionManager,
+) -> anyhow::Result<()> {
+    let key = format!("inline-history:{}", user);
+
+    let expires_at = (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp();
+
+    let items: Vec<(i64, &str)> = links
+        .iter()
+        .map(|link| (expires_at, link.as_ref()))
+        .collect();
+    redis
+        .zadd_multiple::<_, i64, &str, ()>(&key, &items)
+        .await?;
+    redis.expire(key, 60 * 60 * 24).await?;
+
+    Ok(())
+}
+
 #[async_trait]
 impl Handler for InlineHandler {
     fn name(&self) -> &'static str {
@@ -275,7 +320,42 @@ impl Handler for InlineHandler {
 
         let inline = needs_field!(update, inline_query);
 
-        let links: Vec<_> = handler.finder.links(&inline.query).collect();
+        let mut redis = handler.redis.clone();
+
+        let history_enabled =
+            UserConfig::get(&handler.conn, UserConfigKey::InlineHistory, inline.from.id)
+                .await
+                .unwrap_or_default()
+                .unwrap_or(false);
+        tracing::debug!("user has history enabled: {}", history_enabled);
+
+        let links: Vec<Cow<'_, str>> = if history_enabled && inline.query.is_empty() {
+            match get_inline_history(inline.from.id, &mut redis).await {
+                Ok(history) => {
+                    tracing::trace!("got inline history with {} items", history.len());
+                    history.into_iter().map(Into::into).collect()
+                }
+                Err(err) => {
+                    tracing::error!("could not get inline history: {}", err);
+                    vec![]
+                }
+            }
+        } else {
+            let links: Vec<_> = handler
+                .finder
+                .links(&inline.query)
+                .map(|link| link.as_str().into())
+                .collect();
+
+            if history_enabled {
+                if let Err(err) = add_inline_history(inline.from.id, &links, &mut redis).await {
+                    tracing::error!("could not add inline history: {}", err);
+                }
+            }
+
+            links
+        };
+
         let mut results: Vec<PostInfo> = Vec::new();
 
         tracing::info!(query = ?inline.query, "got query");
@@ -284,7 +364,7 @@ impl Handler for InlineHandler {
         // Lock sites in order to find which of these links are usable
         let images_err = {
             let mut sites = handler.sites.lock().await;
-            let links = links.iter().map(|link| link.as_str()).collect();
+            let links = links.iter().map(|link| link.as_ref()).collect();
             find_images(
                 &inline.from,
                 links,
@@ -322,7 +402,6 @@ impl Handler for InlineHandler {
             let answer_inline = AnswerInlineQuery {
                 inline_query_id: inline.id.to_owned(),
                 results: vec![article],
-                cache_time: None,
                 ..Default::default()
             };
 
@@ -385,20 +464,26 @@ impl Handler for InlineHandler {
             inline_query_id: inline.id.to_owned(),
             results: cleaned_responses,
             is_personal: Some(is_personal),
+            cache_time: Some(0),
             ..Default::default()
         };
 
-        // If the query was empty, display a help button to make it easy to get
-        // started using the bot.
         if inline.query.is_empty() {
-            let help_text = handler
-                .get_fluent_bundle(inline.from.language_code.as_deref(), |bundle| {
-                    get_message(bundle, "inline-help", None).unwrap()
-                })
-                .await;
+            if answer_inline.results.is_empty() {
+                // If the query was empty, display a help button to make it easy to get
+                // started using the bot.
+                let help_text = handler
+                    .get_fluent_bundle(inline.from.language_code.as_deref(), |bundle| {
+                        get_message(bundle, "inline-help", None).unwrap()
+                    })
+                    .await;
 
-            answer_inline.switch_pm_text = Some(help_text);
-            answer_inline.switch_pm_parameter = Some("help".to_string());
+                answer_inline.switch_pm_text = Some(help_text);
+                answer_inline.switch_pm_parameter = Some("help".to_string());
+            } else {
+                // If the results were not empty, there's personal content here.
+                answer_inline.is_personal = Some(true);
+            }
         }
 
         // If we had a video that needed to be processed, replace the switch pm
@@ -412,10 +497,6 @@ impl Handler for InlineHandler {
 
             answer_inline.switch_pm_text = Some(process_text);
             answer_inline.switch_pm_parameter = Some(video.id);
-
-            // Do not cache! We quickly want to change this result after
-            // processing is completed.
-            answer_inline.cache_time = Some(0);
         }
 
         handler
