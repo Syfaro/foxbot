@@ -1,6 +1,6 @@
 [package]
 name = "foxbot-utils"
-version = "0.3.1"
+version = "0.4.0"
 authors = ["Syfaro <syfaro@huefox.com>"]
 edition = "2018"
 publish = false
