@@ -197,15 +197,13 @@ where
                             results,
                         };
 
-                        let url_id = site.url_id(link).expect(
-                            "site producing results should always be able to generate url id",
-                        );
-
-                        if let Err(err) =
-                            set_cached_images(site.name(), &url_id, &site_callback, &mut redis)
-                                .await
-                        {
-                            tracing::error!("could not set cached images: {}", err);
+                        if let Some(url_id) = site.url_id(link) {
+                            if let Err(err) =
+                                set_cached_images(site.name(), &url_id, &site_callback, &mut redis)
+                                    .await
+                            {
+                                tracing::error!("could not set cached images: {}", err);
+                            }
                         }
 
                         callback(site_callback);
