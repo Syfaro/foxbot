@@ -138,6 +138,15 @@ settings-unsupported = Sorry, not yet supported.
 settings-move-unable = Unable to move { $name } to that position
 settings-move-updated = Updated position for { $name }
 settings-site-preference = Site Preference
+settings-inline-history = Inline History
+settings-inline-history-enable = Enable
+settings-inline-history-disable = Disable
+settings-inline-history-enabled = Enabled History
+settings-inline-history-disabled = Disabled History
+settings-inline-history-description =
+    Temporarily store links you've sent to make it easier to re-use them in other chats.
+    
+    Toggling this setting will clear your history.
 
 rating-general = SFW
 rating-adult = NSFW

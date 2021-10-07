@@ -13,7 +13,7 @@ use super::{
     Status::{self, *},
 };
 use crate::{MessageHandler, ServiceData};
-use foxbot_models::{DisplayableErrorMessage, Video};
+use foxbot_models::{DisplayableErrorMessage, UserConfig, UserConfigKey, Video};
 use foxbot_sites::PostInfo;
 use foxbot_utils::*;
 
@@ -322,7 +322,14 @@ impl Handler for InlineHandler {
 
         let mut redis = handler.redis.clone();
 
-        let links: Vec<Cow<'_, str>> = if inline.query.is_empty() {
+        let history_enabled =
+            UserConfig::get(&handler.conn, UserConfigKey::InlineHistory, inline.from.id)
+                .await
+                .unwrap_or_default()
+                .unwrap_or(false);
+        tracing::debug!("user has history enabled: {}", history_enabled);
+
+        let links: Vec<Cow<'_, str>> = if history_enabled && inline.query.is_empty() {
             match get_inline_history(inline.from.id, &mut redis).await {
                 Ok(history) => {
                     tracing::trace!("got inline history with {} items", history.len());
@@ -340,8 +347,10 @@ impl Handler for InlineHandler {
                 .map(|link| link.as_str().into())
                 .collect();
 
-            if let Err(err) = add_inline_history(inline.from.id, &links, &mut redis).await {
-                tracing::error!("could not add inline history: {}", err);
+            if history_enabled {
+                if let Err(err) = add_inline_history(inline.from.id, &links, &mut redis).await {
+                    tracing::error!("could not add inline history: {}", err);
+                }
             }
 
             links
@@ -393,7 +402,6 @@ impl Handler for InlineHandler {
             let answer_inline = AnswerInlineQuery {
                 inline_query_id: inline.id.to_owned(),
                 results: vec![article],
-                cache_time: None,
                 ..Default::default()
             };
 
@@ -456,14 +464,11 @@ impl Handler for InlineHandler {
             inline_query_id: inline.id.to_owned(),
             results: cleaned_responses,
             is_personal: Some(is_personal),
+            cache_time: Some(0),
             ..Default::default()
         };
 
         if inline.query.is_empty() {
-            // Never cache empty queries because they can rapidly change as the
-            // user enters more links.
-            answer_inline.cache_time = Some(0);
-
             if answer_inline.results.is_empty() {
                 // If the query was empty, display a help button to make it easy to get
                 // started using the bot.
@@ -492,10 +497,6 @@ impl Handler for InlineHandler {
 
             answer_inline.switch_pm_text = Some(process_text);
             answer_inline.switch_pm_parameter = Some(video.id);
-
-            // Do not cache! We quickly want to change this result after
-            // processing is completed.
-            answer_inline.cache_time = Some(0);
         }
 
         handler

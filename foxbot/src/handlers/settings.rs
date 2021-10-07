@@ -1,5 +1,6 @@
 use anyhow::Context;
 use async_trait::async_trait;
+use redis::AsyncCommands;
 use tgbotapi::{
     requests::{
         AnswerCallbackQuery, EditMessageReplyMarkup, EditMessageText, ReplyMarkup, SendMessage,
@@ -47,6 +48,10 @@ impl Handler for SettingsHandler {
 
         if data.starts_with("s:order:") {
             return order(handler, callback_query, data).await;
+        }
+
+        if data.starts_with("s:inline-history:") {
+            return inline_history(handler, callback_query, data).await;
         }
 
         Ok(Completed)
@@ -213,6 +218,118 @@ async fn order(
     Ok(Completed)
 }
 
+async fn inline_history_keyboard(
+    handler: &MessageHandler,
+    user: &tgbotapi::User,
+    enable: bool,
+) -> InlineKeyboardMarkup {
+    let (message_key, data) = if enable {
+        ("settings-inline-history-enable", "s:inline-history:e")
+    } else {
+        ("settings-inline-history-disable", "s:inline-history:d")
+    };
+
+    let message = handler
+        .get_fluent_bundle(user.language_code.as_deref(), |bundle| {
+            get_message(bundle, message_key, None).unwrap()
+        })
+        .await;
+
+    InlineKeyboardMarkup {
+        inline_keyboard: vec![vec![InlineKeyboardButton {
+            text: message,
+            callback_data: Some(data.to_string()),
+            ..Default::default()
+        }]],
+    }
+}
+
+async fn inline_history(
+    handler: &MessageHandler,
+    callback_query: &CallbackQuery,
+    data: &str,
+) -> anyhow::Result<Status> {
+    let reply_message = needs_field!(callback_query, message);
+
+    let text = handler
+        .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
+            get_message(bundle, "settings-inline-history-description", None).unwrap()
+        })
+        .await;
+
+    if data.ends_with(":e") || data.ends_with(":d") {
+        let enabled = data.chars().last().unwrap_or_default() == 'e';
+        let message_key = if enabled {
+            "settings-inline-history-enabled"
+        } else {
+            "settings-inline-history-disabled"
+        };
+        let message = handler
+            .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
+                get_message(bundle, message_key, None).unwrap()
+            })
+            .await;
+
+        UserConfig::set(
+            &handler.conn,
+            UserConfigKey::InlineHistory,
+            callback_query.from.id,
+            enabled,
+        )
+        .await?;
+
+        if !enabled {
+            let mut redis = handler.redis.clone();
+            redis
+                .del(format!("inline-history:{}", callback_query.from.id))
+                .await?;
+        }
+
+        let answer = AnswerCallbackQuery {
+            callback_query_id: callback_query.id.clone(),
+            text: Some(message),
+            ..Default::default()
+        };
+
+        let keyboard = inline_history_keyboard(handler, &callback_query.from, !enabled).await;
+
+        let edit_message = EditMessageReplyMarkup {
+            message_id: Some(reply_message.message_id),
+            chat_id: reply_message.chat_id(),
+            reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(keyboard)),
+            ..Default::default()
+        };
+
+        futures::try_join!(
+            handler.make_request(&edit_message),
+            handler.make_request(&answer)
+        )
+        .context("unable to edit message or answer callback query")?;
+    } else {
+        let enabled = UserConfig::get(
+            &handler.conn,
+            UserConfigKey::InlineHistory,
+            callback_query.from.id,
+        )
+        .await?
+        .unwrap_or(false);
+
+        let keyboard = inline_history_keyboard(handler, &callback_query.from, !enabled).await;
+
+        let edit_message = EditMessageText {
+            message_id: Some(reply_message.message_id),
+            chat_id: reply_message.chat_id(),
+            text,
+            reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(keyboard)),
+            ..Default::default()
+        };
+
+        handler.make_request(&edit_message).await?;
+    }
+
+    Ok(Completed)
+}
+
 async fn send_settings_message(
     handler: &MessageHandler,
     message: &Message,
@@ -222,18 +339,28 @@ async fn send_settings_message(
         .as_ref()
         .and_then(|user| user.language_code.as_deref());
 
-    let site_preference = handler
+    let (site_preference, inline_history) = handler
         .get_fluent_bundle(from, |bundle| {
-            get_message(bundle, "settings-site-preference", None).unwrap()
+            (
+                get_message(bundle, "settings-site-preference", None).unwrap(),
+                get_message(bundle, "settings-inline-history", None).unwrap(),
+            )
         })
         .await;
 
     let keyboard = InlineKeyboardMarkup {
-        inline_keyboard: vec![vec![InlineKeyboardButton {
-            text: site_preference,
-            callback_data: Some("s:order:".into()),
-            ..Default::default()
-        }]],
+        inline_keyboard: vec![
+            vec![InlineKeyboardButton {
+                text: site_preference,
+                callback_data: Some("s:order:".into()),
+                ..Default::default()
+            }],
+            vec![InlineKeyboardButton {
+                text: inline_history,
+                callback_data: Some("s:inline-history:".into()),
+                ..Default::default()
+            }],
+        ],
     };
 
     let text = handler
