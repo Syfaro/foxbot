@@ -1,5 +1,6 @@
 use anyhow::Context;
 use fuzzysearch::SiteInfo;
+use redis::AsyncCommands;
 use std::time::Instant;
 use std::{collections::HashSet, str::FromStr, sync::Arc};
 use tgbotapi::FileType;
@@ -60,6 +61,79 @@ pub struct SiteCallback<'a> {
     pub results: Vec<PostInfo>,
 }
 
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+struct ImageCacheData {
+    site_name: String,
+    results: Vec<PostInfo>,
+}
+
+/// Attempt to get cached images for a given URL.
+async fn get_cached_images<'a>(
+    link: &'a str,
+    sites: &'a mut [BoxedSite],
+    redis: &mut redis::aio::ConnectionManager,
+) -> anyhow::Result<Option<SiteCallback<'a>>> {
+    let url_id = match sites.iter().find_map(|site| site.url_id(link)) {
+        Some(url_id) => url_id,
+        None => return Ok(None),
+    };
+
+    let key = format!("images:{}", url_id);
+    let mut redis = redis.clone();
+
+    let cache_data = redis
+        .get::<_, Option<Vec<u8>>>(key)
+        .await?
+        .map(|data| serde_json::from_slice::<ImageCacheData>(&data))
+        .transpose()?;
+
+    let data = match cache_data {
+        Some(data) => data,
+        None => return Ok(None),
+    };
+
+    // Make sure there is no chance of a personal item being returned.
+    if data.results.iter().any(|post| post.personal) {
+        anyhow::bail!("a personal post was cached");
+    }
+
+    Ok(Some(SiteCallback {
+        site: sites
+            .iter()
+            .find(|site| site.name() == data.site_name)
+            .ok_or_else(|| anyhow::anyhow!("unknown site name"))?,
+        link: &link,
+        duration: 0,
+        results: data.results,
+    }))
+}
+
+/// Set cached images for a given URL ID.
+async fn set_cached_images(
+    site_name: &str,
+    url_id: &str,
+    callback: &SiteCallback<'_>,
+    redis: &mut redis::aio::ConnectionManager,
+) -> anyhow::Result<()> {
+    let key = format!("images:{}", url_id);
+    let mut redis = redis.clone();
+
+    // Any results containing personal items cannot be cached.
+    if callback.results.iter().any(|post| post.personal) {
+        return Ok(());
+    }
+
+    let cache_data = ImageCacheData {
+        site_name: site_name.to_string(),
+        results: callback.results.clone(),
+    };
+
+    let data = serde_json::to_vec(&cache_data)?;
+    redis.set_ex(key, data, 60 * 60).await?;
+
+    Ok(())
+}
+
 /// Find images from the given URLs using the site loaders with authentication
 /// from the given user.
 ///
@@ -70,11 +144,12 @@ pub struct SiteCallback<'a> {
 /// After a site reports it supports a URL, no other sites are attempted for
 /// that URL. When complete, it returns the URLs that appeared to contain no
 /// content.
-#[tracing::instrument(err, skip(user, sites, callback))]
+#[tracing::instrument(err, skip(user, sites, redis, callback))]
 pub async fn find_images<'a, C>(
     user: &tgbotapi::User,
     links: Vec<&'a str>,
-    sites: &mut [BoxedSite],
+    mut sites: &mut [BoxedSite],
+    redis: &redis::aio::ConnectionManager,
     callback: &mut C,
 ) -> anyhow::Result<Vec<&'a str>>
 where
@@ -82,7 +157,19 @@ where
 {
     let mut missing = vec![];
 
+    let mut redis = redis.clone();
+
     'link: for link in links {
+        match get_cached_images(&link, &mut sites, &mut redis).await {
+            Ok(Some(cached_images)) => {
+                tracing::debug!("had cached images available");
+                callback(cached_images);
+                continue 'link;
+            }
+            Ok(None) => tracing::debug!("had no cached images"),
+            Err(err) => tracing::error!("could not get cached images: {}", err),
+        }
+
         for site in sites.iter_mut() {
             let start = Instant::now();
 
@@ -94,12 +181,25 @@ where
                 match images {
                     Some(results) => {
                         tracing::debug!(site = site.name(), "found images: {:?}", results);
-                        callback(SiteCallback {
+                        let site_callback = SiteCallback {
                             site,
                             link,
                             duration: start.elapsed().as_millis() as i64,
                             results,
-                        });
+                        };
+
+                        let url_id = site.url_id(link).expect(
+                            "site producing results should always be able to generate url id",
+                        );
+
+                        if let Err(err) =
+                            set_cached_images(site.name(), &url_id, &site_callback, &mut redis)
+                                .await
+                        {
+                            tracing::error!("could not set cached images: {}", err);
+                        }
+
+                        callback(site_callback);
                     }
                     _ => {
                         tracing::debug!(site = site.name(), "no images found");

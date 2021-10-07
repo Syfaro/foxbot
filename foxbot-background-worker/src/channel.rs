@@ -69,7 +69,7 @@ pub async fn process_channel_update(handler: Arc<Handler>, job: faktory::Job) ->
 
     if !links.is_empty() {
         let mut results: Vec<foxbot_sites::PostInfo> = Vec::new();
-        let _ = find_images(&tgbotapi::User::default(), links, &mut sites, &mut |info| {
+        let _ = find_images(&tgbotapi::User::default(), links, &mut sites, &handler.redis, &mut |info| {
             results.extend(info.results);
         })
         .await;

@@ -1131,6 +1131,7 @@ dependencies = [
  "reqwest",
  "rusoto_s3",
  "sentry",
+ "serde",
  "serde_json",
  "sha2",
  "sqlx",

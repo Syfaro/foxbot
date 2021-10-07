@@ -282,7 +282,7 @@ impl Handler for InlineHandler {
         let images_err = {
             let mut sites = handler.sites.lock().await;
             let links = links.iter().map(|link| link.as_str()).collect();
-            find_images(&inline.from, links, &mut sites, &mut |info| {
+            find_images(&inline.from, links, &mut sites, &handler.redis, &mut |info| {
                 results.extend(info.results);
             })
             .await
@@ -764,7 +764,7 @@ fn build_mp4_result(
         result
             .title
             .clone()
-            .unwrap_or_else(|| result.site_name.to_owned()),
+            .unwrap_or_else(|| result.site_name.to_owned().into()),
     );
     video.reply_markup = Some(keyboard.clone());
 

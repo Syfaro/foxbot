@@ -109,7 +109,7 @@ impl CommandHandler {
 
         let mut missing = {
             let mut sites = handler.sites.lock().await;
-            find_images(from, links, &mut sites, &mut |info| {
+            find_images(from, links, &mut sites, &handler.redis, &mut |info| {
                 results.extend(info.results);
             })
             .await?
@@ -404,7 +404,7 @@ impl CommandHandler {
             let mut results: Vec<PostInfo> = Vec::with_capacity(links.len());
             let missing = {
                 let mut sites = handler.sites.lock().await;
-                find_images(from, links, &mut sites, &mut |info| {
+                find_images(from, links, &mut sites, &handler.redis, &mut |info| {
                     results.extend(info.results);
                 })
                 .await?
