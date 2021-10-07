@@ -1,6 +1,9 @@
 use anyhow::Context;
 use async_trait::async_trait;
 use futures::{stream::FuturesOrdered, StreamExt};
+use redis::AsyncCommands;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tgbotapi::{requests::*, *};
 
 use super::{
@@ -282,9 +285,15 @@ impl Handler for InlineHandler {
         let images_err = {
             let mut sites = handler.sites.lock().await;
             let links = links.iter().map(|link| link.as_str()).collect();
-            find_images(&inline.from, links, &mut sites, &handler.redis, &mut |info| {
-                results.extend(info.results);
-            })
+            find_images(
+                &inline.from,
+                links,
+                &mut sites,
+                &handler.redis,
+                &mut |info| {
+                    results.extend(info.results);
+                },
+            )
             .await
             .err()
         };
@@ -545,6 +554,62 @@ fn escape_markdown<S: AsRef<str>>(input: S) -> String {
         .replace("~", r"\~")
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct URLCacheData {
+    /// URL to send for this image. May be original or cached image.
+    sent_url: String,
+    /// URL to send for this image's thumbnail. May be original or cached image.
+    sent_thumb_url: Option<String>,
+    /// Dimensions of this image.
+    dimensions: (u32, u32),
+}
+
+/// Get information about a URL from the cache, if it exists.
+async fn get_url_cache_data(
+    url: &str,
+    redis: &mut redis::aio::ConnectionManager,
+) -> anyhow::Result<Option<URLCacheData>> {
+    let mut hasher = Sha256::new();
+    hasher.update(url);
+    let result = base64::encode(hasher.finalize());
+
+    let key = format!("url:{}", result);
+
+    redis
+        .get::<_, Option<Vec<u8>>>(key)
+        .await?
+        .map(|data| serde_json::from_slice(&data))
+        .transpose()
+        .map_err(Into::into)
+}
+
+/// Set cached information about an image URL.
+async fn set_url_cache_data(
+    url: &str,
+    post_info: &PostInfo,
+    redis: &mut redis::aio::ConnectionManager,
+) -> anyhow::Result<()> {
+    let dimensions = match post_info.image_dimensions {
+        Some(dimensions) => dimensions,
+        None => anyhow::bail!("post info was missing dimensions"),
+    };
+
+    let data = serde_json::to_vec(&URLCacheData {
+        sent_url: post_info.url.clone(),
+        sent_thumb_url: post_info.thumb.clone(),
+        dimensions,
+    })?;
+
+    let mut hasher = Sha256::new();
+    hasher.update(url);
+    let result = base64::encode(hasher.finalize());
+
+    let key = format!("url:{}", result);
+    redis.set_ex(key, data, 60 * 60 * 24).await?;
+
+    Ok(())
+}
+
 async fn build_image_result(
     handler: &MessageHandler,
     result: &PostInfo,
@@ -565,21 +630,21 @@ async fn build_image_result(
     // Telegram Desktop[^1].
     //
     // [^1]: https://github.com/telegramdesktop/tdesktop/issues/4580
-    let data = download_image(&result.url).await?;
-    let result = if handler.config.cache_all_images.unwrap_or(false) {
-        cache_post(
-            &handler.conn,
-            &handler.s3,
-            &handler.config.s3_bucket,
-            &handler.config.s3_url,
-            &result,
-            &data,
-        )
-        .await?
-    } else {
-        let result = size_post(&result, &data).await?;
 
-        if result.image_size.unwrap_or_default() > MAX_IMAGE_SIZE {
+    let mut redis = handler.redis.clone();
+    let result = if let Ok(Some(cache_data)) = get_url_cache_data(&result.url, &mut redis).await {
+        tracing::trace!("had cached data for full url");
+
+        PostInfo {
+            url: cache_data.sent_url,
+            thumb: cache_data.sent_thumb_url,
+            image_dimensions: Some(cache_data.dimensions),
+            ..result
+        }
+    } else {
+        let data = download_image(&result.url).await?;
+
+        let result = if handler.config.cache_all_images.unwrap_or(false) {
             cache_post(
                 &handler.conn,
                 &handler.s3,
@@ -590,8 +655,28 @@ async fn build_image_result(
             )
             .await?
         } else {
-            result
+            let result = size_post(&result, &data).await?;
+
+            if result.image_size.unwrap_or_default() > MAX_IMAGE_SIZE {
+                cache_post(
+                    &handler.conn,
+                    &handler.s3,
+                    &handler.config.s3_bucket,
+                    &handler.config.s3_url,
+                    &result,
+                    &data,
+                )
+                .await?
+            } else {
+                result
+            }
+        };
+
+        if let Err(err) = set_url_cache_data(&result.url, &result, &mut redis).await {
+            tracing::error!("could not cache url data: {}", err);
         }
+
+        result
     };
 
     let mut photo = InlineQueryResult::photo(

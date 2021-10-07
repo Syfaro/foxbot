@@ -1,6 +1,7 @@
 use anyhow::Context;
 use fuzzysearch::SiteInfo;
 use redis::AsyncCommands;
+use sha2::{Digest, Sha256};
 use std::time::Instant;
 use std::{collections::HashSet, str::FromStr, sync::Arc};
 use tgbotapi::FileType;
@@ -78,7 +79,11 @@ async fn get_cached_images<'a>(
         None => return Ok(None),
     };
 
-    let key = format!("images:{}", url_id);
+    let mut hasher = Sha256::new();
+    hasher.update(url_id);
+    let result = base64::encode(hasher.finalize());
+
+    let key = format!("images:{}", result);
     let mut redis = redis.clone();
 
     let cache_data = redis
@@ -102,7 +107,7 @@ async fn get_cached_images<'a>(
             .iter()
             .find(|site| site.name() == data.site_name)
             .ok_or_else(|| anyhow::anyhow!("unknown site name"))?,
-        link: &link,
+        link,
         duration: 0,
         results: data.results,
     }))
@@ -115,7 +120,11 @@ async fn set_cached_images(
     callback: &SiteCallback<'_>,
     redis: &mut redis::aio::ConnectionManager,
 ) -> anyhow::Result<()> {
-    let key = format!("images:{}", url_id);
+    let mut hasher = Sha256::new();
+    hasher.update(url_id);
+    let result = base64::encode(hasher.finalize());
+
+    let key = format!("images:{}", result);
     let mut redis = redis.clone();
 
     // Any results containing personal items cannot be cached.
@@ -160,7 +169,7 @@ where
     let mut redis = redis.clone();
 
     'link: for link in links {
-        match get_cached_images(&link, &mut sites, &mut redis).await {
+        match get_cached_images(link, &mut sites, &mut redis).await {
             Ok(Some(cached_images)) => {
                 tracing::debug!("had cached images available");
                 callback(cached_images);
@@ -324,7 +333,6 @@ async fn upload_image(
 /// Download image from URL and return bytes.
 ///
 /// Will fail if the download is larger than 50MB.
-#[tracing::instrument]
 pub async fn download_image(url: &str) -> anyhow::Result<bytes::Bytes> {
     let size_check = CheckFileSize::new(url, 50_000_000);
     size_check.into_bytes().await

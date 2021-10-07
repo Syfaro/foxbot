@@ -1018,6 +1018,7 @@ dependencies = [
  "sentry-tracing",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "tgbotapi",
  "tokio",
@@ -1113,6 +1114,7 @@ name = "foxbot-utils"
 version = "0.3.1"
 dependencies = [
  "anyhow",
+ "base64",
  "bytes",
  "fluent",
  "fluent-langneg",
