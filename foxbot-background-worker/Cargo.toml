@@ -10,9 +10,9 @@ anyhow = "1"
 thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = "0.2"
-opentelemetry = { version = "0.15", features = ["rt-tokio"] }
-opentelemetry-jaeger = { version = "0.14", features = ["tokio"] }
-tracing-opentelemetry = "0.14"
+opentelemetry = { version = "0.16", features = ["rt-tokio"] }
+opentelemetry-jaeger = { version = "0.15", features = ["rt-tokio"] }
+tracing-opentelemetry = "0.15"
 
 sentry = { version = "0.23", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "reqwest"] }
 sentry-tracing = "0.23"
