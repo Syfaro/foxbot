@@ -75,6 +75,7 @@ pub trait Site {
     ) -> anyhow::Result<Option<Vec<PostInfo>>>;
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn get_all_sites(
     fa_a: String,
     fa_b: String,
