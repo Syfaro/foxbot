@@ -25,8 +25,8 @@ base64 = "0.13"
 sha2 = "0.9"
 chrono = "0.4"
 
-sentry = { version = "0.23", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "reqwest"] }
-sentry-tracing = "0.23"
+sentry = { git = "https://github.com/getsentry/sentry-rust", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "reqwest"] }
+sentry-tracing = { git = "https://github.com/getsentry/sentry-rust" }
 uuid = "0.8"
 anyhow = "1"
 lazy_static = "1"
@@ -47,10 +47,10 @@ fuzzysearch = { git = "https://github.com/Syfaro/fuzzysearch-rs", features = ["t
 
 tracing = "0.1"
 tracing-log = "0.1.2"
-tracing-subscriber = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "local-time"] }
 opentelemetry = { version = "0.16", features = ["rt-tokio"] }
 opentelemetry-jaeger = { version = "0.15", features = ["rt-tokio"] }
-tracing-opentelemetry = "0.15"
+tracing-opentelemetry = "0.16"
 opentelemetry-http = "0.5"
 
 redis = { version = "0.21", features = ["connection-manager", "tokio-comp"] }
@@ -60,10 +60,10 @@ rusoto_core = "0.47"
 rusoto_credential = "0.47"
 rusoto_s3 = "0.47"
 
-actix-web = "4.0.0-beta.9"
-actix-http = "3.0.0-beta.10"
-tracing-actix-web = { version = "0.4.0-beta.13", features = ["opentelemetry_0_16"] }
-actix-web-httpauth = "0.6.0-beta.2"
+actix-web = "4.0.0-beta.10"
+actix-http = "3.0.0-beta.11"
+tracing-actix-web = { version = "0.5.0-beta.1", features = ["opentelemetry_0_16"] }
+actix-web-httpauth = "0.6.0-beta.3"
 
 foxbot-sites = { path = "../foxbot-sites" }
 foxbot-models = { path = "../foxbot-models" }

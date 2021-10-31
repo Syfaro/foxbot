@@ -9,13 +9,13 @@ publish = false
 anyhow = "1"
 thiserror = "1"
 tracing = "0.1"
-tracing-subscriber = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "local-time"] }
 opentelemetry = { version = "0.16", features = ["rt-tokio"] }
 opentelemetry-jaeger = { version = "0.15", features = ["rt-tokio"] }
-tracing-opentelemetry = "0.15"
+tracing-opentelemetry = "0.16"
 
-sentry = { version = "0.23", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "reqwest"] }
-sentry-tracing = "0.23"
+sentry = { git = "https://github.com/getsentry/sentry-rust", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "reqwest"] }
+sentry-tracing = { git = "https://github.com/getsentry/sentry-rust" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
