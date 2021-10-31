@@ -1,6 +1,11 @@
+use std::borrow::Cow;
+
 use anyhow::Context;
 use async_trait::async_trait;
 use futures::{stream::FuturesOrdered, StreamExt};
+use redis::AsyncCommands;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tgbotapi::{requests::*, *};
 
 use super::{
@@ -8,7 +13,7 @@ use super::{
     Status::{self, *},
 };
 use crate::{MessageHandler, ServiceData};
-use foxbot_models::{DisplayableErrorMessage, Video};
+use foxbot_models::{DisplayableErrorMessage, UserConfig, UserConfigKey, Video};
 use foxbot_sites::PostInfo;
 use foxbot_utils::*;
 
@@ -244,6 +249,49 @@ impl InlineHandler {
     }
 }
 
+/// Get links recently searched by the given user.
+///
+/// This also resets the expire time of the set of recent links and removes
+/// expired entries.
+async fn get_inline_history(
+    user: i64,
+    redis: &mut redis::aio::ConnectionManager,
+) -> anyhow::Result<Vec<String>> {
+    let key = format!("inline-history:{}", user);
+
+    let now = chrono::Utc::now().timestamp();
+
+    let links: Vec<String> = redis
+        .zrevrangebyscore_limit(&key, "+inf", now, 0, 50)
+        .await?;
+    redis.zrembyscore(&key, "-inf", now).await?;
+    redis.expire(key, 60 * 60 * 24).await?;
+
+    Ok(links)
+}
+
+/// Add links to a user's inline query history.
+async fn add_inline_history(
+    user: i64,
+    links: &[Cow<'_, str>],
+    redis: &mut redis::aio::ConnectionManager,
+) -> anyhow::Result<()> {
+    let key = format!("inline-history:{}", user);
+
+    let expires_at = (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp();
+
+    let items: Vec<(i64, &str)> = links
+        .iter()
+        .map(|link| (expires_at, link.as_ref()))
+        .collect();
+    redis
+        .zadd_multiple::<_, i64, &str, ()>(&key, &items)
+        .await?;
+    redis.expire(key, 60 * 60 * 24).await?;
+
+    Ok(())
+}
+
 #[async_trait]
 impl Handler for InlineHandler {
     fn name(&self) -> &'static str {
@@ -272,7 +320,42 @@ impl Handler for InlineHandler {
 
         let inline = needs_field!(update, inline_query);
 
-        let links: Vec<_> = handler.finder.links(&inline.query).collect();
+        let mut redis = handler.redis.clone();
+
+        let history_enabled =
+            UserConfig::get(&handler.conn, UserConfigKey::InlineHistory, &inline.from)
+                .await
+                .unwrap_or_default()
+                .unwrap_or(false);
+        tracing::debug!("user has history enabled: {}", history_enabled);
+
+        let links: Vec<Cow<'_, str>> = if history_enabled && inline.query.is_empty() {
+            match get_inline_history(inline.from.id, &mut redis).await {
+                Ok(history) => {
+                    tracing::trace!("got inline history with {} items", history.len());
+                    history.into_iter().map(Into::into).collect()
+                }
+                Err(err) => {
+                    tracing::error!("could not get inline history: {}", err);
+                    vec![]
+                }
+            }
+        } else {
+            let links: Vec<_> = handler
+                .finder
+                .links(&inline.query)
+                .map(|link| link.as_str().into())
+                .collect();
+
+            if history_enabled {
+                if let Err(err) = add_inline_history(inline.from.id, &links, &mut redis).await {
+                    tracing::error!("could not add inline history: {}", err);
+                }
+            }
+
+            links
+        };
+
         let mut results: Vec<PostInfo> = Vec::new();
 
         tracing::info!(query = ?inline.query, "got query");
@@ -281,10 +364,16 @@ impl Handler for InlineHandler {
         // Lock sites in order to find which of these links are usable
         let images_err = {
             let mut sites = handler.sites.lock().await;
-            let links = links.iter().map(|link| link.as_str()).collect();
-            find_images(&inline.from, links, &mut sites, &mut |info| {
-                results.extend(info.results);
-            })
+            let links = links.iter().map(|link| link.as_ref()).collect();
+            find_images(
+                &inline.from,
+                links,
+                &mut sites,
+                &handler.redis,
+                &mut |info| {
+                    results.extend(info.results);
+                },
+            )
             .await
             .err()
         };
@@ -313,7 +402,6 @@ impl Handler for InlineHandler {
             let answer_inline = AnswerInlineQuery {
                 inline_query_id: inline.id.to_owned(),
                 results: vec![article],
-                cache_time: None,
                 ..Default::default()
             };
 
@@ -376,20 +464,26 @@ impl Handler for InlineHandler {
             inline_query_id: inline.id.to_owned(),
             results: cleaned_responses,
             is_personal: Some(is_personal),
+            cache_time: Some(0),
             ..Default::default()
         };
 
-        // If the query was empty, display a help button to make it easy to get
-        // started using the bot.
         if inline.query.is_empty() {
-            let help_text = handler
-                .get_fluent_bundle(inline.from.language_code.as_deref(), |bundle| {
-                    get_message(bundle, "inline-help", None).unwrap()
-                })
-                .await;
+            if answer_inline.results.is_empty() {
+                // If the query was empty, display a help button to make it easy to get
+                // started using the bot.
+                let help_text = handler
+                    .get_fluent_bundle(inline.from.language_code.as_deref(), |bundle| {
+                        get_message(bundle, "inline-help", None).unwrap()
+                    })
+                    .await;
 
-            answer_inline.switch_pm_text = Some(help_text);
-            answer_inline.switch_pm_parameter = Some("help".to_string());
+                answer_inline.switch_pm_text = Some(help_text);
+                answer_inline.switch_pm_parameter = Some("help".to_string());
+            } else {
+                // If the results were not empty, there's personal content here.
+                answer_inline.is_personal = Some(true);
+            }
         }
 
         // If we had a video that needed to be processed, replace the switch pm
@@ -403,10 +497,6 @@ impl Handler for InlineHandler {
 
             answer_inline.switch_pm_text = Some(process_text);
             answer_inline.switch_pm_parameter = Some(video.id);
-
-            // Do not cache! We quickly want to change this result after
-            // processing is completed.
-            answer_inline.cache_time = Some(0);
         }
 
         handler
@@ -545,6 +635,62 @@ fn escape_markdown<S: AsRef<str>>(input: S) -> String {
         .replace("~", r"\~")
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct URLCacheData {
+    /// URL to send for this image. May be original or cached image.
+    sent_url: String,
+    /// URL to send for this image's thumbnail. May be original or cached image.
+    sent_thumb_url: Option<String>,
+    /// Dimensions of this image.
+    dimensions: (u32, u32),
+}
+
+/// Get information about a URL from the cache, if it exists.
+async fn get_url_cache_data(
+    url: &str,
+    redis: &mut redis::aio::ConnectionManager,
+) -> anyhow::Result<Option<URLCacheData>> {
+    let mut hasher = Sha256::new();
+    hasher.update(url);
+    let result = base64::encode(hasher.finalize());
+
+    let key = format!("url:{}", result);
+
+    redis
+        .get::<_, Option<Vec<u8>>>(key)
+        .await?
+        .map(|data| serde_json::from_slice(&data))
+        .transpose()
+        .map_err(Into::into)
+}
+
+/// Set cached information about an image URL.
+async fn set_url_cache_data(
+    url: &str,
+    post_info: &PostInfo,
+    redis: &mut redis::aio::ConnectionManager,
+) -> anyhow::Result<()> {
+    let dimensions = match post_info.image_dimensions {
+        Some(dimensions) => dimensions,
+        None => anyhow::bail!("post info was missing dimensions"),
+    };
+
+    let data = serde_json::to_vec(&URLCacheData {
+        sent_url: post_info.url.clone(),
+        sent_thumb_url: post_info.thumb.clone(),
+        dimensions,
+    })?;
+
+    let mut hasher = Sha256::new();
+    hasher.update(url);
+    let result = base64::encode(hasher.finalize());
+
+    let key = format!("url:{}", result);
+    redis.set_ex(key, data, 60 * 60 * 24).await?;
+
+    Ok(())
+}
+
 async fn build_image_result(
     handler: &MessageHandler,
     result: &PostInfo,
@@ -565,21 +711,21 @@ async fn build_image_result(
     // Telegram Desktop[^1].
     //
     // [^1]: https://github.com/telegramdesktop/tdesktop/issues/4580
-    let data = download_image(&result.url).await?;
-    let result = if handler.config.cache_all_images.unwrap_or(false) {
-        cache_post(
-            &handler.conn,
-            &handler.s3,
-            &handler.config.s3_bucket,
-            &handler.config.s3_url,
-            &result,
-            &data,
-        )
-        .await?
-    } else {
-        let result = size_post(&result, &data).await?;
 
-        if result.image_size.unwrap_or_default() > MAX_IMAGE_SIZE {
+    let mut redis = handler.redis.clone();
+    let result = if let Ok(Some(cache_data)) = get_url_cache_data(&result.url, &mut redis).await {
+        tracing::trace!("had cached data for full url");
+
+        PostInfo {
+            url: cache_data.sent_url,
+            thumb: cache_data.sent_thumb_url,
+            image_dimensions: Some(cache_data.dimensions),
+            ..result
+        }
+    } else {
+        let data = download_image(&result.url).await?;
+
+        let result = if handler.config.cache_all_images.unwrap_or(false) {
             cache_post(
                 &handler.conn,
                 &handler.s3,
@@ -590,8 +736,28 @@ async fn build_image_result(
             )
             .await?
         } else {
-            result
+            let result = size_post(&result, &data).await?;
+
+            if result.image_size.unwrap_or_default() > MAX_IMAGE_SIZE {
+                cache_post(
+                    &handler.conn,
+                    &handler.s3,
+                    &handler.config.s3_bucket,
+                    &handler.config.s3_url,
+                    &result,
+                    &data,
+                )
+                .await?
+            } else {
+                result
+            }
+        };
+
+        if let Err(err) = set_url_cache_data(&result.url, &result, &mut redis).await {
+            tracing::error!("could not cache url data: {}", err);
         }
+
+        result
     };
 
     let mut photo = InlineQueryResult::photo(
@@ -764,7 +930,7 @@ fn build_mp4_result(
         result
             .title
             .clone()
-            .unwrap_or_else(|| result.site_name.to_owned()),
+            .unwrap_or_else(|| result.site_name.to_owned().into()),
     );
     video.reply_markup = Some(keyboard.clone());
 

@@ -69,9 +69,15 @@ pub async fn process_channel_update(handler: Arc<Handler>, job: faktory::Job) ->
 
     if !links.is_empty() {
         let mut results: Vec<foxbot_sites::PostInfo> = Vec::new();
-        let _ = find_images(&tgbotapi::User::default(), links, &mut sites, &mut |info| {
-            results.extend(info.results);
-        })
+        let _ = find_images(
+            &tgbotapi::User::default(),
+            links,
+            &mut sites,
+            &handler.redis,
+            &mut |info| {
+                results.extend(info.results);
+            },
+        )
         .await;
 
         let urls: Vec<_> = results
@@ -134,10 +140,20 @@ pub async fn process_channel_edit(handler: Arc<Handler>, job: faktory::Job) -> R
     } = serde_json::value::from_value(data.clone())?;
     let chat_id: &str = &chat_id;
 
+    let has_linked_chat: bool = args
+        .next()
+        .map(|has_linked_chat| has_linked_chat.to_owned())
+        .map(|has_linked_chat| serde_json::from_value(has_linked_chat).unwrap())
+        .unwrap_or(false);
+
     if let Some(at) = check_more_time(&handler.redis, chat_id).await {
         tracing::trace!("need to wait more time for this chat: {}", at);
 
-        let mut job = faktory::Job::new("channel_edit", vec![data]).on_queue("foxbot_background");
+        let mut job = faktory::Job::new(
+            "channel_edit",
+            vec![data, serde_json::to_value(has_linked_chat).unwrap()],
+        )
+        .on_queue("foxbot_background");
         job.at = Some(at);
         job.custom = get_faktory_custom();
 
@@ -145,12 +161,6 @@ pub async fn process_channel_edit(handler: Arc<Handler>, job: faktory::Job) -> R
 
         return Ok(());
     }
-
-    let has_linked_chat: bool = args
-        .next()
-        .map(|has_linked_chat| has_linked_chat.to_owned())
-        .map(|has_linked_chat| serde_json::from_value(has_linked_chat).unwrap())
-        .unwrap_or(false);
 
     tracing::trace!(has_linked_chat, "evaluating if chat is linked");
 
@@ -220,8 +230,11 @@ pub async fn process_channel_edit(handler: Arc<Handler>, job: faktory::Job) -> R
 
             needs_more_time(&handler.redis, chat_id, retry_at).await;
 
-            let mut job =
-                faktory::Job::new("channel_edit", vec![data]).on_queue("foxbot_background");
+            let mut job = faktory::Job::new(
+                "channel_edit",
+                vec![data, serde_json::to_value(has_linked_chat).unwrap()],
+            )
+            .on_queue("foxbot_background");
             job.at = Some(retry_at);
             job.custom = get_faktory_custom();
 

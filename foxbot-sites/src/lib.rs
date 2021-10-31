@@ -1,8 +1,8 @@
 use anyhow::Context;
 use async_trait::async_trait;
 use fuzzysearch::MatchType;
-use serde::Deserialize;
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::{borrow::Cow, collections::HashMap};
 use thiserror::Error;
 
 use foxbot_models::{DisplayableErrorMessage, Twitter as TwitterModel, User};
@@ -18,7 +18,7 @@ const USER_AGENT: &str = concat!(
 pub type BoxedSite = Box<dyn Site + Send + Sync>;
 
 /// A collection of information about a post obtained from a given URL.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct PostInfo {
     /// File type, as a standard file extension (png, jpg, etc.)
     pub file_type: String,
@@ -35,7 +35,7 @@ pub struct PostInfo {
     /// Title for video results
     pub title: Option<String>,
     /// Human readable name of the site
-    pub site_name: &'static str,
+    pub site_name: Cow<'static, str>,
     /// Width and height of image, if available
     pub image_dimensions: Option<(u32, u32)>,
     /// Size of image in bytes, if available
@@ -71,6 +71,7 @@ pub trait Site {
     async fn get_images(&mut self, user: User, url: &str) -> anyhow::Result<Option<Vec<PostInfo>>>;
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn get_all_sites(
     fa_a: String,
     fa_b: String,
@@ -250,7 +251,7 @@ impl Site for Direct {
             file_type: ext.to_string(),
             url: u.clone(),
             source_link,
-            site_name: source_name.unwrap_or_else(|| self.name()),
+            site_name: source_name.unwrap_or_else(|| self.name()).into(),
             ..Default::default()
         }]))
     }
@@ -426,7 +427,7 @@ impl E621 {
                 url: file_url,
                 thumb: Some(preview_url),
                 source_link: Some(format!("https://{}/posts/{}", self.site.host(), id)),
-                site_name: self.name(),
+                site_name: self.name().into(),
                 artist_username: if !artists.is_empty() {
                     Some(artists.join(", "))
                 } else {
@@ -521,7 +522,7 @@ impl Site for E621 {
             url: file_url,
             thumb: Some(preview_url),
             source_link: Some(format!("https://{}/posts/{}", self.site.host(), id)),
-            site_name: self.name(),
+            site_name: self.name().into(),
             artist_username: if !artists.is_empty() {
                 Some(artists.join(", "))
             } else {
@@ -728,7 +729,7 @@ impl Site for Twitter {
                         source_link: Some(item.expanded_url),
                         personal: user.protected,
                         title: Some(user.screen_name.clone()),
-                        site_name: self.name(),
+                        site_name: self.name().into(),
                         tags: hashtags.clone(),
                         artist_username: Some(user.screen_name.clone()),
                         artist_url: Some(format!("https://twitter.com/{}", user.screen_name)),
@@ -740,7 +741,7 @@ impl Site for Twitter {
                         thumb: Some(format!("{}:thumb", item.media_url_https.clone())),
                         source_link: Some(item.expanded_url),
                         personal: user.protected,
-                        site_name: self.name(),
+                        site_name: self.name().into(),
                         tags: hashtags.clone(),
                         artist_username: Some(user.screen_name.clone()),
                         artist_url: Some(format!("https://twitter.com/{}", user.screen_name)),
@@ -805,7 +806,7 @@ impl FurAffinity {
                 return Ok(Some(PostInfo {
                     file_type: ext.to_string(),
                     url: url.to_owned(),
-                    site_name: self.name(),
+                    site_name: self.name().into(),
                     ..Default::default()
                 }));
             }
@@ -820,7 +821,7 @@ impl FurAffinity {
             file_type: ext.to_string(),
             url: sub.url.clone(),
             source_link: Some(sub.url()),
-            site_name: self.name(),
+            site_name: self.name().into(),
             ..Default::default()
         }))
     }
@@ -848,7 +849,7 @@ impl FurAffinity {
             file_type: ext.to_string(),
             url: image_url.clone(),
             source_link: Some(url.to_string()),
-            site_name: self.name(),
+            site_name: self.name().into(),
             title: Some(sub.title),
             artist_username: Some(sub.artist.clone()),
             artist_url: Some(format!("https://www.furaffinity.net/user/{}/", sub.artist)),
@@ -1037,7 +1038,7 @@ impl Site for Mastodon {
                         url: media.url.clone(),
                         thumb: Some(media.preview_url.clone()),
                         source_link: Some(json.url.clone()),
-                        site_name: self.name(),
+                        site_name: self.name().into(),
                         ..Default::default()
                     })
                 })
@@ -1159,7 +1160,7 @@ impl Site for Weasyl {
                         url: sub_url,
                         thumb: Some(thumb_url),
                         source_link: Some(url.to_string()),
-                        site_name: self.name(),
+                        site_name: self.name().into(),
                         title: title.clone(),
                         tags: tags.clone(),
                         artist_username: artist_username.clone(),
@@ -1381,7 +1382,7 @@ impl Site for Inkbunny {
                     url: file.file_url_screen.clone(),
                     thumb: Some(file.thumbnail_url_medium_noncustom.clone()),
                     source_link: Some(url.to_owned()),
-                    site_name: self.name(),
+                    site_name: self.name().into(),
                     title: Some(submission.title.clone()),
                     tags: Some(tags.clone()),
                     artist_username: Some(submission.username.clone()),
@@ -1521,7 +1522,7 @@ impl Site for DeviantArt {
             url: resp.url,
             thumb: Some(resp.thumbnail_url),
             source_link: Some(url.to_owned()),
-            site_name: self.name(),
+            site_name: self.name().into(),
             image_dimensions: Some((resp.width.0, resp.height.0)),
             artist_username: Some(resp.author_name),
             artist_url: Some(resp.author_url),

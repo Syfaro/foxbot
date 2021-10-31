@@ -489,7 +489,7 @@ fn link_embed(post: &foxbot_sites::PostInfo) -> anyhow::Result<Embed> {
     use twilight_embed_builder::{EmbedBuilder, ImageSource};
 
     let embed = EmbedBuilder::new()
-        .title(post.site_name)
+        .title(post.site_name.clone())
         .url(post.source_link.as_deref().unwrap_or(&post.url))
         .image(ImageSource::url(&post.url)?)
         .build()?;
