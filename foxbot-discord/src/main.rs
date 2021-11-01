@@ -11,13 +11,16 @@ use twilight_gateway::{
 };
 use twilight_http::{request::channel::message::CreateMessage, Client as HttpClient};
 use twilight_model::{
+    application::{callback::InteractionResponse, interaction::Interaction},
     channel::{
-        embed::Embed, Attachment, Channel, ChannelType, GuildChannel, Message, ReactionType,
+        embed::Embed, message::MessageFlags, Attachment, Channel, ChannelType, GuildChannel,
+        Message,
     },
     gateway::Intents,
     guild::Permissions,
     id::{ChannelId, GuildId, MessageId, UserId},
 };
+use twilight_util::builder::CallbackDataBuilder;
 
 use foxbot_models::{FileURLCache, User};
 use foxbot_utils::*;
@@ -43,16 +46,16 @@ async fn main() {
         .expect("Unable to connect to database");
 
     let sites = foxbot_sites::get_all_sites(
-        config.fa_a,
-        config.fa_b,
-        config.fautil_apitoken,
-        config.weasyl_apitoken,
-        config.twitter_consumer_key,
-        config.twitter_consumer_secret,
-        config.inkbunny_username,
-        config.inkbunny_password,
-        config.e621_login,
-        config.e621_api_key,
+        config.fa_a.clone(),
+        config.fa_b.clone(),
+        config.fautil_apitoken.clone(),
+        config.weasyl_apitoken.clone(),
+        config.twitter_consumer_key.clone(),
+        config.twitter_consumer_secret.clone(),
+        config.inkbunny_username.clone(),
+        config.inkbunny_password.clone(),
+        config.e621_login.clone(),
+        config.e621_api_key.clone(),
         pool.clone(),
     )
     .await;
@@ -83,7 +86,7 @@ async fn main() {
 
     cluster.up().await;
 
-    let http = Arc::new(HttpClient::new(config.discord_token));
+    let http = Arc::new(HttpClient::new(config.discord_token.clone()));
     http.set_application_id(config.discord_application_id.into());
 
     let cache = Arc::new(
@@ -120,6 +123,7 @@ async fn main() {
         let fuzzysearch = fuzzysearch.clone();
         let semaphore = semaphore.clone();
 
+        let config = config.clone();
         tokio::spawn(async move {
             let _permit = semaphore.acquire().await.expect("Unable to acquire permit");
 
@@ -127,6 +131,7 @@ async fn main() {
                 http: http.clone(),
                 cache,
                 pool,
+                config,
                 sites,
                 fuzzysearch,
             };
@@ -180,6 +185,7 @@ struct Config {
     // Bot config
     discord_token: String,
     discord_application_id: NonZeroU64,
+    find_source_command: NonZeroU64,
     temp_admin: Option<NonZeroU64>,
     resume_path: Option<String>,
     database_url: String,
@@ -217,6 +223,7 @@ struct Context {
     http: Arc<HttpClient>,
     cache: Arc<InMemoryCache>,
     pool: Pool,
+    config: Config,
 
     sites: Arc<Mutex<Vec<foxbot_sites::BoxedSite>>>,
     fuzzysearch: std::sync::Arc<fuzzysearch::FuzzySearch>,
@@ -280,57 +287,92 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
                     .await?;
             }
         }
-        Event::ReactionAdd(reaction) => {
-            if !matches!(&reaction.emoji, ReactionType::Unicode { name } if name == "🦊") {
-                return Ok(());
-            }
+        Event::InteractionCreate(interaction) => match &interaction.0 {
+            Interaction::ApplicationCommand(command) => {
+                if command.data.id == ctx.config.find_source_command.into() {
+                    let messages = command
+                        .data
+                        .resolved
+                        .as_ref()
+                        .map(|resolved| resolved.messages.to_vec())
+                        .unwrap_or_default();
 
-            tracing::debug!("Added reaction: {:?}", reaction);
+                    tracing::debug!("Got command with {} messages", messages.len());
 
-            let attachments =
-                get_cached_attachments(&ctx, reaction.channel_id, reaction.message_id).await?;
+                    let mut embeds = Vec::with_capacity(messages.len());
 
-            if attachments.is_empty() {
-                tracing::debug!("Message had no attachments");
-                return Ok(());
-            }
+                    for message in messages {
+                        let attachments =
+                            get_cached_attachments(&ctx, message.channel_id, message.id).await?;
 
-            let private_channel = match ctx
-                .http
-                .create_private_channel(reaction.user_id)
-                .exec()
-                .await
-            {
-                Ok(private_channel) => private_channel.model().await.unwrap(),
-                Err(err) => {
-                    tracing::warn!("Unable to create private channel: {:?}", err);
-                    return Ok(());
+                        if attachments.is_empty() {
+                            tracing::info!("Attachments was empty");
+                            continue;
+                        }
+
+                        for attachment in attachments {
+                            let hash = if let Some(hash) =
+                                FileURLCache::get(&ctx.pool, &attachment.proxy_url).await?
+                            {
+                                hash
+                            } else {
+                                let hash = hash_attachment(&attachment.proxy_url).await?;
+                                FileURLCache::set(&ctx.pool, &attachment.proxy_url, hash).await?;
+                                hash
+                            };
+
+                            let files = lookup_hash(&ctx.fuzzysearch, hash, Some(3)).await?;
+
+                            if files.is_empty() {
+                                tracing::info!("No sources were found");
+                                continue;
+                            }
+
+                            let embed = sources_embed(&attachment, &files).map_err(|err| {
+                                UserErrorMessage::new(err, "Unable to properly respond")
+                            })?;
+
+                            tracing::info!("Created embed: {:?}", embed);
+
+                            embeds.push(embed);
+                        }
+                    }
+
+                    if embeds.is_empty() {
+                        let data = CallbackDataBuilder::new()
+                            .content("No images or sources were found.".to_string())
+                            .flags(MessageFlags::EPHEMERAL)
+                            .build();
+
+                        ctx.http
+                            .interaction_callback(
+                                command.id,
+                                &command.token,
+                                &InteractionResponse::ChannelMessageWithSource(data),
+                            )
+                            .exec()
+                            .await?;
+                    } else {
+                        let data = CallbackDataBuilder::new()
+                            .embeds(embeds)
+                            .flags(MessageFlags::EPHEMERAL)
+                            .build();
+
+                        ctx.http
+                            .interaction_callback(
+                                command.id,
+                                &command.token,
+                                &InteractionResponse::ChannelMessageWithSource(data),
+                            )
+                            .exec()
+                            .await?;
+                    }
+                } else {
+                    tracing::warn!("Got unknown command: {:?}", command);
                 }
-            };
-
-            for attachment in attachments {
-                let hash = hash_attachment(&attachment.proxy_url).await?;
-                let files = lookup_hash(&ctx.fuzzysearch, hash, Some(3)).await?;
-
-                if files.is_empty() {
-                    tracing::debug!("No matches were found");
-                    return Ok(());
-                }
-
-                let embed = sources_embed(&attachment, &files)
-                    .map_err(|err| UserErrorMessage::new(err, "Unable to properly respond"))?;
-
-                if let Err(err) = ctx
-                    .http
-                    .create_message(private_channel.id)
-                    .embeds(&[embed])?
-                    .exec()
-                    .await
-                {
-                    tracing::warn!("Unable to send private message: {:?}", err);
-                }
             }
-        }
+            _ => (),
+        },
         _ => (),
     }
 
