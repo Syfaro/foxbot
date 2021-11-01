@@ -72,7 +72,7 @@ impl From<&tgbotapi::User> for User {
 #[cfg(feature = "discord")]
 impl From<twilight_model::id::UserId> for User {
     fn from(user_id: twilight_model::id::UserId) -> Self {
-        User::Discord(user_id.0)
+        User::Discord(user_id.0.into())
     }
 }
 

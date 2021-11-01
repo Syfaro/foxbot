@@ -1,5 +1,5 @@
 use futures::{stream::StreamExt, TryFutureExt};
-use std::sync::Arc;
+use std::{num::NonZeroU64, sync::Arc};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     sync::Mutex,
@@ -83,11 +83,14 @@ async fn main() {
 
     cluster.up().await;
 
-    let http = HttpClient::new(&config.discord_token);
+    let http = Arc::new(HttpClient::new(config.discord_token));
+    http.set_application_id(config.discord_application_id.into());
 
-    let cache = InMemoryCache::builder()
-        .resource_types(ResourceType::all())
-        .build();
+    let cache = Arc::new(
+        InMemoryCache::builder()
+            .resource_types(ResourceType::all())
+            .build(),
+    );
 
     let semaphore = Arc::new(tokio::sync::Semaphore::new(4));
 
@@ -132,10 +135,7 @@ async fn main() {
                 tracing::error!("Error handling event: {:?}", err);
 
                 if let Some((channel_id, message_id)) = get_event_channel(&event) {
-                    let create_message = match err.downcast::<UserErrorMessage>() {
-                        Ok(err) => err.create_message(&http, channel_id),
-                        Err(err) => err.create_message(&http, channel_id),
-                    };
+                    let create_message = err.create_message(&http, channel_id);
 
                     let create_message = if let Some(message_id) = message_id {
                         create_message.reply(message_id)
@@ -143,7 +143,7 @@ async fn main() {
                         create_message
                     };
 
-                    if let Err(err) = create_message.await {
+                    if let Err(err) = create_message.exec().await {
                         tracing::error!("Unable to send error message: {:?}", err);
                     }
                 }
@@ -179,7 +179,8 @@ struct Config {
 
     // Bot config
     discord_token: String,
-    temp_admin: Option<u64>,
+    discord_application_id: NonZeroU64,
+    temp_admin: Option<NonZeroU64>,
     resume_path: Option<String>,
     database_url: String,
 }
@@ -213,8 +214,8 @@ async fn load_sessions(path: &Option<String>) -> Option<Sessions> {
 type Pool = sqlx::Pool<sqlx::Postgres>;
 
 struct Context {
-    http: HttpClient,
-    cache: InMemoryCache,
+    http: Arc<HttpClient>,
+    cache: Arc<InMemoryCache>,
     pool: Pool,
 
     sites: Arc<Mutex<Vec<foxbot_sites::BoxedSite>>>,
@@ -275,6 +276,7 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
                     .create_message(msg.channel_id)
                     .reply(msg.id)
                     .content("I don't know what to do here, sorry!")?
+                    .exec()
                     .await?;
             }
         }
@@ -293,8 +295,13 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
                 return Ok(());
             }
 
-            let private_channel = match ctx.http.create_private_channel(reaction.user_id).await {
-                Ok(private_channel) => private_channel,
+            let private_channel = match ctx
+                .http
+                .create_private_channel(reaction.user_id)
+                .exec()
+                .await
+            {
+                Ok(private_channel) => private_channel.model().await.unwrap(),
                 Err(err) => {
                     tracing::warn!("Unable to create private channel: {:?}", err);
                     return Ok(());
@@ -316,7 +323,8 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
                 if let Err(err) = ctx
                     .http
                     .create_message(private_channel.id)
-                    .embeds([embed])?
+                    .embeds(&[embed])?
+                    .exec()
                     .await
                 {
                     tracing::warn!("Unable to send private message: {:?}", err);
@@ -330,7 +338,7 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
 }
 
 trait CreateErrorMessage<'a> {
-    fn create_message(&self, http: &'a HttpClient, channel_id: ChannelId) -> CreateMessage<'a>;
+    fn create_message(&'a self, http: &'a HttpClient, channel_id: ChannelId) -> CreateMessage<'a>;
 }
 
 impl<'a> CreateErrorMessage<'a> for anyhow::Error {
@@ -363,10 +371,8 @@ impl<'a> UserErrorMessage<'a> {
 }
 
 impl<'a> CreateErrorMessage<'a> for UserErrorMessage<'_> {
-    fn create_message(&self, http: &'a HttpClient, channel_id: ChannelId) -> CreateMessage<'a> {
-        http.create_message(channel_id)
-            .content(self.msg.to_string())
-            .unwrap()
+    fn create_message(&'a self, http: &'a HttpClient, channel_id: ChannelId) -> CreateMessage<'a> {
+        http.create_message(channel_id).content(&self.msg).unwrap()
     }
 }
 
@@ -420,22 +426,18 @@ fn get_event_channel(event: &Event) -> Option<(ChannelId, Option<MessageId>)> {
 /// Check if a channel is a private message, using the cache if possible.
 async fn is_pm(ctx: &Context, channel_id: ChannelId) -> Result<bool, UserErrorMessage<'static>> {
     if let Some(channel) = ctx.cache.guild_channel(channel_id) {
-        return Ok(
-            matches!(channel, GuildChannel::Text(text) if text.kind == ChannelType::Private),
-        );
+        return Ok(channel.kind() == ChannelType::Private);
     }
 
     let channel = ctx
         .http
         .channel(channel_id)
+        .exec()
         .await
         .map_err(|err| UserErrorMessage::new(err, "Unable to check channel context"))?
-        .ok_or_else(|| {
-            UserErrorMessage::new(
-                anyhow::format_err!("ChannelId did not exist: {}", channel_id),
-                "Channel did not load",
-            )
-        })?;
+        .model()
+        .await
+        .map_err(|err| UserErrorMessage::new(err, "Channel did not load"))?;
 
     Ok(matches!(channel, Channel::Private(_)))
 }
@@ -450,8 +452,12 @@ async fn is_mention(ctx: &Context, message: &Message) -> Result<bool, UserErrorM
             let current_user = ctx
                 .http
                 .current_user()
+                .exec()
                 .await
-                .map_err(|err| UserErrorMessage::new(err, "Unable to load bot metadata"))?;
+                .map_err(|err| UserErrorMessage::new(err, "Unable to load bot metadata"))?
+                .model()
+                .map_err(|err| UserErrorMessage::new(err, "Unable to get current user ID"))
+                .await?;
 
             current_user.id
         }
@@ -504,19 +510,22 @@ async fn get_cached_attachments(
     channel_id: ChannelId,
     message_id: MessageId,
 ) -> Result<Vec<Attachment>, UserErrorMessage<'static>> {
-    if let Some(message) = ctx.cache.message(channel_id, message_id) {
-        return Ok(message.attachments);
+    if let Some(message) = ctx.cache.message(message_id) {
+        return Ok(message.attachments().to_vec());
     }
 
     let message = match ctx
         .http
         .message(channel_id, message_id)
+        .exec()
         .await
         .map_err(|err| UserErrorMessage::new(err, "Unable to get message"))?
+        .model()
+        .await
     {
-        Some(message) => message,
-        None => {
-            tracing::warn!("Could not get message");
+        Ok(message) => message,
+        Err(err) => {
+            tracing::warn!("Could not get message: {}", err);
             return Ok(vec![]);
         }
     };
@@ -530,7 +539,7 @@ async fn allow_nsfw(ctx: &Context, channel_id: ChannelId) -> Option<bool> {
     }
 
     let channel = ctx.cache.guild_channel(channel_id)?;
-    Some(matches!(channel, GuildChannel::Text(channel) if channel.nsfw))
+    Some(matches!(channel.resource(), GuildChannel::Text(channel) if channel.nsfw))
 }
 
 async fn source_attachments(
@@ -545,7 +554,7 @@ async fn source_attachments(
     let mut skip_delete = false;
 
     for attachment in attachments {
-        ctx.http.create_typing_trigger(channel_id).await?;
+        ctx.http.create_typing_trigger(channel_id).exec().await?;
 
         let hash = if let Some(hash) = FileURLCache::get(&ctx.pool, &attachment.proxy_url).await? {
             hash
@@ -562,6 +571,7 @@ async fn source_attachments(
                 .create_message(channel_id)
                 .reply(summoning_id)
                 .content("No matches found, sorry.")?
+                .exec()
                 .await?;
 
             skip_delete = true;
@@ -577,6 +587,7 @@ async fn source_attachments(
                 .create_message(channel_id)
                 .reply(summoning_id)
                 .content("I'll only show NSFW results in NSFW channels.")?
+                .exec()
                 .await?;
 
             skip_delete = true;
@@ -589,14 +600,18 @@ async fn source_attachments(
         ctx.http
             .create_message(channel_id)
             .reply(content_id)
-            .embeds([embed])?
+            .embeds(&[embed])?
+            .exec()
             .await?;
     }
 
     if !skip_delete
         && matches!(guild_id, Some(guild_id) if summoning_id != content_id && can_manage_messages(ctx, guild_id).unwrap_or(false))
     {
-        ctx.http.delete_message(channel_id, summoning_id).await?;
+        ctx.http
+            .delete_message(channel_id, summoning_id)
+            .exec()
+            .await?;
     }
 
     Ok(())
@@ -663,7 +678,7 @@ fn can_manage_messages(ctx: &Context, guild_id: GuildId) -> Option<bool> {
     let current_user = ctx.cache.current_user()?;
     let member = ctx.cache.member(guild_id, current_user.id)?;
 
-    for role_id in &member.roles {
+    for role_id in member.roles() {
         let role = ctx.cache.role(*role_id)?;
 
         if role.permissions.contains(Permissions::MANAGE_MESSAGES) {
@@ -695,13 +710,17 @@ async fn mirror_links(
         ctx.http
             .create_message(channel_id)
             .reply(content_id)
-            .embeds([link_embed(&result)?])?
+            .embeds(&[link_embed(&result)?])?
+            .exec()
             .await?;
     }
 
     if matches!(guild_id, Some(guild_id) if summoning_id != content_id && can_manage_messages(ctx, guild_id).unwrap_or(false))
     {
-        ctx.http.delete_message(channel_id, summoning_id).await?;
+        ctx.http
+            .delete_message(channel_id, summoning_id)
+            .exec()
+            .await?;
     }
 
     Ok(())
