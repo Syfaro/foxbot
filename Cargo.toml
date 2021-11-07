@@ -5,7 +5,8 @@ members = [
     "foxbot-sites",
     "foxbot-models",
     "foxbot-utils",
-    "foxbot-background-worker"
+    "foxbot-background-worker",
+    "foxbot-discord",
 ]
 
 [profile.dev.package."*"]

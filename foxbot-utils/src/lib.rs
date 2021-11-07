@@ -7,7 +7,7 @@ use std::{collections::HashSet, str::FromStr, sync::Arc};
 use tgbotapi::FileType;
 use tracing_futures::Instrument;
 
-use foxbot_models::{CachedPost, FileCache, Sites, UserConfig, UserConfigKey};
+use foxbot_models::{CachedPost, Chat, FileCache, Sites, User, UserConfig, UserConfigKey};
 use foxbot_sites::{BoxedSite, PostInfo};
 
 /// Generates a random 24 character alphanumeric string.
@@ -154,8 +154,8 @@ async fn set_cached_images(
 /// that URL. When complete, it returns the URLs that appeared to contain no
 /// content.
 #[tracing::instrument(err, skip(user, sites, redis, callback))]
-pub async fn find_images<'a, C>(
-    user: &tgbotapi::User,
+pub async fn find_images<'a, C, U: Into<User>>(
+    user: U,
     links: Vec<&'a str>,
     mut sites: &mut [BoxedSite],
     redis: &redis::aio::ConnectionManager,
@@ -164,6 +164,8 @@ pub async fn find_images<'a, C>(
 where
     C: FnMut(SiteCallback),
 {
+    let user = user.into();
+
     let mut missing = vec![];
 
     let mut redis = redis.clone();
@@ -185,7 +187,10 @@ where
             if site.url_supported(link).await {
                 tracing::debug!(link, site = site.name(), "found supported link");
 
-                let images = site.get_images(user.id, link).await?;
+                let images = site
+                    .get_images(user, link)
+                    .await
+                    .context("unable to extract site images")?;
 
                 match images {
                     Some(results) => {
@@ -708,9 +713,9 @@ pub async fn lookup_single_hash(
 }
 
 /// Sort match results based on a user's preferences.
-pub async fn sort_results(
+pub async fn sort_results<U: Into<User>>(
     conn: &sqlx::Pool<sqlx::Postgres>,
-    user_id: i64,
+    user: U,
     results: &mut Vec<fuzzysearch::File>,
 ) -> anyhow::Result<()> {
     // If we have 1 or fewer items, we don't need to do any sorting.
@@ -718,7 +723,9 @@ pub async fn sort_results(
         return Ok(());
     }
 
-    let row: Option<Vec<String>> = UserConfig::get(conn, UserConfigKey::SiteSortOrder, user_id)
+    let user = user.into();
+
+    let row: Option<Vec<String>> = UserConfig::get(conn, UserConfigKey::SiteSortOrder, user)
         .await
         .context("unable to get user site sort order")?;
     let sites = match row {
@@ -1024,20 +1031,23 @@ pub fn chat_from_update(update: &tgbotapi::Update) -> Option<&tgbotapi::Chat> {
 
 /// Check if the bot has permissions to delete in a chat. Checks the cache if
 /// not being told to ignore it.
-pub async fn can_delete_in_chat(
+pub async fn can_delete_in_chat<C: Into<Chat>, U: Into<User>>(
     bot: &tgbotapi::Telegram,
     conn: &sqlx::Pool<sqlx::Postgres>,
-    chat_id: i64,
-    user_id: i64,
+    chat: C,
+    user: U,
     ignore_cache: bool,
 ) -> anyhow::Result<bool> {
     use foxbot_models::{GroupConfig, GroupConfigKey};
+
+    let chat = chat.into();
+    let user = user.into();
 
     // If we're not ignoring cache, start by checking if we already have a value
     // in the database.
     if !ignore_cache {
         let can_delete: Option<bool> =
-            GroupConfig::get(conn, chat_id, GroupConfigKey::HasDeletePermission).await?;
+            GroupConfig::get(conn, chat, GroupConfigKey::HasDeletePermission).await?;
 
         // If we had a value we're done, return it.
         if let Some(can_delete) = can_delete {
@@ -1049,20 +1059,14 @@ pub async fn can_delete_in_chat(
     // permission to delete messages.
     let chat_member = bot
         .make_request(&tgbotapi::requests::GetChatMember {
-            chat_id: chat_id.into(),
-            user_id,
+            chat_id: chat.telegram_id().unwrap().into(),
+            user_id: user.telegram_id().unwrap(),
         })
         .await?;
     let can_delete = chat_member.can_delete_messages.unwrap_or(false);
 
     // Cache the new value.
-    GroupConfig::set(
-        conn,
-        GroupConfigKey::HasDeletePermission,
-        chat_id,
-        can_delete,
-    )
-    .await?;
+    GroupConfig::set(conn, GroupConfigKey::HasDeletePermission, chat, can_delete).await?;
 
     Ok(can_delete)
 }

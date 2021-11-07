@@ -333,14 +333,10 @@ async fn store_channel_edit(handler: &Handler, message: &tgbotapi::Message) -> a
     // Check if we already have a saved value for the channel. If we do, it's
     // probably correct and we don't need to update it. Permissions are updated
     // through Telegram updates normally.
-    if GroupConfig::get::<bool>(
-        &handler.conn,
-        message.chat.id,
-        GroupConfigKey::CanEditChannel,
-    )
-    .await
-    .context("could not check if we knew if bot had edit permissions in channel")?
-    .is_some()
+    if GroupConfig::get::<bool, _>(&handler.conn, &message.chat, GroupConfigKey::CanEditChannel)
+        .await
+        .context("could not check if we knew if bot had edit permissions in channel")?
+        .is_some()
     {
         tracing::trace!("already knew if bot had edit permissions in channel");
         return Ok(());
@@ -364,7 +360,7 @@ async fn store_channel_edit(handler: &Handler, message: &tgbotapi::Message) -> a
     GroupConfig::set(
         &handler.conn,
         GroupConfigKey::CanEditChannel,
-        message.chat.id,
+        &message.chat,
         can_edit_messages,
     )
     .await

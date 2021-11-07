@@ -82,7 +82,7 @@ async fn handle_command(
         return Ok(());
     }
 
-    if let Some(account) = Twitter::get_account(&handler.conn, user.id).await? {
+    if let Some(account) = Twitter::get_account(&handler.conn, user).await? {
         let access = get_access(&handler.config, account);
 
         if let Ok(twitter_account) = egg_mode::auth::verify_tokens(&access).await {
@@ -169,7 +169,7 @@ async fn verify_account(
 
     Twitter::set_account(
         &handler.conn,
-        row.user_id,
+        foxbot_models::User::Telegram(row.telegram_id.unwrap()),
         TwitterAccount {
             consumer_key: access.key.to_string(),
             consumer_secret: access.secret.to_string(),
@@ -187,7 +187,7 @@ async fn verify_account(
         .await;
 
     let message = tgbotapi::requests::SendMessage {
-        chat_id: row.user_id.into(),
+        chat_id: row.telegram_id.unwrap().into(),
         text,
         ..Default::default()
     };
@@ -239,7 +239,7 @@ async fn handle_remove(
 ) -> anyhow::Result<()> {
     answer_callback(handler, callback).await?;
 
-    Twitter::remove_account(&handler.conn, callback.from.id).await?;
+    Twitter::remove_account(&handler.conn, &callback.from).await?;
 
     let text = handler
         .get_fluent_bundle(callback.from.language_code.as_deref(), |bundle| {
@@ -270,7 +270,7 @@ async fn prepare_authorization_link(
 
     Twitter::set_request(
         &handler.conn,
-        user.id,
+        user,
         &request_token.key,
         &request_token.secret,
     )

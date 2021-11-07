@@ -48,6 +48,86 @@ impl serde::Serialize for Sites {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum User {
+    Telegram(i64),
+    Discord(u64),
+}
+
+impl std::fmt::Display for User {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            User::Telegram(telegram_id) => write!(f, "Telegram-{}", telegram_id),
+            User::Discord(discord_id) => write!(f, "Discord-{}", discord_id),
+        }
+    }
+}
+
+impl From<&tgbotapi::User> for User {
+    fn from(user: &tgbotapi::User) -> Self {
+        User::Telegram(user.id)
+    }
+}
+
+#[cfg(feature = "discord")]
+impl From<twilight_model::id::UserId> for User {
+    fn from(user_id: twilight_model::id::UserId) -> Self {
+        User::Discord(user_id.0.into())
+    }
+}
+
+impl User {
+    pub fn telegram_id(&self) -> Option<i64> {
+        if let User::Telegram(telegram_id) = self {
+            Some(*telegram_id)
+        } else {
+            None
+        }
+    }
+
+    pub fn discord_id(&self) -> Option<bigdecimal::BigDecimal> {
+        use bigdecimal::FromPrimitive;
+
+        if let User::Discord(discord_id) = self {
+            bigdecimal::BigDecimal::from_u64(*discord_id)
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum Chat {
+    Telegram(i64),
+    Discord(u64),
+}
+
+impl Chat {
+    pub fn telegram_id(&self) -> Option<i64> {
+        if let Chat::Telegram(telegram_id) = self {
+            Some(*telegram_id)
+        } else {
+            None
+        }
+    }
+
+    pub fn discord_id(&self) -> Option<bigdecimal::BigDecimal> {
+        use bigdecimal::FromPrimitive;
+
+        if let Chat::Discord(discord_id) = self {
+            bigdecimal::BigDecimal::from_u64(*discord_id)
+        } else {
+            None
+        }
+    }
+}
+
+impl From<&tgbotapi::Chat> for Chat {
+    fn from(chat: &tgbotapi::Chat) -> Self {
+        Chat::Telegram(chat.id)
+    }
+}
+
 #[derive(Debug)]
 pub struct ParseSitesError;
 
@@ -107,17 +187,20 @@ impl UserConfig {
     /// Get a configuration value from the user_config table.
     ///
     /// If the value does not exist for a given user, returns None.
-    pub async fn get<T: serde::de::DeserializeOwned>(
+    pub async fn get<T: serde::de::DeserializeOwned, U: Into<User>>(
         conn: &sqlx::Pool<sqlx::Postgres>,
         key: UserConfigKey,
-        user_id: i64,
+        user: U,
     ) -> anyhow::Result<Option<T>> {
+        let user = user.into();
+
         sqlx::query!(
             "SELECT value
             FROM user_config
-            WHERE user_config.account_id = lookup_account_by_telegram_id($1) AND name = $2
+            WHERE user_config.account_id = lookup_account($1, $2) AND name = $3
             ORDER BY updated_at DESC LIMIT 1",
-            user_id,
+            user.telegram_id(),
+            user.discord_id(),
             key.as_str()
         )
         .fetch_optional(conn)
@@ -127,18 +210,20 @@ impl UserConfig {
     }
 
     /// Set a configuration value for the user_config table.
-    pub async fn set<T: serde::Serialize>(
+    pub async fn set<T: serde::Serialize, U: Into<User>>(
         conn: &sqlx::Pool<sqlx::Postgres>,
         key: UserConfigKey,
-        user_id: i64,
+        user: U,
         data: T,
     ) -> anyhow::Result<()> {
         let value = serde_json::to_value(&data)?;
+        let user = user.into();
 
         sqlx::query!(
             "INSERT INTO user_config (account_id, name, value)
-            VALUES (lookup_account_by_telegram_id($1), $2, $3)",
-            user_id,
+            VALUES (lookup_account($1, $2), $3, $4)",
+            user.telegram_id(),
+            user.discord_id(),
             key.as_str(),
             value
         )
@@ -152,12 +237,13 @@ impl UserConfig {
     pub async fn delete(
         conn: &sqlx::Pool<sqlx::Postgres>,
         key: UserConfigKey,
-        user_id: i64,
+        user: User,
     ) -> anyhow::Result<()> {
         sqlx::query!(
             "DELETE FROM user_config
-            WHERE account_id = lookup_account_by_telegram_id($1) AND name = $2",
-            user_id,
+            WHERE account_id = lookup_account($1, $2) AND name = $3",
+            user.telegram_id(),
+            user.discord_id(),
             key.as_str()
         )
         .execute(conn)
@@ -192,18 +278,21 @@ impl GroupConfigKey {
 }
 
 impl GroupConfig {
-    pub async fn get<T: serde::de::DeserializeOwned>(
+    pub async fn get<T: serde::de::DeserializeOwned, C: Into<Chat>>(
         conn: &sqlx::Pool<sqlx::Postgres>,
-        chat_id: i64,
+        chat: C,
         name: GroupConfigKey,
     ) -> anyhow::Result<Option<T>> {
+        let chat = chat.into();
+
         sqlx::query!(
             "SELECT value
             FROM group_config
-            WHERE group_config.chat_id = lookup_chat_by_telegram_id($1) AND name = $2
+            WHERE group_config.chat_id = lookup_chat($1, $2) AND name = $3
             ORDER BY updated_at DESC LIMIT 1",
-            chat_id,
-            name.as_str()
+            chat.telegram_id(),
+            chat.discord_id(),
+            name.as_str(),
         )
         .fetch_optional(conn)
         .await
@@ -211,18 +300,21 @@ impl GroupConfig {
         .context("unable to perform group_config lookup")
     }
 
-    pub async fn set<T: serde::Serialize>(
+    pub async fn set<T: serde::Serialize, C: Into<Chat>>(
         conn: &sqlx::Pool<sqlx::Postgres>,
         key: GroupConfigKey,
-        chat_id: i64,
+        chat: C,
         data: T,
     ) -> anyhow::Result<()> {
         let value = serde_json::to_value(data)?;
 
+        let chat = chat.into();
+
         sqlx::query!(
             "INSERT INTO group_config (chat_id, name, value) VALUES
-                (lookup_chat_by_telegram_id($1), $2, $3)",
-            chat_id,
+                (lookup_chat($1, $2), $3, $4)",
+            chat.telegram_id(),
+            chat.discord_id(),
             key.as_str(),
             value
         )
@@ -242,7 +334,9 @@ pub struct TwitterAccount {
 
 #[derive(sqlx::FromRow)]
 pub struct TwitterRequest {
-    pub user_id: i64,
+    pub account_id: i32,
+    pub telegram_id: Option<i64>,
+    pub discord_id: Option<u64>,
     pub request_key: String,
     pub request_secret: String,
 }
@@ -251,16 +345,19 @@ pub struct Twitter;
 
 impl Twitter {
     /// Look up a user's Twitter credentials.
-    pub async fn get_account(
+    pub async fn get_account<U: Into<User>>(
         conn: &sqlx::Pool<sqlx::Postgres>,
-        user_id: i64,
+        user: U,
     ) -> anyhow::Result<Option<TwitterAccount>> {
+        let user = user.into();
+
         let account = sqlx::query_as!(
             TwitterAccount,
             "SELECT consumer_key, consumer_secret
             FROM twitter_account
-            WHERE twitter_account.account_id = lookup_account_by_telegram_id($1)",
-            user_id
+            WHERE twitter_account.account_id = lookup_account($1, $2)",
+            user.telegram_id(),
+            user.discord_id(),
         )
         .fetch_optional(conn)
         .await?;
@@ -273,14 +370,22 @@ impl Twitter {
         conn: &sqlx::Pool<sqlx::Postgres>,
         request_key: &str,
     ) -> anyhow::Result<Option<TwitterRequest>> {
-        let req = sqlx::query_as!(
-            TwitterRequest,
-            "SELECT account.telegram_id user_id, request_key, request_secret
+        use bigdecimal::ToPrimitive;
+
+        let req = sqlx::query!(
+            "SELECT account.id account_id, account.telegram_id, account.discord_id, request_key, request_secret
             FROM twitter_auth
             JOIN account ON account.id = twitter_auth.account_id
             WHERE request_key = $1",
             request_key
         )
+        .map(|row| TwitterRequest {
+            account_id: row.account_id,
+            telegram_id: row.telegram_id,
+            discord_id: row.discord_id.and_then(|id| id.to_u64()),
+            request_key: row.request_key,
+            request_secret: row.request_secret,
+        })
         .fetch_optional(conn)
         .await?;
 
@@ -295,29 +400,32 @@ impl Twitter {
     /// * Deletes the pending request
     pub async fn set_account(
         conn: &sqlx::Pool<sqlx::Postgres>,
-        user_id: i64,
+        user: User,
         creds: TwitterAccount,
     ) -> anyhow::Result<()> {
         let mut tx = conn.begin().await?;
 
         sqlx::query!(
             "DELETE FROM twitter_account
-            WHERE account_id = lookup_account_by_telegram_id($1)",
-            user_id
+            WHERE account_id = lookup_account($1, $2)",
+            user.telegram_id(),
+            user.discord_id(),
         )
         .execute(&mut tx)
         .await?;
         sqlx::query!(
             "DELETE FROM twitter_auth
-            WHERE account_id = lookup_account_by_telegram_id($1)",
-            user_id
+            WHERE account_id = lookup_account($1, $2)",
+            user.telegram_id(),
+            user.discord_id(),
         )
         .execute(&mut tx)
         .await?;
         sqlx::query!(
             "INSERT INTO twitter_account (account_id, consumer_key, consumer_secret) VALUES
-                (lookup_account_by_telegram_id($1), $2, $3)",
-            user_id,
+                (lookup_account($1, $2), $3, $4)",
+            user.telegram_id(),
+            user.discord_id(),
             creds.consumer_key,
             creds.consumer_secret
         )
@@ -329,25 +437,29 @@ impl Twitter {
         Ok(())
     }
 
-    pub async fn set_request(
+    pub async fn set_request<U: Into<User>>(
         conn: &sqlx::Pool<sqlx::Postgres>,
-        user_id: i64,
+        user: U,
         request_key: &str,
         request_secret: &str,
     ) -> anyhow::Result<()> {
+        let user = user.into();
+
         let mut tx = conn.begin().await?;
 
         sqlx::query!(
             "DELETE FROM twitter_auth
-            WHERE account_id = lookup_account_by_telegram_id($1)",
-            &user_id
+            WHERE account_id = lookup_account($1, $2)",
+            user.telegram_id(),
+            user.discord_id(),
         )
         .execute(&mut tx)
         .await?;
         sqlx::query!(
             "INSERT INTO twitter_auth (account_id, request_key, request_secret) VALUES
-                (lookup_account_by_telegram_id($1), $2, $3)",
-            user_id,
+                (lookup_account($1, $2), $3, $4)",
+            user.telegram_id(),
+            user.discord_id(),
             request_key,
             request_secret
         )
@@ -359,14 +471,17 @@ impl Twitter {
         Ok(())
     }
 
-    pub async fn remove_account(
+    pub async fn remove_account<U: Into<User>>(
         conn: &sqlx::Pool<sqlx::Postgres>,
-        user_id: i64,
+        user: U,
     ) -> anyhow::Result<()> {
+        let user = user.into();
+
         sqlx::query!(
             "DELETE FROM twitter_account
-            WHERE account_id = lookup_account_by_telegram_id($1)",
-            user_id
+            WHERE account_id = lookup_account($1, $2)",
+            user.telegram_id(),
+            user.discord_id(),
         )
         .execute(conn)
         .await?;
@@ -538,17 +653,20 @@ impl Video {
     }
 
     /// Add a new message associated with a video encoding job.
-    pub async fn add_message_id(
+    pub async fn add_message_id<C: Into<Chat>>(
         conn: &sqlx::Pool<sqlx::Postgres>,
         id: i32,
-        chat_id: i64,
+        chat: C,
         message_id: i32,
     ) -> anyhow::Result<()> {
+        let chat = chat.into();
+
         sqlx::query!(
             "INSERT INTO video_job_message (video_id, chat_id, message_id) VALUES
-                ($1, lookup_chat_by_telegram_id($2), $3)",
+                ($1, lookup_chat($2, $3), $4)",
             id,
-            chat_id,
+            chat.telegram_id(),
+            chat.discord_id(),
             message_id
         )
         .execute(conn)
@@ -682,14 +800,17 @@ impl ChatAdmin {
     ///
     /// Will discard updates that are older than the newest item in the
     /// database. Returns if the user is currently an admin.
-    pub async fn update_chat(
+    pub async fn update_chat<C: Into<Chat>, U: Into<User>>(
         conn: &sqlx::Pool<sqlx::Postgres>,
         status: &tgbotapi::ChatMemberStatus,
-        user_id: i64,
-        chat_id: i64,
+        user: U,
+        chat: C,
         date: Option<i32>,
     ) -> anyhow::Result<bool> {
         use tgbotapi::ChatMemberStatus::*;
+
+        let chat = chat.into();
+        let user = user.into();
 
         let is_admin = matches!(status, Administrator | Creator);
 
@@ -698,9 +819,10 @@ impl ChatAdmin {
         // in the database.
         sqlx::query!(
             "INSERT INTO chat_administrator (account_id, chat_id, is_admin, updated_at)
-                VALUES (lookup_account_by_telegram_id($1), lookup_chat_by_telegram_id($2), $3, to_timestamp($4::bigint))",
-            user_id,
-            chat_id,
+                VALUES (lookup_account($1, $2), lookup_chat_by_telegram_id($3), $4, to_timestamp($5::bigint))",
+            user.telegram_id(),
+            user.discord_id(),
+            chat.telegram_id(),
             is_admin,
             date.map(|time| time as i64).unwrap_or_else(|| chrono::Utc::now().timestamp()),
         )
@@ -711,18 +833,22 @@ impl ChatAdmin {
     }
 
     /// Check if a user is currently an admin.
-    pub async fn is_admin(
+    pub async fn is_admin<U: Into<User>, C: Into<Chat>>(
         conn: &sqlx::Pool<sqlx::Postgres>,
-        user_id: i64,
-        chat_id: i64,
+        user: U,
+        chat: C,
     ) -> anyhow::Result<Option<bool>> {
+        let user = user.into();
+        let chat = chat.into();
+
         let is_admin = sqlx::query_scalar!(
             "SELECT is_admin
             FROM chat_administrator
-            WHERE account_id = lookup_account_by_telegram_id($1) AND chat_id = lookup_chat_by_telegram_id($2)
+            WHERE account_id = lookup_account($1, $2) AND chat_id = lookup_chat_by_telegram_id($3)
             ORDER BY updated_at DESC LIMIT 1",
-            user_id,
-            chat_id
+            user.telegram_id(),
+            user.discord_id(),
+            chat.telegram_id(),
         )
         .fetch_optional(conn)
         .await?;
@@ -732,15 +858,17 @@ impl ChatAdmin {
 
     /// Remove all known administrators from a group, except for the bot. We
     /// always get updates for our own user, so it's safe to keep.
-    pub async fn flush(
+    pub async fn flush<C: Into<Chat>>(
         conn: &sqlx::Pool<sqlx::Postgres>,
         bot_user_id: i64,
-        chat_id: i64,
+        chat: C,
     ) -> anyhow::Result<()> {
+        let chat = chat.into();
+
         sqlx::query!(
             "DELETE FROM chat_administrator
             WHERE chat_id = lookup_chat_by_telegram_id($1) AND account_id <> lookup_account_by_telegram_id($2)",
-            chat_id,
+            chat.telegram_id(),
             bot_user_id
         )
         .execute(conn)
@@ -753,24 +881,27 @@ impl ChatAdmin {
 pub struct Subscriptions;
 
 pub struct Subscription {
-    pub user_id: i64,
+    pub telegram_id: i64,
     pub hash: i64,
     pub message_id: Option<i32>,
     pub photo_id: Option<String>,
 }
 
 impl Subscriptions {
-    pub async fn add_subscription(
+    pub async fn add_subscription<U: Into<User>>(
         conn: &sqlx::Pool<sqlx::Postgres>,
-        user_id: i64,
+        user: U,
         hash: i64,
         message_id: Option<i32>,
         photo_id: Option<&str>,
     ) -> anyhow::Result<()> {
+        let user = user.into();
+
         sqlx::query!(
             "INSERT INTO source_notification (account_id, hash, message_id, photo_id)
-                VALUES (lookup_account_by_telegram_id($1), $2, $3, $4) ON CONFLICT DO NOTHING",
-            user_id,
+                VALUES (lookup_account($1, $2), $3, $4, $5) ON CONFLICT DO NOTHING",
+            user.telegram_id(),
+            user.discord_id(),
             hash,
             message_id,
             photo_id,
@@ -781,15 +912,18 @@ impl Subscriptions {
         Ok(())
     }
 
-    pub async fn remove_subscription(
+    pub async fn remove_subscription<U: Into<User>>(
         conn: &sqlx::Pool<sqlx::Postgres>,
-        user_id: i64,
+        user: U,
         hash: i64,
     ) -> anyhow::Result<()> {
+        let user = user.into();
+
         sqlx::query!(
             "DELETE FROM source_notification
-            WHERE account_id = lookup_account_by_telegram_id($1) AND hash <@ ($2, 0)",
-            user_id,
+            WHERE account_id = lookup_account($1, $2) AND hash <@ ($3, 0)",
+            user.telegram_id(),
+            user.discord_id(),
             hash
         )
         .execute(conn)
@@ -810,7 +944,7 @@ impl Subscriptions {
             hash
         )
         .map(|row| Subscription {
-            user_id: row.user_id.unwrap(),
+            telegram_id: row.user_id.unwrap(),
             hash: row.hash.unwrap(),
             message_id: row.message_id,
             photo_id: row.photo_id,
@@ -819,6 +953,39 @@ impl Subscriptions {
         .await?;
 
         Ok(subscriptions)
+    }
+}
+
+pub struct FileURLCache;
+
+impl FileURLCache {
+    /// Look up a file's cached hash by a URL that is known to never change.
+    pub async fn get(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        file_url: &str,
+    ) -> anyhow::Result<Option<i64>> {
+        let result = sqlx::query!("SELECT hash FROM file_url_cache WHERE url = $1", file_url)
+            .fetch_optional(conn)
+            .await
+            .map(|row| row.map(|row| row.hash.unwrap()))
+            .context("Unable to select hash from file_url_cache");
+
+        result
+    }
+
+    pub async fn set(
+        conn: &sqlx::Pool<sqlx::Postgres>,
+        file_url: &str,
+        hash: i64,
+    ) -> anyhow::Result<()> {
+        sqlx::query!(
+            "INSERT INTO file_url_cache (url, hash) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            file_url,
+            hash
+        )
+        .execute(conn)
+        .await?;
+        Ok(())
     }
 }
 

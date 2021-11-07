@@ -38,6 +38,7 @@ jobs:
         run: |
           mv target/release/foxbot foxbot/foxbot
           mv target/release/foxbot-background-worker foxbot-background-worker/foxbot-background-worker
+          mv target/release/foxbot-discord foxbot-discord/foxbot-discord
 
       - name: Upload binaries
         uses: actions/upload-artifact@v2
@@ -46,6 +47,7 @@ jobs:
           path: |
             foxbot/foxbot
             foxbot-background-worker/foxbot-background-worker
+            foxbot-discord/foxbot-discord
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v1
@@ -66,6 +68,12 @@ jobs:
         with:
           images: ghcr.io/syfaro/foxbot-background-worker
 
+      - name: Extract FoxBot Discord metadata for Docker
+        id: meta-foxbot-discord
+        uses: docker/metadata-action@v3
+        with:
+          images: ghcr.io/syfaro/foxbot-discord
+
       - name: Build and push FoxBot Docker image
         uses: docker/build-push-action@v2
         with:
@@ -83,3 +91,12 @@ jobs:
           tags: ${{ steps.meta-foxbot-background-worker.outputs.tags }}
           labels: ${{ steps.meta-foxbot-background-worker.outputs.labels }}
           file: foxbot-background-worker/Dockerfile
+
+      - name: Build and push FoxBot Discord Docker image
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta-foxbot-discord.outputs.tags }}
+          labels: ${{ steps.meta-foxbot-discord.outputs.labels }}
+          file: foxbot-discord/Dockerfile

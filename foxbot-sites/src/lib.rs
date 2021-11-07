@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, collections::HashMap};
 use thiserror::Error;
 
-use foxbot_models::{DisplayableErrorMessage, Twitter as TwitterModel};
+use foxbot_models::{DisplayableErrorMessage, Twitter as TwitterModel, User};
 
 /// User agent used with all HTTP requests to sites.
 const USER_AGENT: &str = concat!(
@@ -68,11 +68,7 @@ pub trait Site {
     async fn url_supported(&mut self, url: &str) -> bool;
     /// Attempt to load images from the given URL, with the Telegram user ID
     /// in case credentials are needed.
-    async fn get_images(
-        &mut self,
-        user_id: i64,
-        url: &str,
-    ) -> anyhow::Result<Option<Vec<PostInfo>>>;
+    async fn get_images(&mut self, user: User, url: &str) -> anyhow::Result<Option<Vec<PostInfo>>>;
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -224,7 +220,7 @@ impl Site for Direct {
 
     async fn get_images(
         &mut self,
-        _user_id: i64,
+        _user: User,
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let u = url.to_string();
@@ -491,7 +487,7 @@ impl Site for E621 {
 
     async fn get_images(
         &mut self,
-        _user_id: i64,
+        _user: User,
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let endpoint = if self.show.is_match(url) {
@@ -696,16 +692,12 @@ impl Site for Twitter {
         self.matcher.is_match(url)
     }
 
-    async fn get_images(
-        &mut self,
-        user_id: i64,
-        url: &str,
-    ) -> anyhow::Result<Option<Vec<PostInfo>>> {
+    async fn get_images(&mut self, user: User, url: &str) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let captures = self.matcher.captures(url).unwrap();
 
-        tracing::trace!(user_id, "attempting to find saved credentials",);
+        tracing::trace!(%user, "attempting to find saved credentials",);
 
-        let account = TwitterModel::get_account(&self.conn, user_id)
+        let account = TwitterModel::get_account(&self.conn, user)
             .await
             .context("unable to query twitter account")?;
 
@@ -894,7 +886,7 @@ impl Site for FurAffinity {
 
     async fn get_images(
         &mut self,
-        _user_id: i64,
+        _user: User,
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let captures = self
@@ -1009,7 +1001,7 @@ impl Site for Mastodon {
 
     async fn get_images(
         &mut self,
-        _user_id: i64,
+        _user: User,
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let captures = self.matcher.captures(url).unwrap();
@@ -1123,7 +1115,7 @@ impl Site for Weasyl {
 
     async fn get_images(
         &mut self,
-        _user_id: i64,
+        _user: User,
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let captures = self.matcher.captures(url).unwrap();
@@ -1359,7 +1351,7 @@ impl Site for Inkbunny {
 
     async fn get_images(
         &mut self,
-        _user_id: i64,
+        _user: User,
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let captures = self.matcher.captures(url).unwrap();
@@ -1505,7 +1497,7 @@ impl Site for DeviantArt {
 
     async fn get_images(
         &mut self,
-        _user_id: i64,
+        _user: User,
         url: &str,
     ) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let mut endpoint = url::Url::parse("https://backend.deviantart.com/oembed").unwrap();
