@@ -66,11 +66,7 @@ async fn main() {
 
     let cluster = Cluster::builder(
         &config.discord_token,
-        Intents::GUILDS
-            | Intents::GUILD_MESSAGES
-            | Intents::GUILD_MESSAGE_REACTIONS
-            | Intents::DIRECT_MESSAGES
-            | Intents::DIRECT_MESSAGE_REACTIONS,
+        Intents::GUILDS | Intents::GUILD_MESSAGES | Intents::DIRECT_MESSAGES,
     )
     .shard_scheme(scheme);
 
@@ -459,8 +455,6 @@ fn get_event_channel(event: &Event) -> Option<(ChannelId, Option<MessageId>)> {
         Event::MessageCreate(msg) => Some((msg.channel_id, Some(msg.id))),
         Event::MessageDelete(msg) => Some((msg.channel_id, Some(msg.id))),
         Event::MessageUpdate(msg) => Some((msg.channel_id, Some(msg.id))),
-        Event::ReactionAdd(re) => Some((re.channel_id, Some(re.message_id))),
-        Event::ReactionRemove(re) => Some((re.channel_id, Some(re.message_id))),
         _ => None,
     }
 }
