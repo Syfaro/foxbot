@@ -826,7 +826,7 @@ impl FurAffinity {
         }))
     }
 
-    async fn load_from_fa(&self, id: i32, url: &str) -> anyhow::Result<Option<PostInfo>> {
+    async fn load_from_fa(&self, id: i32, url: &str) -> anyhow::Result<Option<Vec<PostInfo>>> {
         let sub = self.fa.get_submission(id).await.map_err(|err| {
             DisplayableErrorMessage::new("Unable to get FurAffinity submission", err)
         })?;
@@ -835,27 +835,138 @@ impl FurAffinity {
             None => return Ok(None),
         };
 
-        let image_url = match sub.content {
+        let image_url = match &sub.content {
             furaffinity_rs::Content::Image(image) => image,
             _ => return Ok(None),
         };
 
-        let ext = match get_file_ext(&image_url) {
+        let ext = match get_file_ext(image_url) {
             Some(ext) => ext,
             None => return Ok(None),
         };
 
-        Ok(Some(PostInfo {
+        let fallback = vec![PostInfo {
             file_type: ext.to_string(),
             url: image_url.clone(),
             source_link: Some(url.to_string()),
             site_name: self.name().into(),
-            title: Some(sub.title),
+            title: Some(sub.title.clone()),
             artist_username: Some(sub.artist.clone()),
             artist_url: Some(format!("https://www.furaffinity.net/user/{}/", sub.artist)),
-            tags: Some(sub.tags),
+            tags: Some(sub.tags.clone()),
             ..Default::default()
-        }))
+        }];
+
+        if let Some(nav_links) = sub.nav_links() {
+            tracing::info!("submission had nav links, attempting to expand");
+
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                self.collect_linked_posts(url, sub, nav_links),
+            )
+            .await
+            {
+                // Timeout, ignore and return fallback
+                Err(_err) => Ok(Some(fallback)),
+                // Error fetching more submissions, ignore and fallback
+                Ok(Err(_err)) => Ok(Some(fallback)),
+                // Got posts, use new posts
+                Ok(Ok(posts)) => Ok(posts),
+            }
+        } else {
+            Ok(Some(fallback))
+        }
+    }
+
+    async fn collect_linked_posts(
+        &self,
+        url: &str,
+        sub: furaffinity_rs::Submission,
+        nav_links: furaffinity_rs::NavLinks,
+    ) -> anyhow::Result<Option<Vec<PostInfo>>> {
+        let mut next_id = nav_links.first.unwrap_or(sub.id);
+        let mut submissions = HashMap::new();
+
+        loop {
+            tracing::trace!(next_id, "loading next submission in navigation");
+
+            if submissions.contains_key(&next_id) {
+                tracing::warn!("trying to visit already visited id");
+                break;
+            }
+
+            // If trying to load the root submission we were given, use the
+            // value we previously fetched.
+            let sub = if next_id == sub.id {
+                sub.clone()
+            } else {
+                match self.fa.get_submission(next_id).await {
+                    Ok(Some(sub)) => sub,
+                    _ => break,
+                }
+            };
+
+            let links = sub.nav_links();
+
+            submissions.insert(sub.id, sub);
+
+            match links {
+                Some(furaffinity_rs::NavLinks {
+                    next: Some(next), ..
+                }) => next_id = next,
+                _ => break,
+            }
+        }
+
+        tracing::debug!("found {} images in collection", submissions.len());
+
+        let mut posts: Vec<_> = submissions.into_iter().map(|(_id, sub)| sub).collect();
+        // Posts probably belong in ID order
+        posts.sort_by(|a, b| a.id.cmp(&b.id));
+
+        if let Some(first) = posts.iter().position(|loaded_sub| sub.id == loaded_sub.id) {
+            // Original post should always be first
+            if first != 0 {
+                tracing::debug!(
+                    searched_item = sub.id,
+                    current_pos = first,
+                    "moving searched item to front"
+                );
+
+                let post = posts.remove(first);
+                posts.insert(0, post);
+            }
+        }
+
+        let posts = posts
+            .into_iter()
+            .filter_map(|sub| {
+                let image_url = match &sub.content {
+                    furaffinity_rs::Content::Image(image) => image.to_owned(),
+                    _ => return None,
+                };
+
+                let ext = match get_file_ext(&image_url) {
+                    Some(ext) => ext.to_owned(),
+                    None => return None,
+                };
+
+                Some((sub, ext, image_url))
+            })
+            .map(|(sub, ext, image_url)| PostInfo {
+                file_type: ext,
+                url: image_url,
+                source_link: Some(url.to_string()),
+                site_name: self.name().into(),
+                title: Some(sub.title),
+                artist_username: Some(sub.artist.clone()),
+                artist_url: Some(format!("https://www.furaffinity.net/user/{}/", sub.artist)),
+                tags: Some(sub.tags),
+                ..Default::default()
+            })
+            .collect();
+
+        Ok(Some(posts))
     }
 }
 
@@ -894,8 +1005,10 @@ impl Site for FurAffinity {
             .captures(url)
             .context("Could not capture FurAffinity URL")?;
 
-        let image = if let Some(filename) = captures.name("file_name") {
-            self.load_direct_url(filename.as_str(), url).await
+        if let Some(filename) = captures.name("file_name") {
+            self.load_direct_url(filename.as_str(), url)
+                .await
+                .map(|sub| sub.map(|post| vec![post]))
         } else if let Some(id) = captures.name("id") {
             let id: i32 = match id.as_str().parse() {
                 Ok(id) => id,
@@ -904,9 +1017,7 @@ impl Site for FurAffinity {
             self.load_from_fa(id, url).await
         } else {
             return Ok(None);
-        };
-
-        image.map(|sub| sub.map(|post| vec![post]))
+        }
     }
 }
 
