@@ -298,8 +298,7 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
                     let mut embeds = Vec::with_capacity(messages.len());
 
                     for message in messages {
-                        let attachments =
-                            get_cached_attachments(&ctx, message.channel_id, message.id).await?;
+                        let attachments = message.attachments;
 
                         if attachments.is_empty() {
                             tracing::info!("Attachments was empty");
@@ -537,36 +536,6 @@ fn link_embed(post: &foxbot_sites::PostInfo) -> anyhow::Result<Embed> {
         .build()?;
 
     Ok(embed)
-}
-
-/// Get the attachment from a given channel and message ID, loading from the
-/// cache if possible.
-async fn get_cached_attachments(
-    ctx: &Context,
-    channel_id: ChannelId,
-    message_id: MessageId,
-) -> Result<Vec<Attachment>, UserErrorMessage<'static>> {
-    if let Some(message) = ctx.cache.message(message_id) {
-        return Ok(message.attachments().to_vec());
-    }
-
-    let message = match ctx
-        .http
-        .message(channel_id, message_id)
-        .exec()
-        .await
-        .map_err(|err| UserErrorMessage::new(err, "Unable to get message"))?
-        .model()
-        .await
-    {
-        Ok(message) => message,
-        Err(err) => {
-            tracing::warn!("Could not get message: {}", err);
-            return Ok(vec![]);
-        }
-    };
-
-    Ok(message.attachments)
 }
 
 async fn allow_nsfw(ctx: &Context, channel_id: ChannelId) -> Option<bool> {
