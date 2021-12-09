@@ -290,7 +290,7 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
                         .data
                         .resolved
                         .as_ref()
-                        .map(|resolved| resolved.messages.to_vec())
+                        .map(|resolved| resolved.messages.values().collect::<Vec<_>>())
                         .unwrap_or_default();
 
                     tracing::debug!("Got command with {} messages", messages.len());
@@ -298,7 +298,7 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
                     let mut embeds = Vec::with_capacity(messages.len());
 
                     for message in messages {
-                        let attachments = message.attachments;
+                        let attachments = &message.attachments;
 
                         if attachments.is_empty() {
                             tracing::info!("Attachments was empty");
