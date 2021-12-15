@@ -108,6 +108,7 @@ fn main() {
     tracing::debug!(workers, "got worker count configuration");
 
     let mut faktory = faktory::ConsumerBuilder::default();
+    faktory.labels(vec!["foxbot-background-worker".to_string()]);
     faktory.workers(workers);
 
     let pool = sqlx::postgres::PgPoolOptions::new()
