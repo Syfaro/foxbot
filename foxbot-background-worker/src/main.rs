@@ -242,8 +242,8 @@ impl WorkerEnvironment {
             .register(name, move |job| -> Result<(), Error> {
                 let _guard = get_custom_span(&job).entered();
 
-                sentry::configure_scope(|mut scope| {
-                    add_sentry_tracing(&mut scope);
+                sentry::configure_scope(|scope| {
+                    add_sentry_tracing(scope);
                 });
 
                 let result = runtime.block_on(
@@ -279,7 +279,7 @@ pub enum Error {
 }
 
 type LangBundle = FluentBundle<FluentResource, IntlLangMemoizer>;
-type BestLangs = std::collections::HashMap<String, LangBundle>;
+type BestLangs = std::collections::HashMap<String, Arc<LangBundle>>;
 
 const MAX_SOURCE_DISTANCE: u64 = 3;
 const NOISY_SOURCE_COUNT: usize = 4;
@@ -363,34 +363,29 @@ impl Handler {
 
     /// Build a fluent language bundle for a specified language and cache the
     /// result.
-    async fn get_fluent_bundle<C, R>(&self, requested: Option<&str>, callback: C) -> R
-    where
-        C: FnOnce(&FluentBundle<FluentResource, IntlLangMemoizer>) -> R,
-    {
+    #[tracing::instrument(skip(self))]
+    async fn get_fluent_bundle(&self, requested: Option<&str>) -> Arc<LangBundle> {
+        tracing::trace!("looking up language bundle");
         let requested = requested.unwrap_or(L10N_LANGS[0]);
-
-        tracing::trace!(lang = requested, "Looking up language bundle");
 
         {
             let lock = self.best_langs.read().await;
+
             if let Some(bundle) = lock.get(requested) {
-                return callback(bundle);
+                tracing::trace!("best language was already calculated");
+                return bundle.clone();
             }
         }
 
-        tracing::debug!(lang = requested, "Got new language, building bundle");
+        tracing::info!("got new language, building bundle");
+        let bundle = Arc::new(get_lang_bundle(&self.langs, requested));
 
-        let bundle = get_lang_bundle(&self.langs, requested);
-
-        // Lock for writing for as short as possible.
         {
             let mut lock = self.best_langs.write().await;
-            lock.insert(requested.to_string(), bundle);
+            lock.insert(requested.to_string(), bundle.clone());
         }
 
-        let lock = self.best_langs.read().await;
-        let bundle = lock.get(requested).expect("value just inserted is missing");
-        callback(bundle)
+        bundle
     }
 }
 

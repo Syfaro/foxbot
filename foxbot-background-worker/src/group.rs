@@ -161,47 +161,46 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
         .as_ref()
         .and_then(|from| from.language_code.as_deref());
 
-    let text = handler
-        .get_fluent_bundle(lang, |bundle| {
-            if wanted_matches.len() == 1 {
-                let mut args = FluentArgs::new();
-                let m = wanted_matches.first().unwrap();
-                args.set("link", m.url());
+    let bundle = handler.get_fluent_bundle(lang).await;
 
-                if let Some(rating) = get_rating_bundle_name(&m.rating) {
-                    let rating = get_message(bundle, rating, None).unwrap();
-                    args.set("rating", rating);
-                    get_message(bundle, "automatic-single", Some(args)).unwrap()
-                } else {
-                    get_message(bundle, "automatic-single-unknown", Some(args)).unwrap()
-                }
+    let text = {
+        if wanted_matches.len() == 1 {
+            let mut args = FluentArgs::new();
+            let m = wanted_matches.first().unwrap();
+            args.set("link", m.url());
+
+            if let Some(rating) = get_rating_bundle_name(&m.rating) {
+                let rating = get_message(&bundle, rating, None).unwrap();
+                args.set("rating", rating);
+                get_message(&bundle, "automatic-single", Some(args)).unwrap()
             } else {
-                let mut buf = String::new();
-
-                buf.push_str(&get_message(bundle, "automatic-multiple", None).unwrap());
-                buf.push('\n');
-
-                for result in wanted_matches {
-                    let mut args = FluentArgs::new();
-                    args.set("link", result.url());
-
-                    let message = if let Some(rating) = get_rating_bundle_name(&result.rating) {
-                        let rating = get_message(bundle, rating, None).unwrap();
-                        args.set("rating", rating);
-                        get_message(bundle, "automatic-multiple-result", Some(args)).unwrap()
-                    } else {
-                        get_message(bundle, "automatic-multiple-result-unknown", Some(args))
-                            .unwrap()
-                    };
-
-                    buf.push_str(&message);
-                    buf.push('\n');
-                }
-
-                buf
+                get_message(&bundle, "automatic-single-unknown", Some(args)).unwrap()
             }
-        })
-        .await;
+        } else {
+            let mut buf = String::new();
+
+            buf.push_str(&get_message(&bundle, "automatic-multiple", None).unwrap());
+            buf.push('\n');
+
+            for result in wanted_matches {
+                let mut args = FluentArgs::new();
+                args.set("link", result.url());
+
+                let message = if let Some(rating) = get_rating_bundle_name(&result.rating) {
+                    let rating = get_message(&bundle, rating, None).unwrap();
+                    args.set("rating", rating);
+                    get_message(&bundle, "automatic-multiple-result", Some(args)).unwrap()
+                } else {
+                    get_message(&bundle, "automatic-multiple-result-unknown", Some(args)).unwrap()
+                };
+
+                buf.push_str(&message);
+                buf.push('\n');
+            }
+
+            buf
+        }
+    };
 
     let data = serde_json::to_value(&GroupSource {
         chat_id: message.chat.id.to_string(),
@@ -574,6 +573,8 @@ pub async fn process_group_mediagroup_check(
         .as_ref()
         .and_then(|from| from.language_code.as_deref());
 
+    let bundle = handler.get_fluent_bundle(lang_code).await;
+
     if GroupConfig::get(
         &handler.conn,
         &first_message.chat,
@@ -599,11 +600,7 @@ pub async fn process_group_mediagroup_check(
             let link = format!("{}/mg/{}", handler.config.internet_url, media_group_id);
             let mut args = FluentArgs::new();
             args.set("link", link);
-            let message = handler
-                .get_fluent_bundle(lang_code, |bundle| {
-                    get_message(bundle, "automatic-sources-link", Some(args)).unwrap()
-                })
-                .await;
+            let message = get_message(&bundle, "automatic-sources-link", Some(args)).unwrap();
 
             let send_message = tgbotapi::requests::SendMessage {
                 chat_id: first_message.chat_id(),
@@ -680,33 +677,29 @@ pub async fn process_group_mediagroup_check(
 
     let mut buf = String::new();
 
-    handler
-        .get_fluent_bundle(lang_code, |bundle| {
-            for (index, message) in messages.iter().enumerate() {
-                let urls = message
-                    .sources
-                    .as_ref()
-                    .unwrap()
-                    .iter()
-                    .map(|file| file.url())
-                    .take(2)
-                    .collect::<Vec<_>>();
-                if urls.is_empty() {
-                    continue;
-                }
+    for (index, message) in messages.iter().enumerate() {
+        let urls = message
+            .sources
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|file| file.url())
+            .take(2)
+            .collect::<Vec<_>>();
+        if urls.is_empty() {
+            continue;
+        }
 
-                let mut args = FluentArgs::new();
-                args.set("number", index + 1);
+        let mut args = FluentArgs::new();
+        args.set("number", index + 1);
 
-                let image = get_message(bundle, "automatic-image-number", Some(args)).unwrap();
+        let image = get_message(&bundle, "automatic-image-number", Some(args)).unwrap();
 
-                buf.push_str(&image);
-                buf.push('\n');
-                buf.push_str(&urls.join("\n"));
-                buf.push_str("\n\n");
-            }
-        })
-        .await;
+        buf.push_str(&image);
+        buf.push('\n');
+        buf.push_str(&urls.join("\n"));
+        buf.push_str("\n\n");
+    }
 
     let first_message = &messages.first().as_ref().unwrap().message;
 

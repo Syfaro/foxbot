@@ -160,7 +160,7 @@ async fn set_cached_images(
 pub async fn find_images<'a, C, U: Into<User>>(
     user: U,
     links: Vec<&'a str>,
-    mut sites: &mut [BoxedSite],
+    sites: &mut [BoxedSite],
     redis: &redis::aio::ConnectionManager,
     callback: &mut C,
 ) -> anyhow::Result<Vec<&'a str>>
@@ -174,7 +174,7 @@ where
     let mut redis = redis.clone();
 
     'link: for link in links {
-        match get_cached_images(link, &mut sites, &mut redis).await {
+        match get_cached_images(link, sites, &mut redis).await {
             Ok(Some(cached_images)) => {
                 tracing::debug!("had cached images available");
                 callback(cached_images);
@@ -472,8 +472,8 @@ where
     tracing::trace!(?tags, ?from, "updating sentry scope");
 
     sentry::with_scope(
-        |mut scope| {
-            add_sentry_tracing(&mut scope);
+        |scope| {
+            add_sentry_tracing(scope);
 
             if let Some(user) = from {
                 scope.set_user(Some(sentry::User {
@@ -1093,11 +1093,7 @@ pub fn get_rating_bundle_name(rating: &Option<fuzzysearch::Rating>) -> Option<&'
 pub fn source_reply(matches: &[fuzzysearch::File], bundle: &Bundle) -> String {
     let first = match matches.first() {
         Some(result) => result,
-        None => {
-            return get_message(bundle, "reverse-no-results", None)
-                .unwrap()
-                .to_string()
-        }
+        None => return get_message(bundle, "reverse-no-results", None).unwrap(),
     };
 
     let similar: Vec<&fuzzysearch::File> = matches
@@ -1122,7 +1118,6 @@ pub fn source_reply(matches: &[fuzzysearch::File], bundle: &Bundle) -> String {
         } else {
             get_message(bundle, "reverse-result-unknown", Some(args)).unwrap()
         }
-        .to_string()
     } else {
         let mut items = Vec::with_capacity(2 + similar.len());
 

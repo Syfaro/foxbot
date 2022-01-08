@@ -65,39 +65,33 @@ pub async fn process_hash_new(handler: Arc<Handler>, job: faktory::Job) -> Resul
         return Ok(());
     }
 
+    let bundle = handler.get_fluent_bundle(None).await;
+
     let text = if matches.len() == 1 {
         let file = matches.first().unwrap();
 
         let mut args = FluentArgs::new();
         args.set("link", file.url());
 
-        handler
-            .get_fluent_bundle(None, |bundle| {
-                get_message(bundle, "subscribe-found-single", Some(args)).unwrap()
-            })
-            .await
+        get_message(&bundle, "subscribe-found-single", Some(args)).unwrap()
     } else {
-        handler
-            .get_fluent_bundle(None, |bundle| {
-                let mut buf = String::new();
+        let mut buf = String::new();
 
-                buf.push_str(&get_message(bundle, "subscribe-found-multiple", None).unwrap());
-                buf.push('\n');
+        buf.push_str(&get_message(&bundle, "subscribe-found-multiple", None).unwrap());
+        buf.push('\n');
 
-                for result in matches {
-                    let mut args = FluentArgs::new();
-                    args.set("link", result.url());
+        for result in matches {
+            let mut args = FluentArgs::new();
+            args.set("link", result.url());
 
-                    let message =
-                        get_message(bundle, "subscribe-found-multiple-item", Some(args)).unwrap();
+            let message =
+                get_message(&bundle, "subscribe-found-multiple-item", Some(args)).unwrap();
 
-                    buf.push_str(&message);
-                    buf.push('\n');
-                }
+            buf.push_str(&message);
+            buf.push('\n');
+        }
 
-                buf
-            })
-            .await
+        buf
     };
 
     for sub in subscriptions {

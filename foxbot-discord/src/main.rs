@@ -323,7 +323,7 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
                                 continue;
                             }
 
-                            let embed = sources_embed(&attachment, &files).map_err(|err| {
+                            let embed = sources_embed(attachment, &files).map_err(|err| {
                                 UserErrorMessage::new(err, "Unable to properly respond")
                             })?;
 
