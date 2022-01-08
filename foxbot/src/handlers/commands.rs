@@ -1,5 +1,6 @@
 use anyhow::Context;
 use async_trait::async_trait;
+use fluent_bundle::FluentArgs;
 use std::collections::HashMap;
 use tgbotapi::{requests::*, *};
 
@@ -218,8 +219,8 @@ impl CommandHandler {
 
         if !missing.is_empty() {
             let links: Vec<String> = missing.iter().map(|item| format!("· {}", item)).collect();
-            let mut args = fluent::FluentArgs::new();
-            args.insert("links", fluent::FluentValue::from(links.join("\n")));
+            let mut args = FluentArgs::new();
+            args.set("links", links.join("\n"));
 
             let text = handler
                 .get_fluent_bundle(from.language_code.as_deref(), |bundle| {

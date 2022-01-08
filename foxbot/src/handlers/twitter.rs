@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use fluent_bundle::FluentArgs;
 
 use super::{
     Handler,
@@ -86,8 +87,8 @@ async fn handle_command(
         let access = get_access(&handler.config, account);
 
         if let Ok(twitter_account) = egg_mode::auth::verify_tokens(&access).await {
-            let mut args = fluent::FluentArgs::new();
-            args.insert("account", twitter_account.screen_name.clone().into());
+            let mut args = FluentArgs::new();
+            args.set("account", twitter_account.screen_name.clone());
 
             let text = handler
                 .get_fluent_bundle(user.language_code.as_deref(), |bundle| {
@@ -177,8 +178,8 @@ async fn verify_account(
     )
     .await?;
 
-    let mut args = fluent::FluentArgs::new();
-    args.insert("userName", fluent::FluentValue::from(token.2));
+    let mut args = FluentArgs::new();
+    args.set("userName", token.2);
 
     let text = handler
         .get_fluent_bundle(None, |bundle| {
@@ -278,8 +279,8 @@ async fn prepare_authorization_link(
 
     let url = egg_mode::auth::authorize_url(&request_token);
 
-    let mut args = fluent::FluentArgs::new();
-    args.insert("link", fluent::FluentValue::from(url));
+    let mut args = FluentArgs::new();
+    args.set("link", url);
 
     let text = handler
         .get_fluent_bundle(user.language_code.as_deref(), |bundle| {

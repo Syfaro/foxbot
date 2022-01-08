@@ -1,5 +1,6 @@
 use anyhow::Context;
 use async_trait::async_trait;
+use fluent_bundle::FluentArgs;
 use redis::AsyncCommands;
 use tgbotapi::{
     requests::{
@@ -87,8 +88,8 @@ async fn order(
     if data.ends_with(":-") {
         let site: Sites = data.split(':').nth(2).unwrap().parse().unwrap();
 
-        let mut args = fluent::FluentArgs::new();
-        args.insert("name", site.as_str().into());
+        let mut args = FluentArgs::new();
+        args.set("name", site.as_str());
 
         let text = handler
             .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
@@ -155,8 +156,8 @@ async fn order(
         .await
         .context("unable to set user sort order")?;
 
-        let mut args = fluent::FluentArgs::new();
-        args.insert("name", site.as_str().into());
+        let mut args = FluentArgs::new();
+        args.set("name", site.as_str());
 
         let text = handler
             .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {

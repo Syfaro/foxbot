@@ -1,5 +1,5 @@
 use anyhow::Context;
-use fluent::fluent_args;
+use fluent_bundle::FluentArgs;
 use rusoto_s3::S3;
 use tgbotapi::requests::GetChat;
 
@@ -164,13 +164,13 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
     let text = handler
         .get_fluent_bundle(lang, |bundle| {
             if wanted_matches.len() == 1 {
-                let mut args = fluent::FluentArgs::new();
+                let mut args = FluentArgs::new();
                 let m = wanted_matches.first().unwrap();
-                args.insert("link", m.url().into());
+                args.set("link", m.url());
 
                 if let Some(rating) = get_rating_bundle_name(&m.rating) {
                     let rating = get_message(bundle, rating, None).unwrap();
-                    args.insert("rating", rating.into());
+                    args.set("rating", rating);
                     get_message(bundle, "automatic-single", Some(args)).unwrap()
                 } else {
                     get_message(bundle, "automatic-single-unknown", Some(args)).unwrap()
@@ -182,12 +182,12 @@ pub async fn process_group_photo(handler: Arc<Handler>, job: faktory::Job) -> Re
                 buf.push('\n');
 
                 for result in wanted_matches {
-                    let mut args = fluent::FluentArgs::new();
-                    args.insert("link", result.url().into());
+                    let mut args = FluentArgs::new();
+                    args.set("link", result.url());
 
                     let message = if let Some(rating) = get_rating_bundle_name(&result.rating) {
                         let rating = get_message(bundle, rating, None).unwrap();
-                        args.insert("rating", rating.into());
+                        args.set("rating", rating);
                         get_message(bundle, "automatic-multiple-result", Some(args)).unwrap()
                     } else {
                         get_message(bundle, "automatic-multiple-result-unknown", Some(args))
@@ -597,14 +597,11 @@ pub async fn process_group_mediagroup_check(
             tracing::debug!("media group had sources, sending message");
 
             let link = format!("{}/mg/{}", handler.config.internet_url, media_group_id);
+            let mut args = FluentArgs::new();
+            args.set("link", link);
             let message = handler
                 .get_fluent_bundle(lang_code, |bundle| {
-                    get_message(
-                        bundle,
-                        "automatic-sources-link",
-                        Some(fluent_args!["link" => link]),
-                    )
-                    .unwrap()
+                    get_message(bundle, "automatic-sources-link", Some(args)).unwrap()
                 })
                 .await;
 
@@ -698,12 +695,10 @@ pub async fn process_group_mediagroup_check(
                     continue;
                 }
 
-                let image = get_message(
-                    bundle,
-                    "automatic-image-number",
-                    Some(fluent_args!["number" => index + 1]),
-                )
-                .unwrap();
+                let mut args = FluentArgs::new();
+                args.set("number", index + 1);
+
+                let image = get_message(bundle, "automatic-image-number", Some(args)).unwrap();
 
                 buf.push_str(&image);
                 buf.push('\n');

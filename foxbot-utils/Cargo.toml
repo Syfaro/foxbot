@@ -21,9 +21,10 @@ tokio = { version = "1", features = ["sync"] }
 tokio-stream = "0.1"
 
 rand = "0.8"
-fluent = "0.12"
+fluent-bundle = "0.15"
 fluent-langneg = "0.13"
 unic-langid = "0.9"
+intl-memoizer = "0.5"
 
 base64 = "0.13"
 sha2 = "0.10"

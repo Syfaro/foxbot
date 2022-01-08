@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use fluent::fluent_args;
-
 use crate::*;
+use fluent_bundle::FluentArgs;
 use foxbot_models::{Subscriptions, User};
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -69,9 +68,8 @@ pub async fn process_hash_new(handler: Arc<Handler>, job: faktory::Job) -> Resul
     let text = if matches.len() == 1 {
         let file = matches.first().unwrap();
 
-        let args = fluent_args![
-            "link" => file.url()
-        ];
+        let mut args = FluentArgs::new();
+        args.set("link", file.url());
 
         handler
             .get_fluent_bundle(None, |bundle| {
@@ -87,9 +85,8 @@ pub async fn process_hash_new(handler: Arc<Handler>, job: faktory::Job) -> Resul
                 buf.push('\n');
 
                 for result in matches {
-                    let args = fluent_args![
-                        "link" => result.url()
-                    ];
+                    let mut args = FluentArgs::new();
+                    args.set("link", result.url());
 
                     let message =
                         get_message(bundle, "subscribe-found-multiple-item", Some(args)).unwrap();

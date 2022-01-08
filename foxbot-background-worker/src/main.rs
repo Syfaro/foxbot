@@ -2,6 +2,8 @@ use std::ops::Add;
 use std::sync::{Arc, Mutex};
 use std::{collections::HashMap, future::Future};
 
+use fluent_bundle::{bundle::FluentBundle, FluentResource};
+use intl_memoizer::concurrent::IntlLangMemoizer;
 use opentelemetry::propagation::TextMapPropagator;
 use sentry::SentryFutureExt;
 use tgbotapi::{
@@ -276,6 +278,7 @@ pub enum Error {
     Other(#[from] anyhow::Error),
 }
 
+type LangBundle = FluentBundle<FluentResource, IntlLangMemoizer>;
 type BestLangs = std::collections::HashMap<String, LangBundle>;
 
 const MAX_SOURCE_DISTANCE: u64 = 3;
@@ -362,7 +365,7 @@ impl Handler {
     /// result.
     async fn get_fluent_bundle<C, R>(&self, requested: Option<&str>, callback: C) -> R
     where
-        C: FnOnce(&fluent::concurrent::FluentBundle<fluent::FluentResource>) -> R,
+        C: FnOnce(&FluentBundle<FluentResource, IntlLangMemoizer>) -> R,
     {
         let requested = requested.unwrap_or(L10N_LANGS[0]);
 

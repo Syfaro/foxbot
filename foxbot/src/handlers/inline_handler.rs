@@ -2,6 +2,7 @@ use std::borrow::Cow;
 
 use anyhow::Context;
 use async_trait::async_trait;
+use fluent_bundle::FluentArgs;
 use futures::{stream::FuturesOrdered, StreamExt};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
@@ -100,8 +101,8 @@ impl InlineHandler {
 
         let msg = handler
             .get_fluent_bundle(None, |bundle| {
-                let mut args = fluent::FluentArgs::new();
-                args.insert("percent", progress.to_string().into());
+                let mut args = FluentArgs::new();
+                args.set("percent", progress.to_string());
                 get_message(bundle, "video-progress", Some(args)).unwrap()
             })
             .await;

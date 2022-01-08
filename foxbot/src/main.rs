@@ -1,6 +1,9 @@
-use sentry::integrations::anyhow::capture_anyhow;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use fluent_bundle::{bundle::FluentBundle, FluentArgs, FluentResource};
+use intl_memoizer::concurrent::IntlLangMemoizer;
+use sentry::integrations::anyhow::capture_anyhow;
 use tgbotapi::{requests::*, *};
 use tokio::sync::{Mutex, RwLock};
 use tracing::Instrument;
@@ -430,7 +433,7 @@ pub struct MessageHandler {
     // State
     pub bot_user: User,
     langs: HashMap<LanguageIdentifier, Vec<String>>,
-    best_lang: RwLock<HashMap<String, fluent::concurrent::FluentBundle<fluent::FluentResource>>>,
+    best_lang: RwLock<HashMap<String, FluentBundle<FluentResource, IntlLangMemoizer>>>,
     handlers: Vec<BoxedHandler>,
 
     // API clients
@@ -451,23 +454,23 @@ pub struct MessageHandler {
 }
 
 impl MessageHandler {
+    #[tracing::instrument(skip(self, callback))]
     async fn get_fluent_bundle<C, R>(&self, requested: Option<&str>, callback: C) -> R
     where
-        C: FnOnce(&fluent::concurrent::FluentBundle<fluent::FluentResource>) -> R,
+        C: FnOnce(&FluentBundle<FluentResource, IntlLangMemoizer>) -> R,
     {
+        tracing::trace!("looking up language bundle");
         let requested = requested.unwrap_or(L10N_LANGS[0]);
-
-        tracing::trace!(lang = requested, "looking up language bundle");
 
         {
             let lock = self.best_lang.read().await;
             if let Some(bundle) = lock.get(requested) {
+                tracing::trace!("best language was already calculated");
                 return callback(bundle);
             }
         }
 
-        tracing::info!(lang = requested, "got new language, building bundle");
-
+        tracing::info!("got new language, building bundle");
         let bundle = get_lang_bundle(&self.langs, requested);
 
         {
@@ -523,11 +526,11 @@ impl MessageHandler {
 
         let msg = self
             .get_fluent_bundle(lang_code.as_deref(), |bundle| {
-                let mut args = fluent::FluentArgs::new();
-                args.insert("count", (recent_error_count + 1).into());
+                let mut args = FluentArgs::new();
+                args.set("count", recent_error_count + 1);
 
                 let has_displayable_error = if let Some(displayable_error) = displayable_error {
-                    args.insert("message", displayable_error.into());
+                    args.set("message", displayable_error);
                     true
                 } else {
                     false
@@ -543,7 +546,7 @@ impl MessageHandler {
                     }
                 } else {
                     let f = format!("`{}`", u.to_string());
-                    args.insert("uuid", fluent::FluentValue::from(f));
+                    args.set("uuid", f);
 
                     let name = if recent_error_count > 0 {
                         "error-uuid-count"
