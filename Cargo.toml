@@ -1,16 +1,13 @@
 [workspace]
 
 members = [
-    "foxbot",
-    "foxbot-sites",
-    "foxbot-models",
-    "foxbot-utils",
-    "foxbot-background-worker",
-    "foxbot-discord",
+  "foxbot-legacy",
+  "foxbot-sites",
+  "foxbot-models",
+  "foxbot-utils",
+  "foxbot-background-worker",
+  "foxbot-discord",
 ]
-
-[profile.dev.package."*"]
-opt-level = 2
 
 [profile.release]
 lto = true
