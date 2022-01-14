@@ -545,7 +545,7 @@ impl MessageHandler {
                     get_message(&bundle, "error-generic", None)
                 }
             } else {
-                let f = format!("`{}`", u.to_string());
+                let f = format!("`{}`", u);
                 args.set("uuid", f);
 
                 let name = if recent_error_count > 0 {
