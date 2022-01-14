@@ -79,6 +79,10 @@ impl SubscribeHandler {
 
         tracing::trace!(hash, "attempting to add subscription for hash");
 
+        let bundle = handler
+            .get_fluent_bundle(callback_query.from.language_code.as_deref())
+            .await;
+
         let (message_id, photo_id) = match callback_query.message.as_deref() {
             Some(tgbotapi::Message {
                 reply_to_message: Some(message),
@@ -108,11 +112,7 @@ impl SubscribeHandler {
             tracing::error!("unable to add hash subscription: {:?}", err);
             sentry::integrations::anyhow::capture_anyhow(&err);
 
-            let text = handler
-                .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
-                    get_message(bundle, "subscribe-error", None).unwrap()
-                })
-                .await;
+            let text = get_message(&bundle, "subscribe-error", None).unwrap();
 
             handler
                 .bot
@@ -148,11 +148,7 @@ impl SubscribeHandler {
                 .await;
         }
 
-        let text = handler
-            .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
-                get_message(bundle, "subscribe-success", None).unwrap()
-            })
-            .await;
+        let text = get_message(&bundle, "subscribe-success", None).unwrap();
 
         handler
             .bot

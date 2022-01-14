@@ -1,5 +1,6 @@
 use anyhow::Context;
 use async_trait::async_trait;
+use fluent_bundle::FluentArgs;
 use std::collections::HashMap;
 use tgbotapi::{requests::*, *};
 
@@ -218,14 +219,14 @@ impl CommandHandler {
 
         if !missing.is_empty() {
             let links: Vec<String> = missing.iter().map(|item| format!("· {}", item)).collect();
-            let mut args = fluent::FluentArgs::new();
-            args.insert("links", fluent::FluentValue::from(links.join("\n")));
+            let mut args = FluentArgs::new();
+            args.set("links", links.join("\n"));
 
-            let text = handler
-                .get_fluent_bundle(from.language_code.as_deref(), |bundle| {
-                    get_message(bundle, "mirror-missing", Some(args)).unwrap()
-                })
+            let bundle = handler
+                .get_fluent_bundle(from.language_code.as_deref())
                 .await;
+
+            let text = get_message(&bundle, "mirror-missing", Some(args)).unwrap();
 
             let send_message = SendMessage {
                 chat_id: message.chat_id(),
@@ -329,12 +330,11 @@ impl CommandHandler {
         .1;
         sort_results(&handler.conn, message.from.as_ref().unwrap(), &mut matches).await?;
 
-        let text = handler
-            .get_fluent_bundle(
-                message.from.as_ref().unwrap().language_code.as_deref(),
-                |bundle| source_reply(&matches, bundle),
-            )
+        let bundle = handler
+            .get_fluent_bundle(message.from.as_ref().unwrap().language_code.as_deref())
             .await;
+
+        let text = source_reply(&matches, &bundle);
 
         let disable_preview = GroupConfig::get::<bool, _>(
             &handler.conn,
@@ -477,12 +477,11 @@ impl CommandHandler {
             .map(|item| (item.0, item.1))
             .collect::<Vec<_>>();
 
-        let (text, used_hashes) = handler
-            .get_fluent_bundle(
-                message.from.as_ref().unwrap().language_code.as_deref(),
-                |bundle| build_alternate_response(bundle, items),
-            )
+        let bundle = handler
+            .get_fluent_bundle(message.from.as_ref().unwrap().language_code.as_deref())
             .await;
+
+        let (text, used_hashes) = build_alternate_response(&bundle, items);
 
         drop(action);
 
@@ -530,12 +529,7 @@ impl CommandHandler {
             .map(|item| (item.0, item.1))
             .collect::<Vec<_>>();
 
-        let (updated_text, _used_hashes) = handler
-            .get_fluent_bundle(
-                message.from.as_ref().unwrap().language_code.as_deref(),
-                |bundle| build_alternate_response(bundle, items),
-            )
-            .await;
+        let (updated_text, _used_hashes) = build_alternate_response(&bundle, items);
 
         if text == updated_text {
             return Ok(());

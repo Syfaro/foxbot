@@ -13,9 +13,10 @@ reqwest = { version = "0.11", features = ["json", "stream"] }
 linkify = "0.8"
 rand = "0.8"
 async-trait = "0.1"
-fluent = "0.12"
+fluent-bundle = "0.15"
 fluent-langneg = "0.13"
 unic-langid = "0.9"
+intl-memoizer = "0.5"
 hyper = { version = "0.14", features = ["server"] }
 url = "2"
 hamming = "0.1"

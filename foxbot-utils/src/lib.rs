@@ -1,9 +1,12 @@
-use anyhow::Context;
-use fuzzysearch::SiteInfo;
-use redis::AsyncCommands;
-use sha2::{Digest, Sha256};
 use std::time::Instant;
 use std::{collections::HashSet, str::FromStr, sync::Arc};
+
+use anyhow::Context;
+use fluent_bundle::{bundle::FluentBundle, FluentArgs, FluentResource};
+use fuzzysearch::SiteInfo;
+use intl_memoizer::concurrent::IntlLangMemoizer;
+use redis::AsyncCommands;
+use sha2::{Digest, Sha256};
 use tgbotapi::FileType;
 use tracing_futures::Instrument;
 
@@ -24,7 +27,7 @@ pub fn generate_id() -> String {
 }
 
 /// A localization bundle.
-type Bundle<'a> = &'a fluent::concurrent::FluentBundle<fluent::FluentResource>;
+type Bundle = FluentBundle<FluentResource, IntlLangMemoizer>;
 
 /// A convenience macro for handlers to ignore updates that don't contain a
 /// required field.
@@ -157,7 +160,7 @@ async fn set_cached_images(
 pub async fn find_images<'a, C, U: Into<User>>(
     user: U,
     links: Vec<&'a str>,
-    mut sites: &mut [BoxedSite],
+    sites: &mut [BoxedSite],
     redis: &redis::aio::ConnectionManager,
     callback: &mut C,
 ) -> anyhow::Result<Vec<&'a str>>
@@ -171,7 +174,7 @@ where
     let mut redis = redis.clone();
 
     'link: for link in links {
-        match get_cached_images(link, &mut sites, &mut redis).await {
+        match get_cached_images(link, sites, &mut redis).await {
             Ok(Some(cached_images)) => {
                 tracing::debug!("had cached images available");
                 callback(cached_images);
@@ -402,17 +405,21 @@ pub fn find_best_photo(sizes: &[tgbotapi::PhotoSize]) -> Option<&tgbotapi::Photo
 
 /// Get a message from the bundle with a language code, if provided.
 pub fn get_message(
-    bundle: Bundle,
-    name: &str,
-    args: Option<fluent::FluentArgs>,
-) -> Result<String, Vec<fluent::FluentError>> {
+    bundle: &Bundle,
+    id: &str,
+    args: Option<FluentArgs>,
+) -> Result<String, Vec<fluent_bundle::FluentError>> {
     let msg = bundle
-        .get_message(name)
-        .with_context(|| format!("attempting to get message bundle: {}", name))
+        .get_message(id)
+        .with_context(|| format!("attempting to get message bundle: {}", id))
         .expect("message doesn't exist");
-    let pattern = msg.value.expect("message has no value");
+
+    let pattern = msg.value().expect("message has no value");
+
     let mut errors = vec![];
+
     let value = bundle.format_pattern(pattern, args.as_ref(), &mut errors);
+
     if errors.is_empty() {
         Ok(value.to_string())
     } else {
@@ -465,8 +472,8 @@ where
     tracing::trace!(?tags, ?from, "updating sentry scope");
 
     sentry::with_scope(
-        |mut scope| {
-            add_sentry_tracing(&mut scope);
+        |scope| {
+            add_sentry_tracing(scope);
 
             if let Some(user) = from {
                 scope.set_user(Some(sentry::User {
@@ -493,7 +500,7 @@ type AlternateItems<'a> = Vec<(&'a Vec<String>, &'a Vec<fuzzysearch::File>)>;
 ///
 /// It remembers which hashes were associated with used items and returns them
 /// in addition to the formatted message.
-pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (String, Vec<i64>) {
+pub fn build_alternate_response(bundle: &Bundle, mut items: AlternateItems) -> (String, Vec<i64>) {
     let mut used_hashes = vec![];
 
     items.sort_by(|a, b| {
@@ -522,8 +529,8 @@ pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (S
             .clone()
             .unwrap_or_else(|| vec!["Unknown".to_string()])
             .join(", ");
-        let mut args = fluent::FluentArgs::new();
-        args.insert("name", artist_name.into());
+        let mut args = FluentArgs::new();
+        args.set("name", artist_name);
         s.push_str(&get_message(bundle, "alternate-posted-by", Some(args)).unwrap());
         s.push('\n');
         let mut subs: Vec<fuzzysearch::File> = item.1.to_vec();
@@ -532,12 +539,12 @@ pub fn build_alternate_response(bundle: Bundle, mut items: AlternateItems) -> (S
         subs.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
         for sub in subs {
             tracing::trace!(site = sub.site_name(), id = %sub.id(), "looking at submission");
-            let mut args = fluent::FluentArgs::new();
-            args.insert("link", sub.url().into());
-            args.insert("distance", sub.distance.unwrap_or(10).into());
+            let mut args = FluentArgs::new();
+            args.set("link", sub.url());
+            args.set("distance", sub.distance.unwrap_or(10));
             let message = if let Some(rating) = get_rating_bundle_name(&sub.rating) {
                 let rating = get_message(bundle, rating, None).unwrap();
-                args.insert("rating", rating.into());
+                args.set("rating", rating);
                 get_message(bundle, "alternate-distance", Some(args)).unwrap()
             } else {
                 get_message(bundle, "alternate-distance-unknown", Some(args)).unwrap()
@@ -1083,7 +1090,7 @@ pub fn get_rating_bundle_name(rating: &Option<fuzzysearch::Rating>) -> Option<&'
 }
 
 /// Write a reply for matched sources.
-pub fn source_reply(matches: &[fuzzysearch::File], bundle: Bundle<'_>) -> String {
+pub fn source_reply(matches: &[fuzzysearch::File], bundle: &Bundle) -> String {
     let first = match matches.first() {
         Some(result) => result,
         None => return get_message(bundle, "reverse-no-results", None).unwrap(),
@@ -1100,12 +1107,12 @@ pub fn source_reply(matches: &[fuzzysearch::File], bundle: Bundle<'_>) -> String
     );
 
     if similar.is_empty() {
-        let mut args = fluent::FluentArgs::new();
-        args.insert("link", first.url().into());
+        let mut args = FluentArgs::new();
+        args.set("link", first.url());
 
         if let Some(rating) = get_rating_bundle_name(&first.rating) {
             let rating = get_message(bundle, rating, None).unwrap();
-            args.insert("rating", rating.into());
+            args.set("rating", rating);
 
             get_message(bundle, "reverse-result", Some(args)).unwrap()
         } else {
@@ -1118,12 +1125,12 @@ pub fn source_reply(matches: &[fuzzysearch::File], bundle: Bundle<'_>) -> String
         items.push(text);
 
         for file in vec![first].into_iter().chain(similar) {
-            let mut args = fluent::FluentArgs::new();
-            args.insert("link", file.url().into());
+            let mut args = FluentArgs::new();
+            args.set("link", file.url());
 
             let result = if let Some(rating) = get_rating_bundle_name(&file.rating) {
                 let rating = get_message(bundle, rating, None).unwrap();
-                args.insert("rating", rating.into());
+                args.set("rating", rating);
 
                 get_message(bundle, "reverse-multiple-item", Some(args)).unwrap()
             } else {
@@ -1285,8 +1292,6 @@ pub static L10N_LANGS: &[&str] = &["en-US"];
 
 /// A collection of language identifiers and their corresponding data.
 pub type Langs = std::collections::HashMap<unic_langid::LanguageIdentifier, Vec<String>>;
-/// A collection of fluent resources for a single language.
-pub type LangBundle = fluent::concurrent::FluentBundle<fluent::FluentResource>;
 
 /// Load all language data from the langs folder.
 pub fn load_langs() -> Langs {
@@ -1317,7 +1322,7 @@ pub fn load_langs() -> Langs {
 }
 
 /// Get a bundle for a desired language.
-pub fn get_lang_bundle(langs: &Langs, requested: &str) -> LangBundle {
+pub fn get_lang_bundle(langs: &Langs, requested: &str) -> Bundle {
     let requested_locale = match requested.parse::<unic_langid::LanguageIdentifier>() {
         Ok(locale) => locale,
         Err(err) => {
@@ -1342,13 +1347,19 @@ pub fn get_lang_bundle(langs: &Langs, requested: &str) -> LangBundle {
 
     let current_locale = resolved_locales.get(0).expect("no locales were available");
 
-    let mut bundle =
-        fluent::concurrent::FluentBundle::<fluent::FluentResource>::new(resolved_locales.clone());
+    let mut bundle = fluent_bundle::bundle::FluentBundle::new_concurrent(
+        resolved_locales
+            .iter()
+            .map::<unic_langid::LanguageIdentifier, _>(|locale| locale.to_owned().to_owned())
+            .collect(),
+    );
+
     let resources = langs.get(current_locale).expect("missing known locale");
 
     for resource in resources {
-        let resource = fluent::FluentResource::try_new(resource.to_string())
-            .expect("unable to parse FTL string");
+        let resource =
+            FluentResource::try_new(resource.to_owned()).expect("failed to parse ftl string");
+
         bundle
             .add_resource(resource)
             .expect("unable to add resource");

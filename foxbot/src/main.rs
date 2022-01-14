@@ -1,6 +1,9 @@
-use sentry::integrations::anyhow::capture_anyhow;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use fluent_bundle::{bundle::FluentBundle, FluentArgs, FluentResource};
+use intl_memoizer::concurrent::IntlLangMemoizer;
+use sentry::integrations::anyhow::capture_anyhow;
 use tgbotapi::{requests::*, *};
 use tokio::sync::{Mutex, RwLock};
 use tracing::Instrument;
@@ -430,7 +433,7 @@ pub struct MessageHandler {
     // State
     pub bot_user: User,
     langs: HashMap<LanguageIdentifier, Vec<String>>,
-    best_lang: RwLock<HashMap<String, fluent::concurrent::FluentBundle<fluent::FluentResource>>>,
+    best_lang: RwLock<HashMap<String, Arc<FluentBundle<FluentResource, IntlLangMemoizer>>>>,
     handlers: Vec<BoxedHandler>,
 
     // API clients
@@ -451,33 +454,32 @@ pub struct MessageHandler {
 }
 
 impl MessageHandler {
-    async fn get_fluent_bundle<C, R>(&self, requested: Option<&str>, callback: C) -> R
-    where
-        C: FnOnce(&fluent::concurrent::FluentBundle<fluent::FluentResource>) -> R,
-    {
+    #[tracing::instrument(skip(self))]
+    async fn get_fluent_bundle(
+        &self,
+        requested: Option<&str>,
+    ) -> Arc<FluentBundle<FluentResource, IntlLangMemoizer>> {
+        tracing::trace!("looking up language bundle");
         let requested = requested.unwrap_or(L10N_LANGS[0]);
-
-        tracing::trace!(lang = requested, "looking up language bundle");
 
         {
             let lock = self.best_lang.read().await;
+
             if let Some(bundle) = lock.get(requested) {
-                return callback(bundle);
+                tracing::trace!("best language was already calculated");
+                return bundle.clone();
             }
         }
 
-        tracing::info!(lang = requested, "got new language, building bundle");
-
-        let bundle = get_lang_bundle(&self.langs, requested);
+        tracing::info!("got new language, building bundle");
+        let bundle = Arc::new(get_lang_bundle(&self.langs, requested));
 
         {
             let mut lock = self.best_lang.write().await;
-            lock.insert(requested.to_string(), bundle);
+            lock.insert(requested.to_string(), bundle.clone());
         }
 
-        let lock = self.best_lang.read().await;
-        let bundle = lock.get(requested).expect("value just inserted is missing");
-        callback(bundle)
+        bundle
     }
 
     pub async fn report_error<C>(
@@ -521,43 +523,43 @@ impl MessageHandler {
             .downcast_ref::<DisplayableErrorMessage>()
             .map(|err| err.msg.clone().to_string());
 
-        let msg = self
-            .get_fluent_bundle(lang_code.as_deref(), |bundle| {
-                let mut args = fluent::FluentArgs::new();
-                args.insert("count", (recent_error_count + 1).into());
+        let bundle = self.get_fluent_bundle(lang_code.as_deref()).await;
 
-                let has_displayable_error = if let Some(displayable_error) = displayable_error {
-                    args.insert("message", displayable_error.into());
-                    true
+        let msg = {
+            let mut args = FluentArgs::new();
+            args.set("count", recent_error_count + 1);
+
+            let has_displayable_error = if let Some(displayable_error) = displayable_error {
+                args.set("message", displayable_error);
+                true
+            } else {
+                false
+            };
+
+            if u.is_nil() {
+                if recent_error_count > 0 {
+                    get_message(&bundle, "error-generic-count", Some(args))
+                } else if has_displayable_error {
+                    get_message(&bundle, "error-generic-message", Some(args))
                 } else {
-                    false
+                    get_message(&bundle, "error-generic", None)
+                }
+            } else {
+                let f = format!("`{}`", u);
+                args.set("uuid", f);
+
+                let name = if recent_error_count > 0 {
+                    "error-uuid-count"
+                } else if has_displayable_error {
+                    "error-uuid-message"
+                } else {
+                    "error-uuid"
                 };
 
-                if u.is_nil() {
-                    if recent_error_count > 0 {
-                        get_message(bundle, "error-generic-count", Some(args))
-                    } else if has_displayable_error {
-                        get_message(bundle, "error-generic-message", Some(args))
-                    } else {
-                        get_message(bundle, "error-generic", None)
-                    }
-                } else {
-                    let f = format!("`{}`", u.to_string());
-                    args.insert("uuid", fluent::FluentValue::from(f));
-
-                    let name = if recent_error_count > 0 {
-                        "error-uuid-count"
-                    } else if has_displayable_error {
-                        "error-uuid-message"
-                    } else {
-                        "error-uuid"
-                    };
-
-                    get_message(bundle, name, Some(args))
-                }
-            })
-            .await
-            .unwrap();
+                get_message(&bundle, name, Some(args))
+            }
+        }
+        .unwrap();
 
         let delete_markup = Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
             inline_keyboard: vec![vec![InlineKeyboardButton {
@@ -636,11 +638,9 @@ impl MessageHandler {
 
         let random_artwork = *STARTING_ARTWORK.choose(&mut rand::thread_rng()).unwrap();
 
-        let try_me = self
-            .get_fluent_bundle(from.language_code.as_deref(), |bundle| {
-                get_message(bundle, "welcome-try-me", None).unwrap()
-            })
-            .await;
+        let bundle = self.get_fluent_bundle(from.language_code.as_deref()).await;
+
+        let try_me = get_message(&bundle, "welcome-try-me", None).unwrap();
 
         let reply_markup = ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
             inline_keyboard: vec![vec![InlineKeyboardButton {
@@ -656,11 +656,7 @@ impl MessageHandler {
             "welcome"
         };
 
-        let welcome = self
-            .get_fluent_bundle(from.language_code.as_deref(), |bundle| {
-                get_message(bundle, name, None).unwrap()
-            })
-            .await;
+        let welcome = get_message(&bundle, name, None).unwrap();
 
         let send_message = SendMessage {
             chat_id: message.chat_id(),
@@ -682,11 +678,9 @@ impl MessageHandler {
             .as_ref()
             .and_then(|from| from.language_code.as_deref());
 
-        let text = self
-            .get_fluent_bundle(language_code, |bundle| {
-                get_message(bundle, name, None).unwrap()
-            })
-            .await;
+        let bundle = self.get_fluent_bundle(language_code).await;
+
+        let text = get_message(&bundle, name, None).unwrap();
 
         let send_message = SendMessage {
             chat_id: message.chat_id(),
@@ -704,8 +698,8 @@ impl MessageHandler {
 
         tracing::trace!(?handler_update, "handling update");
 
-        sentry::configure_scope(|mut scope| {
-            add_sentry_tracing(&mut scope);
+        sentry::configure_scope(|scope| {
+            add_sentry_tracing(scope);
         });
 
         let update = match handler_update {
@@ -785,7 +779,7 @@ impl MessageHandler {
                     }
 
                     if let Some(msg) = &update.message {
-                        self.report_error(msg, err, Some(tags), |err| capture_anyhow(err))
+                        self.report_error(msg, err, Some(tags), capture_anyhow)
                             .await;
                     } else {
                         capture_anyhow(&err);

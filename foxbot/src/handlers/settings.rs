@@ -1,5 +1,6 @@
 use anyhow::Context;
 use async_trait::async_trait;
+use fluent_bundle::FluentArgs;
 use redis::AsyncCommands;
 use tgbotapi::{
     requests::{
@@ -63,12 +64,12 @@ async fn order(
     callback_query: &CallbackQuery,
     data: &str,
 ) -> anyhow::Result<Status> {
+    let bundle = handler
+        .get_fluent_bundle(callback_query.from.language_code.as_deref())
+        .await;
+
     if data.ends_with(":e") {
-        let text = handler
-            .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
-                get_message(bundle, "settings-unsupported", None).unwrap()
-            })
-            .await;
+        let text = get_message(&bundle, "settings-unsupported", None).unwrap();
 
         let answer = AnswerCallbackQuery {
             callback_query_id: callback_query.id.clone(),
@@ -87,14 +88,10 @@ async fn order(
     if data.ends_with(":-") {
         let site: Sites = data.split(':').nth(2).unwrap().parse().unwrap();
 
-        let mut args = fluent::FluentArgs::new();
-        args.insert("name", site.as_str().into());
+        let mut args = FluentArgs::new();
+        args.set("name", site.as_str());
 
-        let text = handler
-            .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
-                get_message(bundle, "settings-move-unable", Some(args)).unwrap()
-            })
-            .await;
+        let text = get_message(&bundle, "settings-move-unable", Some(args)).unwrap();
 
         let answer = AnswerCallbackQuery {
             callback_query_id: callback_query.id.clone(),
@@ -111,10 +108,6 @@ async fn order(
     }
 
     let reply_message = needs_field!(callback_query, message);
-    let from = reply_message
-        .from
-        .as_ref()
-        .and_then(|from| from.language_code.as_deref());
 
     let pos = data.split(':').nth(3);
     if let Some(pos) = pos {
@@ -155,14 +148,10 @@ async fn order(
         .await
         .context("unable to set user sort order")?;
 
-        let mut args = fluent::FluentArgs::new();
-        args.insert("name", site.as_str().into());
+        let mut args = FluentArgs::new();
+        args.set("name", site.as_str());
 
-        let text = handler
-            .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
-                get_message(bundle, "settings-move-updated", Some(args)).unwrap()
-            })
-            .await;
+        let text = get_message(&bundle, "settings-move-updated", Some(args)).unwrap();
 
         let answer = AnswerCallbackQuery {
             callback_query_id: callback_query.id.clone(),
@@ -188,11 +177,7 @@ async fn order(
         return Ok(Completed);
     }
 
-    let text = handler
-        .get_fluent_bundle(from, |bundle| {
-            get_message(bundle, "settings-site-order", None).unwrap()
-        })
-        .await;
+    let text = get_message(&bundle, "settings-site-order", None).unwrap();
 
     let keyboard = sort_order_keyboard(&handler.conn, &callback_query.from).await?;
 
@@ -229,11 +214,11 @@ async fn inline_history_keyboard(
         ("settings-inline-history-disable", "s:inline-history:d")
     };
 
-    let message = handler
-        .get_fluent_bundle(user.language_code.as_deref(), |bundle| {
-            get_message(bundle, message_key, None).unwrap()
-        })
+    let bundle = handler
+        .get_fluent_bundle(user.language_code.as_deref())
         .await;
+
+    let message = get_message(&bundle, message_key, None).unwrap();
 
     InlineKeyboardMarkup {
         inline_keyboard: vec![vec![InlineKeyboardButton {
@@ -251,11 +236,11 @@ async fn inline_history(
 ) -> anyhow::Result<Status> {
     let reply_message = needs_field!(callback_query, message);
 
-    let text = handler
-        .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
-            get_message(bundle, "settings-inline-history-description", None).unwrap()
-        })
+    let bundle = handler
+        .get_fluent_bundle(callback_query.from.language_code.as_deref())
         .await;
+
+    let text = get_message(&bundle, "settings-inline-history-description", None).unwrap();
 
     if data.ends_with(":e") || data.ends_with(":d") {
         let enabled = data.chars().last().unwrap_or_default() == 'e';
@@ -264,11 +249,8 @@ async fn inline_history(
         } else {
             "settings-inline-history-disabled"
         };
-        let message = handler
-            .get_fluent_bundle(callback_query.from.language_code.as_deref(), |bundle| {
-                get_message(bundle, message_key, None).unwrap()
-            })
-            .await;
+
+        let message = get_message(&bundle, message_key, None).unwrap();
 
         UserConfig::set(
             &handler.conn,
@@ -339,14 +321,12 @@ async fn send_settings_message(
         .as_ref()
         .and_then(|user| user.language_code.as_deref());
 
-    let (site_preference, inline_history) = handler
-        .get_fluent_bundle(from, |bundle| {
-            (
-                get_message(bundle, "settings-site-preference", None).unwrap(),
-                get_message(bundle, "settings-inline-history", None).unwrap(),
-            )
-        })
-        .await;
+    let bundle = handler.get_fluent_bundle(from).await;
+
+    let (site_preference, inline_history) = (
+        get_message(&bundle, "settings-site-preference", None).unwrap(),
+        get_message(&bundle, "settings-inline-history", None).unwrap(),
+    );
 
     let keyboard = InlineKeyboardMarkup {
         inline_keyboard: vec![
@@ -363,11 +343,7 @@ async fn send_settings_message(
         ],
     };
 
-    let text = handler
-        .get_fluent_bundle(from, |bundle| {
-            get_message(bundle, "settings-main", None).unwrap()
-        })
-        .await;
+    let text = get_message(&bundle, "settings-main", None).unwrap();
 
     let message = SendMessage {
         chat_id: message.chat_id(),

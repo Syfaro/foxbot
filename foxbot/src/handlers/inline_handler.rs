@@ -2,6 +2,7 @@ use std::borrow::Cow;
 
 use anyhow::Context;
 use async_trait::async_trait;
+use fluent_bundle::FluentArgs;
 use futures::{stream::FuturesOrdered, StreamExt};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
@@ -65,11 +66,9 @@ impl InlineHandler {
             .as_ref()
             .and_then(|from| from.language_code.as_deref());
 
-        let video_starting = handler
-            .get_fluent_bundle(lang, |bundle| {
-                get_message(bundle, "video-starting", None).unwrap()
-            })
-            .await;
+        let bundle = handler.get_fluent_bundle(lang).await;
+
+        let video_starting = get_message(&bundle, "video-starting", None).unwrap();
 
         let send_message = SendMessage {
             chat_id: message.chat_id(),
@@ -98,13 +97,12 @@ impl InlineHandler {
         tracing::Span::current().record("video_id", &video.id);
         let messages = Video::associated_messages(&handler.conn, video.id).await?;
 
-        let msg = handler
-            .get_fluent_bundle(None, |bundle| {
-                let mut args = fluent::FluentArgs::new();
-                args.insert("percent", progress.to_string().into());
-                get_message(bundle, "video-progress", Some(args)).unwrap()
-            })
-            .await;
+        let bundle = handler.get_fluent_bundle(None).await;
+
+        let mut args = FluentArgs::new();
+        args.set("percent", progress.to_string());
+
+        let msg = get_message(&bundle, "video-progress", Some(args)).unwrap();
 
         for message in messages {
             let edit_message = EditMessageText {
@@ -144,11 +142,9 @@ impl InlineHandler {
             None => return Ok(()),
         };
 
-        let video_return_button = handler
-            .get_fluent_bundle(None, |bundle| {
-                get_message(bundle, "video-return-button", None).unwrap()
-            })
-            .await;
+        let bundle = handler.get_fluent_bundle(None).await;
+
+        let video_return_button = get_message(&bundle, "video-return-button", None).unwrap();
 
         // First, we should handle one message to upload the file. This is a
         // special case because afterwards all additional messages can be sent
@@ -320,6 +316,10 @@ impl Handler for InlineHandler {
 
         let inline = needs_field!(update, inline_query);
 
+        let bundle = handler
+            .get_fluent_bundle(inline.from.language_code.as_deref())
+            .await;
+
         let mut redis = handler.redis.clone();
 
         let history_enabled =
@@ -433,15 +433,11 @@ impl Handler for InlineHandler {
         // If we had no responses but the query was not empty, there were likely links
         // that we were unable to convert. We need to display that the links had no results.
         if responses.is_empty() && !inline.query.is_empty() {
-            let article = handler
-                .get_fluent_bundle(inline.from.language_code.as_deref(), |bundle| {
-                    InlineQueryResult::article(
-                        generate_id(),
-                        get_message(bundle, "inline-no-results-title", None).unwrap(),
-                        get_message(bundle, "inline-no-results-body", None).unwrap(),
-                    )
-                })
-                .await;
+            let article = InlineQueryResult::article(
+                generate_id(),
+                get_message(&bundle, "inline-no-results-title", None).unwrap(),
+                get_message(&bundle, "inline-no-results-body", None).unwrap(),
+            );
 
             responses.push((ResultType::Ready, article));
         }
@@ -472,11 +468,7 @@ impl Handler for InlineHandler {
             if answer_inline.results.is_empty() {
                 // If the query was empty, display a help button to make it easy to get
                 // started using the bot.
-                let help_text = handler
-                    .get_fluent_bundle(inline.from.language_code.as_deref(), |bundle| {
-                        get_message(bundle, "inline-help", None).unwrap()
-                    })
-                    .await;
+                let help_text = get_message(&bundle, "inline-help", None).unwrap();
 
                 answer_inline.switch_pm_text = Some(help_text);
                 answer_inline.switch_pm_parameter = Some("help".to_string());
@@ -489,11 +481,7 @@ impl Handler for InlineHandler {
         // If we had a video that needed to be processed, replace the switch pm
         // parameters to go and process that video.
         if let Some(video) = has_video {
-            let process_text = handler
-                .get_fluent_bundle(inline.from.language_code.as_deref(), |bundle| {
-                    get_message(bundle, "inline-process", None).unwrap()
-                })
-                .await;
+            let process_text = get_message(&bundle, "inline-process", None).unwrap();
 
             answer_inline.switch_pm_text = Some(process_text);
             answer_inline.switch_pm_parameter = Some(video.id);
@@ -540,11 +528,11 @@ async fn process_result(
     include_info: bool,
     include_tags: bool,
 ) -> anyhow::Result<Option<Vec<(ResultType, InlineQueryResult)>>> {
-    let direct = handler
-        .get_fluent_bundle(from.language_code.as_deref(), |bundle| {
-            get_message(bundle, "inline-direct", None).unwrap()
-        })
+    let bundle = handler
+        .get_fluent_bundle(from.language_code.as_deref())
         .await;
+
+    let direct = get_message(&bundle, "inline-direct", None).unwrap();
 
     let mut row = vec![InlineKeyboardButton {
         text: direct,

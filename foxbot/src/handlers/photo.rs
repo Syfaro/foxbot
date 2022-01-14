@@ -64,18 +64,15 @@ impl Handler for PhotoHandler {
         // function, but we need custom handling to allow for subscribing to
         // updates on this hash.
 
+        let bundle = handler
+            .get_fluent_bundle(message.from.as_ref().unwrap().language_code.as_deref())
+            .await;
+
         if matches.is_empty() {
-            let (text, subscribe) = handler
-                .get_fluent_bundle(
-                    message.from.as_ref().unwrap().language_code.as_deref(),
-                    |bundle| {
-                        (
-                            get_message(bundle, "reverse-no-results", None).unwrap(),
-                            get_message(bundle, "reverse-subscribe", None).unwrap(),
-                        )
-                    },
-                )
-                .await;
+            let (text, subscribe) = (
+                get_message(&bundle, "reverse-no-results", None).unwrap(),
+                get_message(&bundle, "reverse-subscribe", None).unwrap(),
+            );
 
             handler
                 .make_request(&SendMessage {
@@ -98,12 +95,7 @@ impl Handler for PhotoHandler {
             return Ok(Completed);
         }
 
-        let text = handler
-            .get_fluent_bundle(
-                message.from.as_ref().unwrap().language_code.as_deref(),
-                |bundle| source_reply(&matches, bundle),
-            )
-            .await;
+        let text = source_reply(&matches, &bundle);
 
         drop(action);
 
