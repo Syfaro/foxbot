@@ -1,0 +1,23 @@
+{% extends "_base.html" %}
+
+{% block content %}
+<h1>FoxBot Twitter Authentication</h1>
+
+{% if successful %}
+{% match username %}
+{% when Some with (username) %}
+<p>
+    Thanks {{ username }}, you're good to go!
+</p>
+{% else %}
+<p>
+    Something might have gone wrong, sorry :(
+</p>
+{% endmatch %}
+{% else %}
+<p>
+    Maybe next time :)
+</p>
+{% endif %}
+
+{% endblock %}
