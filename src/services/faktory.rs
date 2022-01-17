@@ -12,8 +12,8 @@ use tracing::Instrument;
 use crate::Error;
 
 lazy_static::lazy_static! {
-    static ref JOB_EXECUTION_TIME: HistogramVec = register_histogram_vec!("fuzzysearch_owo_job_duration_seconds", "Duration to complete a job.", &["job"]).unwrap();
-    static ref JOB_FAILURE_COUNT: CounterVec = register_counter_vec!("fuzzysearch_owo_job_failure_total", "Number of job failures.", &["job"]).unwrap();
+    static ref JOB_EXECUTION_TIME: HistogramVec = register_histogram_vec!("foxbot_job_duration_seconds", "Duration to complete a job.", &["job"]).unwrap();
+    static ref JOB_FAILURE_COUNT: CounterVec = register_counter_vec!("foxbot_job_failure_total", "Number of job failures.", &["job"]).unwrap();
 }
 
 #[derive(Debug, thiserror::Error)]

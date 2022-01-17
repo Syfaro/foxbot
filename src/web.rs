@@ -28,11 +28,7 @@ struct Config {
     cdn_prefix: String,
 }
 
-pub fn web(config: WebConfig) {
-    actix_web::rt::System::new().block_on(serve_web(config))
-}
-
-async fn serve_web(config: WebConfig) {
+pub async fn web(config: WebConfig) {
     tracing::info!("starting server to listen for web requests");
 
     let faktory = FaktoryClient::connect(config.faktory_url)
@@ -76,7 +72,6 @@ async fn serve_web(config: WebConfig) {
 
         App::new()
             .wrap(tracing_actix_web::TracingLogger::default())
-            .wrap(actix_web_opentelemetry::RequestTracing::default())
             .route("/", web::get().to(index))
             .route("/mg/{media_group_id}", web::get().to(media_group))
             .route("/telegram/{secret}", web::post().to(telegram_webhook))

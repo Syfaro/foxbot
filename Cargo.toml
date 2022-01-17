@@ -11,7 +11,6 @@ env = ["dotenv"]
 [dependencies]
 actix-router = "=0.5.0-beta.4"
 actix-web = "=4.0.0-beta.19"
-actix-web-opentelemetry = "=0.11.0-beta.7"
 anyhow = "1"
 askama = "0.11"
 async-trait = "0.1"
@@ -30,6 +29,7 @@ futures = "0.3"
 fuzzysearch = {git = "https://github.com/Syfaro/fuzzysearch-rs", features = ["trace", "local_hash"]}
 hamming = "0.1"
 hex = "0.4"
+hyper = {version = "0.14", features = ["server"]}
 image = "0.23"
 infer = "0.6"
 intl-memoizer = "0.5"
@@ -37,6 +37,7 @@ lazy_static = "1"
 linkify = "0.8"
 opentelemetry = "0.16"
 opentelemetry-http = "0.5"
+opentelemetry-jaeger = {version = "0.15", features = ["rt-tokio", "collector_client", "reqwest_collector_client"]}
 prometheus = {version = "0.13", features = ["process"]}
 rand = "0.8"
 redis = {version = "0.21", features = ["connection-manager", "tokio-comp"]}

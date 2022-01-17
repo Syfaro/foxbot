@@ -2,8 +2,11 @@ use sqlx::PgPool;
 
 use crate::sites;
 
-pub mod discord;
-pub mod telegram;
+mod discord;
+mod telegram;
+
+pub use discord::discord as start_discord;
+pub use telegram::telegram as start_telegram;
 
 async fn get_sites(pool: &PgPool, config: &crate::RunConfig) -> Vec<sites::BoxedSite> {
     sites::get_all_sites(

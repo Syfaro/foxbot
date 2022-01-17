@@ -3,6 +3,11 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use fluent_bundle::{bundle::FluentBundle, FluentArgs, FluentResource};
 use fuzzysearch::FuzzySearch;
 use intl_memoizer::concurrent::IntlLangMemoizer;
+use lazy_static::lazy_static;
+use prometheus::{
+    register_counter, register_counter_vec, register_histogram, register_histogram_vec, Counter,
+    CounterVec, Histogram, HistogramVec,
+};
 use rand::prelude::SliceRandom;
 use redis::AsyncCommands;
 use sqlx::PgPool;
@@ -25,6 +30,36 @@ mod handlers;
 mod jobs;
 
 type BoxedHandler = Box<dyn handlers::Handler + Send + Sync>;
+
+lazy_static! {
+    static ref PROCESSING_DURATION: Histogram = register_histogram!(
+        "foxbot_processing_duration_seconds",
+        "Time to run an update through handlers"
+    )
+    .unwrap();
+    static ref HANDLER_DURATION: HistogramVec = register_histogram_vec!(
+        "foxbot_handler_duration_seconds",
+        "Time to complete to execute a completed handler",
+        &["handler"]
+    )
+    .unwrap();
+    static ref HANDLER_ERRORS: CounterVec = register_counter_vec!(
+        "foxbot_handler_errors_total",
+        "Number of errors when trying to run a handler",
+        &["handler"]
+    )
+    .unwrap();
+    static ref TELEGRAM_REQUESTS: Counter = register_counter!(
+        "foxbot_telegram_requests_total",
+        "Number of requests made to Telegram"
+    )
+    .unwrap();
+    static ref TELEGRAM_ERRORS: Counter = register_counter!(
+        "foxbot_telegram_errors_total",
+        "Number of errors returned on requests to Telegram"
+    )
+    .unwrap();
+}
 
 /// Artwork used for examples throughout the bot.
 static STARTING_ARTWORK: &[&str] = &[
@@ -51,16 +86,7 @@ pub struct Config {
     pub twitter_keypair: egg_mode::KeyPair,
 }
 
-pub fn start_telegram(args: Args, config: RunConfig, telegram_config: TelegramConfig) {
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("could not create runtime");
-
-    rt.block_on(run_telegram(args, config, telegram_config))
-}
-
-async fn run_telegram(args: Args, config: RunConfig, telegram_config: TelegramConfig) {
+pub async fn telegram(args: Args, config: RunConfig, telegram_config: TelegramConfig) {
     let mut dir = std::env::current_dir().expect("Unable to get directory");
     dir.push("langs");
 
@@ -138,7 +164,7 @@ async fn run_telegram(args: Args, config: RunConfig, telegram_config: TelegramCo
     let twitter_keypair =
         egg_mode::KeyPair::new(config.twitter_consumer_key, config.twitter_consumer_secret);
 
-    let telegram_config = Config {
+    let app_config = Config {
         sentry_url: args.sentry_url.to_string(),
         sentry_organization_slug: config.sentry_organization_slug,
         sentry_project_slug: config.sentry_project_slug,
@@ -175,7 +201,7 @@ async fn run_telegram(args: Args, config: RunConfig, telegram_config: TelegramCo
         langs,
         best_lang: Default::default(),
 
-        config: telegram_config,
+        config: app_config,
 
         faktory,
         pool,
@@ -229,7 +255,8 @@ async fn run_telegram(args: Args, config: RunConfig, telegram_config: TelegramCo
     faktory_environment.register("hash_new", jobs::subscribe::process_hash_new);
     faktory_environment.register("hash_notify", jobs::subscribe::process_hash_notify);
 
-    let environment = faktory_environment.finalize();
+    let mut environment = faktory_environment.finalize();
+    environment.workers(telegram_config.worker_threads);
 
     let faktory = environment.connect(Some(&config.faktory_url)).unwrap();
 
@@ -557,6 +584,8 @@ impl Context {
 
 #[tracing::instrument(skip(cx, update), fields(user_id, chat_id))]
 async fn process_update(cx: &Context, update: tgbotapi::Update) -> Result<(), Error> {
+    let processing_duration = PROCESSING_DURATION.start_timer();
+
     tracing::trace!("starting to process update");
 
     let user = utils::user_from_update(&update);
@@ -576,6 +605,10 @@ async fn process_update(cx: &Context, update: tgbotapi::Update) -> Result<(), Er
         .and_then(|message| message.get_command());
 
     for handler in &cx.handlers {
+        let handler_duration = HANDLER_DURATION
+            .with_label_values(&[handler.name()])
+            .start_timer();
+
         match handler
             .handle(cx, &update, command.as_ref())
             .instrument(tracing::info_span!(
@@ -585,10 +618,20 @@ async fn process_update(cx: &Context, update: tgbotapi::Update) -> Result<(), Er
             .await
         {
             Ok(status) if status == handlers::Status::Completed => {
-                tracing::debug!(handled_by = handler.name(), "completed update");
+                tracing::debug!(
+                    handled_by = handler.name(),
+                    "completed update in {} seconds",
+                    handler_duration.stop_and_record()
+                );
                 break;
             }
+            Ok(_status) => {
+                handler_duration.stop_and_discard();
+            }
             Err(err) => {
+                handler_duration.stop_and_record();
+                HANDLER_ERRORS.with_label_values(&[handler.name()]).inc();
+
                 tracing::error!(handled_by = handler.name(), "handler error: {:?}", err);
 
                 let mut tags = vec![("handler", handler.name().to_string())];
@@ -609,9 +652,16 @@ async fn process_update(cx: &Context, update: tgbotapi::Update) -> Result<(), Er
 
                 break;
             }
-            _ => (),
         }
     }
+
+    tracing::info!(
+        "completed handler execution in {} seconds",
+        processing_duration.stop_and_record()
+    );
+
+    // Errors aren't safe to retry because messages may have already been sent
+    // to users.
 
     Ok(())
 }

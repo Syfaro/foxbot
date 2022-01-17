@@ -27,16 +27,7 @@ use crate::{
     DiscordConfig, RunConfig,
 };
 
-pub fn start_discord(config: RunConfig, discord_config: DiscordConfig) {
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("could not create runtime");
-
-    rt.block_on(run_discord(config, discord_config))
-}
-
-async fn run_discord(config: RunConfig, discord_config: DiscordConfig) {
+pub async fn discord(config: RunConfig, discord_config: DiscordConfig) {
     let fuzzysearch = std::sync::Arc::new(fuzzysearch::FuzzySearch::new(
         config.fuzzysearch_api_token.clone(),
     ));

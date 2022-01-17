@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use fluent_bundle::FluentArgs;
-use std::collections::HashMap;
+use prometheus::{register_histogram_vec, HistogramVec};
 use tgbotapi::requests::*;
 
 use crate::{
@@ -19,7 +21,7 @@ use super::{
 // TODO: there's a lot of shared code between these commands.
 
 lazy_static::lazy_static! {
-    static ref USED_COMMANDS: prometheus::HistogramVec = prometheus::register_histogram_vec!("foxbot_commands_duration_seconds", "Processing duration for each command", &["command"]).unwrap();
+    static ref USED_COMMANDS: HistogramVec = register_histogram_vec!("foxbot_command_duration_seconds", "Processing duration for each command", &["command"]).unwrap();
 }
 
 pub struct CommandHandler;
