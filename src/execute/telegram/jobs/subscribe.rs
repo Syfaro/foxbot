@@ -2,49 +2,18 @@ use std::sync::Arc;
 
 use fluent_bundle::FluentArgs;
 
-use crate::{execute::telegram::Context, models, utils, Error};
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct HashNotify {
-    telegram_id: i64,
-    text: String,
-    message_id: Option<i32>,
-    photo_id: Option<String>,
-    #[serde(with = "string")]
-    searched_hash: i64,
-}
-
-mod string {
-    use std::fmt::Display;
-    use std::str::FromStr;
-
-    use serde::{de, Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<T, S>(value: &T, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        T: Display,
-        S: Serializer,
-    {
-        serializer.collect_str(value)
-    }
-
-    pub fn deserialize<'de, T, D>(deserializer: D) -> Result<T, D::Error>
-    where
-        T: FromStr,
-        T::Err: Display,
-        D: Deserializer<'de>,
-    {
-        String::deserialize(deserializer)?
-            .parse()
-            .map_err(de::Error::custom)
-    }
-}
+use crate::{
+    execute::{telegram::Context, telegram_jobs::HashNotifyJob},
+    models, utils, Error,
+};
 
 #[tracing::instrument(skip(cx, job), fields(job_id = job.id()))]
-pub async fn process_hash_new(cx: Arc<Context>, job: faktory::Job) -> Result<(), Error> {
-    let data = job.args().iter().next().ok_or(Error::Missing)?.to_owned();
-    let message: String = serde_json::value::from_value(data)?;
-    let hash = message.parse().map_err(|_| Error::Missing)?;
+pub async fn process_hash_new(
+    cx: Arc<Context>,
+    job: faktory::Job,
+    hash: [u8; 8],
+) -> Result<(), Error> {
+    let hash = i64::from_be_bytes(hash);
 
     let subscriptions = models::Subscription::search(&cx.pool, hash).await?;
     if subscriptions.is_empty() {
@@ -98,16 +67,13 @@ pub async fn process_hash_new(cx: Arc<Context>, job: faktory::Job) -> Result<(),
             None => continue,
         };
 
-        let data = serde_json::to_value(&HashNotify {
+        let job = HashNotifyJob {
             telegram_id,
             text: text.clone(),
-            searched_hash: sub.hash,
+            searched_hash: sub.hash.to_be_bytes(),
             message_id: sub.message_id,
             photo_id: sub.photo_id,
-        })?;
-
-        let job =
-            faktory::Job::new("hash_notify", vec![data]).on_queue(crate::web::FOXBOT_DEFAULT_QUEUE);
+        };
 
         cx.faktory.enqueue_job(job, None).await?;
     }
@@ -116,11 +82,12 @@ pub async fn process_hash_new(cx: Arc<Context>, job: faktory::Job) -> Result<(),
 }
 
 #[tracing::instrument(skip(cx, job), fields(job_id = job.id()))]
-pub async fn process_hash_notify(cx: Arc<Context>, job: faktory::Job) -> Result<(), Error> {
+pub async fn process_hash_notify(
+    cx: Arc<Context>,
+    job: faktory::Job,
+    notify: HashNotifyJob,
+) -> Result<(), Error> {
     use tgbotapi::requests::{SendMessage, SendPhoto};
-
-    let data = job.args().iter().next().ok_or(Error::Missing)?.to_owned();
-    let notify: HashNotify = serde_json::value::from_value(data)?;
 
     let mut was_sent = false;
 
@@ -153,7 +120,7 @@ pub async fn process_hash_notify(cx: Arc<Context>, job: faktory::Job) -> Result<
     models::Subscription::remove(
         &cx.pool,
         models::User::Telegram(notify.telegram_id),
-        notify.searched_hash,
+        i64::from_be_bytes(notify.searched_hash),
     )
     .await?;
 

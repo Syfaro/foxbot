@@ -20,14 +20,16 @@ use uuid::Uuid;
 use crate::{
     services::{
         self,
-        faktory::{FaktoryClient, FaktoryWorkerEnvironment},
+        faktory::{FaktoryClient, FaktoryWorkerEnvironment, JobQueue},
     },
     sites::BoxedSite,
     utils, Args, Error, ErrorMetadata, RunConfig, TelegramConfig, L10N_LANGS, L10N_RESOURCES,
 };
 
+use self::jobs::*;
+
 mod handlers;
-mod jobs;
+pub mod jobs;
 
 type BoxedHandler = Box<dyn handlers::Handler + Send + Sync>;
 
@@ -219,10 +221,7 @@ pub async fn telegram(args: Args, config: RunConfig, telegram_config: TelegramCo
     let mut faktory_environment: FaktoryWorkerEnvironment<_, Error> =
         FaktoryWorkerEnvironment::new(cx.clone());
 
-    faktory_environment.register(crate::web::INGEST_TELEGRAM_JOB, |cx, job| async move {
-        let mut args = job.args().iter();
-        let (update,) = crate::extract_args!(args, tgbotapi::Update);
-
+    faktory_environment.register::<TelegramIngestJob, _, _, _>(|cx, _job, update| async move {
         process_update(&cx, update).await?;
 
         Ok(())
@@ -232,39 +231,28 @@ pub async fn telegram(args: Args, config: RunConfig, telegram_config: TelegramCo
         handler.add_jobs(&mut faktory_environment);
     }
 
-    faktory_environment.register("channel_update", jobs::channel::process_channel_update);
-    faktory_environment.register("channel_edit", jobs::channel::process_channel_edit);
-    faktory_environment.register("group_photo", jobs::group::process_group_photo);
-    faktory_environment.register("group_source", jobs::group::process_group_source);
-    faktory_environment.register(
-        "group_mediagroup_message",
-        jobs::group::process_group_mediagroup_message,
-    );
-    faktory_environment.register(
-        "group_mediagroup_check",
-        jobs::group::process_group_mediagroup_check,
-    );
-    faktory_environment.register(
-        "group_mediagroup_hash",
-        jobs::group::process_group_mediagroup_hash,
-    );
-    faktory_environment.register(
-        "group_mediagroup_prune",
-        jobs::group::process_group_mediagroup_prune,
-    );
-    faktory_environment.register("hash_new", jobs::subscribe::process_hash_new);
-    faktory_environment.register("hash_notify", jobs::subscribe::process_hash_notify);
+    faktory_environment
+        .register::<ChannelUpdateJob, _, _, _>(jobs::channel::process_channel_update);
+    faktory_environment.register::<ChannelEditJob, _, _, _>(jobs::channel::process_channel_edit);
+    faktory_environment.register::<GroupPhotoJob, _, _, _>(jobs::group::process_group_photo);
+    faktory_environment.register::<GroupSourceJob, _, _, _>(jobs::group::process_group_source);
+    faktory_environment
+        .register::<MediaGroupMessageJob, _, _, _>(jobs::group::process_group_mediagroup_message);
+    faktory_environment
+        .register::<MediaGroupCheckJob, _, _, _>(jobs::group::process_group_mediagroup_check);
+    faktory_environment
+        .register::<MediaGroupHashJob, _, _, _>(jobs::group::process_group_mediagroup_hash);
+    faktory_environment
+        .register::<MediaGroupPruneJob, _, _, _>(jobs::group::process_group_mediagroup_prune);
+    faktory_environment.register::<NewHashJob, _, _, _>(jobs::subscribe::process_hash_new);
+    faktory_environment.register::<HashNotifyJob, _, _, _>(jobs::subscribe::process_hash_notify);
 
     let mut environment = faktory_environment.finalize();
     environment.workers(telegram_config.worker_threads);
 
     let faktory = environment.connect(Some(&config.faktory_url)).unwrap();
 
-    faktory.run_to_completion(&[
-        crate::web::TELEGRAM_HIGH_PRIORITY_QUEUE,
-        crate::web::TELEGRAM_STANDARD_QUEUE,
-        crate::web::FOXBOT_DEFAULT_QUEUE,
-    ]);
+    faktory.run_to_completion(&TelegramJobQueue::priority_order());
 }
 
 pub struct Context {

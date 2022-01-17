@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 use tgbotapi::{Command, Update};
 
-use crate::{execute::telegram::Context, needs_field, serialize_args, Error};
+use crate::{
+    execute::telegram::{jobs::GroupPhotoJob, Context},
+    needs_field, Error,
+};
 
 use super::{
     Handler,
@@ -31,8 +34,8 @@ impl Handler for GroupSourceHandler {
 
         tracing::debug!("passing group photo to background worker");
 
-        let job = faktory::Job::new("group_photo", serialize_args!(message))
-            .on_queue(crate::web::FOXBOT_DEFAULT_QUEUE);
+        let job = GroupPhotoJob { message };
+
         cx.faktory.enqueue_job(job, None).await?;
 
         Ok(Completed)

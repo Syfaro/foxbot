@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use tgbotapi::{ChatType, Command, Update};
 
-use crate::{needs_field, potential_return, serialize_args, Error};
+use crate::{execute::telegram::jobs::ChannelUpdateJob, needs_field, potential_return, Error};
 
 use super::{
     Context, Handler,
@@ -28,8 +28,8 @@ impl Handler for ChannelPhotoHandler {
 
         potential_return!(initial_filter(message));
 
-        let job = faktory::Job::new("channel_update", serialize_args!(message))
-            .on_queue(crate::web::FOXBOT_DEFAULT_QUEUE);
+        let job = ChannelUpdateJob { message };
+
         cx.faktory.enqueue_job(job, None).await?;
 
         Ok(Completed)

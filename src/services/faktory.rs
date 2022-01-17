@@ -9,8 +9,6 @@ use opentelemetry::propagation::TextMapPropagator;
 use prometheus::{register_counter_vec, register_histogram_vec, CounterVec, HistogramVec};
 use tracing::Instrument;
 
-use crate::Error;
-
 lazy_static::lazy_static! {
     static ref JOB_EXECUTION_TIME: HistogramVec = register_histogram_vec!("foxbot_job_duration_seconds", "Duration to complete a job.", &["job"]).unwrap();
     static ref JOB_FAILURE_COUNT: CounterVec = register_counter_vec!("foxbot_job_failure_total", "Number of job failures.", &["job"]).unwrap();
@@ -27,6 +25,25 @@ pub enum FaktoryError {
 }
 
 pub type JobCustom = HashMap<String, serde_json::Value>;
+
+pub trait JobQueue {
+    fn as_str(&self) -> &'static str;
+    fn priority_order() -> Vec<&'static str>;
+}
+
+pub trait BotJob<Q>: Sized + std::fmt::Debug
+where
+    Q: JobQueue,
+{
+    const NAME: &'static str;
+
+    type JobData;
+
+    fn queue(&self) -> Q;
+
+    fn args(self) -> Result<Vec<serde_json::Value>, serde_json::Error>;
+    fn deserialize(args: Vec<serde_json::Value>) -> Result<Self::JobData, serde_json::Error>;
+}
 
 #[derive(Clone)]
 pub struct FaktoryClient {
@@ -50,12 +67,44 @@ impl FaktoryClient {
         Ok(Self { client })
     }
 
-    pub async fn enqueue_job(
+    pub async fn enqueue_job<J, Q>(
         &self,
-        mut job: faktory::Job,
+        job: J,
         extra: Option<JobCustom>,
-    ) -> Result<(), FaktoryError> {
+    ) -> Result<String, FaktoryError>
+    where
+        J: BotJob<Q>,
+        Q: JobQueue,
+    {
+        self.enqueue_job_at(job, extra, None).await
+    }
+
+    pub async fn enqueue_job_at<J, Q>(
+        &self,
+        job: J,
+        extra: Option<JobCustom>,
+        at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<String, FaktoryError>
+    where
+        J: BotJob<Q>,
+        Q: JobQueue,
+    {
+        let name = J::NAME;
+        let queue = job.queue().as_str();
+        let args = job.args()?;
+
+        tracing::trace!(
+            "attempting to enqueue job {} on queue {} with args {:?}",
+            name,
+            queue,
+            args
+        );
+
+        let mut job = faktory::Job::new(name, args).on_queue(queue);
         job.custom = Self::job_custom(extra.unwrap_or_default());
+        job.at = at;
+
+        let job_id = job.id().to_owned();
 
         let client = self.client.clone();
         tokio::task::spawn_blocking(move || {
@@ -69,7 +118,9 @@ impl FaktoryClient {
             FaktoryError::Protocol(Box::new(err))
         })?;
 
-        Ok(())
+        tracing::info!(%job_id, "enqueued job {}", name);
+
+        Ok(job_id)
     }
 
     fn job_custom(other: JobCustom) -> JobCustom {
@@ -103,7 +154,7 @@ pub struct FaktoryWorkerEnvironment<C, E> {
 impl<C, E> FaktoryWorkerEnvironment<C, E>
 where
     C: 'static + Send + Sync + Clone,
-    E: std::fmt::Debug + std::error::Error + crate::ErrorMetadata,
+    E: std::fmt::Debug + std::error::Error + From<serde_json::Error> + crate::ErrorMetadata,
 {
     pub fn new(context: C) -> Self {
         let consumer_builder = faktory::ConsumerBuilder::default();
@@ -116,11 +167,15 @@ where
         }
     }
 
-    pub fn register<F, Fut>(&mut self, name: &'static str, f: F)
+    pub fn register<J, Q, F, Fut>(&mut self, f: F)
     where
-        F: 'static + Send + Sync + Fn(C, faktory::Job) -> Fut,
+        J: BotJob<Q>,
+        Q: JobQueue,
+        F: 'static + Send + Sync + Fn(C, faktory::Job, J::JobData) -> Fut,
         Fut: Future<Output = Result<(), E>>,
     {
+        let name = J::NAME;
+
         let rt = self.rt.clone();
         let context = self.context.clone();
 
@@ -140,15 +195,18 @@ where
             let propagator = opentelemetry::sdk::propagation::TraceContextPropagator::new();
             let cx = propagator.extract(&custom_strings);
 
-            let span = tracing::info_span!("faktory_job", name, queue = %job.queue);
+            let span =
+                tracing::info_span!("faktory_job", name, queue = %job.queue, job_id = %job.id());
             tracing_opentelemetry::OpenTelemetrySpanExt::set_parent(&span, cx);
 
             let _guard = span.entered();
 
             tracing::info!("running job with args: {:?}", job.args());
 
+            let data = J::deserialize(job.args().to_vec()).map_err(From::from)?;
+
             let execution_time = JOB_EXECUTION_TIME.with_label_values(&[name]).start_timer();
-            let result = rt.block_on(f(context.clone(), job).in_current_span());
+            let result = rt.block_on(f(context.clone(), job, data).in_current_span());
             let execution_time = execution_time.stop_and_record();
 
             let (result, status) = match result {
@@ -179,24 +237,6 @@ where
     pub fn finalize(self) -> faktory::ConsumerBuilder<E> {
         self.consumer_builder
     }
-}
-
-pub fn get_arg_opt<T: serde::de::DeserializeOwned>(
-    args: &mut core::slice::Iter<serde_json::Value>,
-) -> Result<Option<T>, Error> {
-    let arg = match args.next() {
-        Some(arg) => arg,
-        None => return Ok(None),
-    };
-
-    let data = serde_json::from_value(arg.to_owned())?;
-    Ok(Some(data))
-}
-
-pub fn get_arg<T: serde::de::DeserializeOwned>(
-    args: &mut core::slice::Iter<serde_json::Value>,
-) -> Result<T, Error> {
-    get_arg_opt(args)?.ok_or(Error::Missing)
 }
 
 #[macro_export]

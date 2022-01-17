@@ -4,14 +4,25 @@ use fluent_bundle::FluentArgs;
 use rusoto_s3::S3;
 use tracing::Instrument;
 
-use crate::{execute::telegram::Context, models, sites::PostInfo, utils, Error};
+use crate::{
+    execute::{
+        telegram::Context,
+        telegram_jobs::{
+            GroupSourceJob, MediaGroupCheckJob, MediaGroupHashJob, MediaGroupMessageJob,
+            MediaGroupPruneJob,
+        },
+    },
+    models,
+    sites::PostInfo,
+    utils, Error,
+};
 
-#[tracing::instrument(skip(cx, job), fields(job_id = job.id(), chat_id))]
-pub async fn process_group_photo(cx: Arc<Context>, job: faktory::Job) -> Result<(), Error> {
-    let data: serde_json::Value = job.args().iter().next().ok_or(Error::Missing)?.to_owned();
-
-    let message: tgbotapi::Message = serde_json::value::from_value(data)?;
-    tracing::Span::current().record("chat_id", &message.chat.id);
+#[tracing::instrument(skip(cx, job), fields(job_id = job.id(), chat_id = message.chat.id))]
+pub async fn process_group_photo(
+    cx: Arc<Context>,
+    job: faktory::Job,
+    message: tgbotapi::Message,
+) -> Result<(), Error> {
     let photo_sizes = match &message.photo {
         Some(sizes) => sizes,
         _ => return Ok(()),
@@ -39,9 +50,7 @@ pub async fn process_group_photo(cx: Arc<Context>, job: faktory::Job) -> Result<
     if message.media_group_id.is_some() {
         tracing::debug!("message is part of media group, passing message");
 
-        let data = serde_json::to_value(message)?;
-        let job = faktory::Job::new("group_mediagroup_message", vec![data])
-            .on_queue(crate::web::FOXBOT_DEFAULT_QUEUE);
+        let job = MediaGroupMessageJob { message };
 
         cx.faktory.enqueue_job(job, None).await?;
 
@@ -191,54 +200,43 @@ pub async fn process_group_photo(cx: Arc<Context>, job: faktory::Job) -> Result<
         }
     };
 
-    let data = serde_json::to_value(&super::GroupSource {
+    let job = GroupSourceJob {
         chat_id: message.chat.id.to_string(),
         reply_to_message_id: message.message_id,
         text,
-    })?;
-
-    let job =
-        faktory::Job::new("group_source", vec![data]).on_queue(crate::web::FOXBOT_DEFAULT_QUEUE);
+    };
 
     cx.faktory.enqueue_job(job, None).await?;
 
     Ok(())
 }
 
-#[tracing::instrument(skip(cx, job), fields(job_id = job.id(), chat_id))]
-pub async fn process_group_source(cx: Arc<Context>, job: faktory::Job) -> Result<(), Error> {
+#[tracing::instrument(skip(cx, job), fields(job_id = job.id(), chat_id = %group_source.chat_id))]
+pub async fn process_group_source(
+    cx: Arc<Context>,
+    job: faktory::Job,
+    group_source: GroupSourceJob,
+) -> Result<(), Error> {
     use tgbotapi::requests::SendMessage;
 
-    let data: serde_json::Value = job.args().iter().next().ok_or(Error::Missing)?.to_owned();
+    tracing::trace!("got enqueued group source: {:?}", group_source);
 
-    tracing::trace!("got enqueued group source: {:?}", data);
-
-    let super::GroupSource {
-        chat_id,
-        reply_to_message_id,
-        text,
-    } = serde_json::value::from_value(data.clone())?;
-    let chat_id: &str = &chat_id;
-    tracing::Span::current().record("chat_id", &chat_id);
-
-    if let Some(at) = super::check_more_time(&cx.redis, chat_id).await {
+    if let Some(at) = super::check_more_time(&cx.redis, &group_source.chat_id).await {
         tracing::trace!("need to wait more time for this chat: {}", at);
 
-        let mut job = faktory::Job::new("group_source", vec![data])
-            .on_queue(crate::web::FOXBOT_DEFAULT_QUEUE);
-        job.at = Some(at);
-
-        cx.faktory.enqueue_job(job, None).await?;
+        cx.faktory
+            .enqueue_job_at(group_source, None, Some(at))
+            .await?;
 
         return Ok(());
     }
 
     let message = SendMessage {
-        chat_id: chat_id.into(),
-        reply_to_message_id: Some(reply_to_message_id),
+        chat_id: (&group_source.chat_id as &str).into(),
+        reply_to_message_id: Some(group_source.reply_to_message_id),
         disable_web_page_preview: Some(true),
         disable_notification: Some(true),
-        text,
+        text: group_source.text.clone(),
         ..Default::default()
     };
 
@@ -256,13 +254,11 @@ pub async fn process_group_source(cx: Arc<Context>, job: faktory::Job) -> Result
             let now = chrono::offset::Utc::now();
             let retry_at = now.add(chrono::Duration::seconds(retry_after as i64));
 
-            super::needs_more_time(&cx.redis, chat_id, retry_at).await;
+            super::needs_more_time(&cx.redis, &group_source.chat_id, retry_at).await;
 
-            let mut job = faktory::Job::new("group_source", vec![data])
-                .on_queue(crate::web::FOXBOT_DEFAULT_QUEUE);
-            job.at = Some(retry_at);
-
-            cx.faktory.enqueue_job(job, None).await?;
+            cx.faktory
+                .enqueue_job_at(group_source, None, Some(retry_at))
+                .await?;
 
             Ok(())
         }
@@ -275,16 +271,12 @@ pub async fn process_group_source(cx: Arc<Context>, job: faktory::Job) -> Result
     }
 }
 
-#[tracing::instrument(skip(cx, job), fields(job_id = job.id(), chat_id, media_group_id))]
+#[tracing::instrument(skip(cx, job), fields(job_id = job.id(), chat_id = message.chat.id, media_group_id))]
 pub async fn process_group_mediagroup_message(
     cx: Arc<Context>,
     job: faktory::Job,
+    message: tgbotapi::Message,
 ) -> Result<(), Error> {
-    let data: serde_json::Value = job.args().iter().next().ok_or(Error::Missing)?.to_owned();
-
-    let message: tgbotapi::Message = serde_json::value::from_value(data)?;
-    tracing::Span::current().record("chat_id", &message.chat.id);
-
     let media_group_id = message.media_group_id.as_deref().unwrap();
     tracing::Span::current().record("media_group_id", &media_group_id);
 
@@ -294,16 +286,20 @@ pub async fn process_group_mediagroup_message(
 
     tracing::debug!("queueing group check");
 
-    let data = serde_json::to_value(media_group_id)?;
-    let mut job = faktory::Job::new("group_mediagroup_check", vec![data])
-        .on_queue(crate::web::FOXBOT_DEFAULT_QUEUE);
-    job.at = Some(chrono::Utc::now() + chrono::Duration::seconds(10));
+    let check_job = MediaGroupCheckJob {
+        media_group_id: media_group_id.to_owned(),
+    };
+    cx.faktory
+        .enqueue_job_at(
+            check_job,
+            None,
+            Some(chrono::Utc::now() + chrono::Duration::seconds(10)),
+        )
+        .await?;
 
-    cx.faktory.enqueue_job(job, None).await?;
-
-    let data = serde_json::to_value(stored_id)?;
-    let job = faktory::Job::new("group_mediagroup_hash", vec![data])
-        .on_queue(crate::web::FOXBOT_DEFAULT_QUEUE);
+    let job = MediaGroupHashJob {
+        saved_message_id: stored_id,
+    };
 
     cx.faktory.enqueue_job(job, None).await?;
 
@@ -314,12 +310,9 @@ pub async fn process_group_mediagroup_message(
 pub async fn process_group_mediagroup_hash(
     cx: Arc<Context>,
     job: faktory::Job,
+    saved_message_id: i32,
 ) -> Result<(), Error> {
-    let data: serde_json::Value = job.args().iter().next().ok_or(Error::Missing)?.to_owned();
-
-    let stored_id: i32 = serde_json::value::from_value(data)?;
-
-    let message = match models::MediaGroup::get_message(&cx.pool, stored_id).await? {
+    let message = match models::MediaGroup::get_message(&cx.pool, saved_message_id).await? {
         Some(message) => message,
         None => {
             tracing::debug!("message was removed before hash could be calculated");
@@ -385,7 +378,7 @@ pub async fn process_group_mediagroup_hash(
 
     tracing::debug!("found sources, saving for media group item");
 
-    models::MediaGroup::set_message_sources(&cx.pool, stored_id, sources).await?;
+    models::MediaGroup::set_message_sources(&cx.pool, saved_message_id, sources).await?;
 
     Ok(())
 }
@@ -394,16 +387,11 @@ pub async fn process_group_mediagroup_hash(
 pub async fn process_group_mediagroup_check(
     cx: Arc<Context>,
     job: faktory::Job,
+    media_group_id: String,
 ) -> Result<(), Error> {
-    let data: serde_json::Value = job.args().iter().next().ok_or(Error::Missing)?.to_owned();
-
-    let media_group_id: String = serde_json::from_value(data)?;
-    let media_group_id: &str = &media_group_id;
-    tracing::Span::current().record("media_group_id", &media_group_id);
-
     tracing::debug!("checking media group age");
 
-    let last_updated_at = match models::MediaGroup::last_message(&cx.pool, media_group_id).await? {
+    let last_updated_at = match models::MediaGroup::last_message(&cx.pool, &media_group_id).await? {
         Some(last_updated_at) => last_updated_at,
         None => {
             tracing::debug!("media group had already been processed");
@@ -416,22 +404,25 @@ pub async fn process_group_mediagroup_check(
     if chrono::Utc::now() - last_updated_at < chrono::Duration::seconds(10) {
         tracing::debug!("group was updated more recently than 10 seconds, requeueing check");
 
-        let data = serde_json::to_value(media_group_id)?;
-        let mut job = faktory::Job::new("group_mediagroup_check", vec![data])
-            .on_queue(crate::web::FOXBOT_DEFAULT_QUEUE);
-        job.at = Some(chrono::Utc::now() + chrono::Duration::seconds(10));
+        let job = MediaGroupCheckJob { media_group_id };
 
-        cx.faktory.enqueue_job(job, None).await?;
+        cx.faktory
+            .enqueue_job_at(
+                job,
+                None,
+                Some(chrono::Utc::now() + chrono::Duration::seconds(10)),
+            )
+            .await?;
 
         return Ok(());
     }
 
-    if !models::MediaGroup::sending_message(&cx.pool, media_group_id).await? {
+    if !models::MediaGroup::sending_message(&cx.pool, &media_group_id).await? {
         tracing::info!("media group was already sent");
         return Ok(());
     }
 
-    let messages = models::MediaGroup::get_messages(&cx.pool, media_group_id).await?;
+    let messages = models::MediaGroup::get_messages(&cx.pool, &media_group_id).await?;
     let first_message = &messages.first().as_ref().unwrap().message;
 
     let lang_code = first_message
@@ -451,9 +442,9 @@ pub async fn process_group_mediagroup_check(
     {
         tracing::trace!("group doesn't want inline album sources, generating link");
 
-        let data = serde_json::to_value(media_group_id)?;
-        let mut job = faktory::Job::new("group_mediagroup_prune", vec![data])
-            .on_queue(crate::web::FOXBOT_DEFAULT_QUEUE);
+        let job = MediaGroupPruneJob {
+            media_group_id: media_group_id.clone(),
+        };
 
         let has_sources = messages.iter().any(|message| {
             !message
@@ -463,7 +454,7 @@ pub async fn process_group_mediagroup_check(
                 .unwrap_or(true)
         });
 
-        if has_sources {
+        let at = if has_sources {
             tracing::debug!("media group had sources, sending message");
 
             let link = format!("{}/mg/{}", cx.config.public_endpoint, media_group_id);
@@ -482,19 +473,19 @@ pub async fn process_group_mediagroup_check(
 
             cx.bot.make_request(&send_message).await?;
 
-            job.at = Some(chrono::Utc::now() + chrono::Duration::hours(24));
+            Some(chrono::Utc::now() + chrono::Duration::hours(24))
         } else {
             tracing::debug!("media group had no sources, skipping message and pruning now");
 
-            job.at = None;
-        }
+            None
+        };
 
-        cx.faktory.enqueue_job(job, None).await?;
+        cx.faktory.enqueue_job_at(job, None, at).await?;
 
         return Ok(());
     }
 
-    let mut messages = models::MediaGroup::consume_messages(&cx.pool, media_group_id).await?;
+    let mut messages = models::MediaGroup::consume_messages(&cx.pool, &media_group_id).await?;
     if messages.is_empty() {
         tracing::info!("messages was empty, must have already processed");
         return Ok(());
@@ -589,10 +580,8 @@ pub async fn process_group_mediagroup_check(
 pub async fn process_group_mediagroup_prune(
     cx: Arc<Context>,
     job: faktory::Job,
+    media_group_id: String,
 ) -> Result<(), Error> {
-    let data: serde_json::Value = job.args().iter().next().ok_or(Error::Missing)?.to_owned();
-
-    let media_group_id: String = serde_json::from_value(data)?;
     let media_group_id: &str = &media_group_id;
     tracing::Span::current().record("media_group_id", &media_group_id);
 

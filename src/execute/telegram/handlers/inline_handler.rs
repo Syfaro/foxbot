@@ -8,7 +8,12 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tgbotapi::{requests::*, Command, FileType, InlineKeyboardButton, InlineKeyboardMarkup};
 
-use crate::{execute::telegram::Context, models, needs_field, sites::PostInfo, utils, Error};
+use crate::{
+    execute::{telegram::Context, telegram_jobs::CoconutEventJob},
+    models, needs_field,
+    sites::PostInfo,
+    utils, Error,
+};
 
 use super::{
     Handler,
@@ -126,7 +131,7 @@ impl Handler for InlineHandler {
     }
 
     fn add_jobs(&self, worker_environment: &mut super::WorkerEnvironment) {
-        worker_environment.register(crate::web::COCONUT_PROGRESS_JOB, dispatch_event);
+        worker_environment.register::<CoconutEventJob, _, _, _>(dispatch_event);
     }
 
     async fn handle(
@@ -318,18 +323,17 @@ impl Handler for InlineHandler {
     }
 }
 
-async fn dispatch_event(cx: Arc<Context>, job: faktory::Job) -> Result<(), Error> {
-    use crate::types::CoconutEvent;
-
-    let mut args = job.args().iter();
-    let (event,) = crate::extract_args!(args, CoconutEvent);
-
+async fn dispatch_event(
+    cx: Arc<Context>,
+    _job: faktory::Job,
+    event: CoconutEventJob,
+) -> Result<(), Error> {
     match event {
-        CoconutEvent::Progress {
+        CoconutEventJob::Progress {
             display_name,
             progress,
         } => video_progress(&cx, &display_name, &progress).await?,
-        CoconutEvent::Completed {
+        CoconutEventJob::Completed {
             display_name,
             video_url,
             thumb_url,

@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 use fluent_bundle::FluentArgs;
 
-use crate::{execute::telegram::Context, models, needs_field, utils, Error};
+use crate::{
+    execute::{telegram::Context, telegram_jobs::TwitterAccountAddedJob},
+    models, needs_field, utils, Error,
+};
 
 use super::{
     Handler,
@@ -17,29 +20,33 @@ impl Handler for TwitterHandler {
     }
 
     fn add_jobs(&self, worker_environment: &mut super::WorkerEnvironment) {
-        worker_environment.register(crate::web::TWITTER_ACCOUNT_ADDED, |cx, job| async move {
-            let mut args = job.args().iter();
-            let (telegram_id, username) = crate::extract_args!(args, Option<i64>, String);
+        worker_environment.register::<TwitterAccountAddedJob, _, _, _>(
+            |cx, _job, account| async move {
+                let TwitterAccountAddedJob {
+                    telegram_id,
+                    twitter_username,
+                } = account;
 
-            let telegram_id = telegram_id.ok_or(Error::Missing)?;
+                let telegram_id = telegram_id.ok_or(Error::Missing)?;
 
-            let mut args = FluentArgs::new();
-            args.set("userName", username);
+                let mut args = FluentArgs::new();
+                args.set("userName", twitter_username);
 
-            let bundle = cx.get_fluent_bundle(None).await;
+                let bundle = cx.get_fluent_bundle(None).await;
 
-            let text = utils::get_message(&bundle, "twitter-welcome", Some(args));
+                let text = utils::get_message(&bundle, "twitter-welcome", Some(args));
 
-            let message = tgbotapi::requests::SendMessage {
-                chat_id: telegram_id.into(),
-                text,
-                ..Default::default()
-            };
+                let message = tgbotapi::requests::SendMessage {
+                    chat_id: telegram_id.into(),
+                    text,
+                    ..Default::default()
+                };
 
-            cx.make_request(&message).await?;
+                cx.make_request(&message).await?;
 
-            Ok(())
-        });
+                Ok(())
+            },
+        );
     }
 
     async fn handle(

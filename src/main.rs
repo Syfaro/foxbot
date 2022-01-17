@@ -10,7 +10,6 @@ mod execute;
 mod models;
 mod services;
 mod sites;
-mod types;
 mod utils;
 mod web;
 

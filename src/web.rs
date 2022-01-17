@@ -5,18 +5,13 @@ use serde::Deserialize;
 use sqlx::PgPool;
 
 use crate::{
-    models, services::faktory::FaktoryClient, types::CoconutEvent, utils, Error, WebConfig,
+    execute::telegram_jobs::{
+        CoconutEventJob, NewHashJob, TelegramIngestJob, TwitterAccountAddedJob,
+    },
+    models,
+    services::faktory::FaktoryClient,
+    utils, Error, WebConfig,
 };
-
-pub const FOXBOT_DEFAULT_QUEUE: &str = "foxbot_default";
-
-pub const TELEGRAM_STANDARD_QUEUE: &str = "foxbot_telegram_standard";
-pub const TELEGRAM_HIGH_PRIORITY_QUEUE: &str = "foxbot_telegram_high";
-
-pub const INGEST_TELEGRAM_JOB: &str = "ingest_telegram";
-pub const FUZZYSEARCH_NEW_HASH_JOB: &str = "hash_new";
-pub const COCONUT_PROGRESS_JOB: &str = "coconut_progress";
-pub const TWITTER_ACCOUNT_ADDED: &str = "twitter_account_added";
 
 struct Config {
     telegram_api_key: String,
@@ -180,11 +175,10 @@ async fn twitter_callback(
                 .await
                 .map_err(actix_web::error::ErrorInternalServerError)?
         {
-            let job = faktory::Job::new(
-                TWITTER_ACCOUNT_ADDED,
-                crate::serialize_args!(user.telegram_id(), username.clone()),
-            )
-            .on_queue(FOXBOT_DEFAULT_QUEUE);
+            let job = TwitterAccountAddedJob {
+                telegram_id: user.telegram_id(),
+                twitter_username: username.clone(),
+            };
 
             faktory
                 .enqueue_job(job, None)
@@ -257,24 +251,16 @@ async fn telegram_webhook(
 
     let value = body.into_inner();
 
-    let is_high_priority_update =
-        matches!(serde_json::from_value(value.clone()), Ok(update) if is_high_priority(&update));
+    let job = TelegramIngestJob { update: value };
+
+    let is_high_priority_update = job.is_high_priority();
 
     tracing::debug!(
         is_high_priority_update,
         "checked if update was high priority"
     );
 
-    let queue = if is_high_priority_update {
-        TELEGRAM_HIGH_PRIORITY_QUEUE
-    } else {
-        TELEGRAM_STANDARD_QUEUE
-    };
-
-    let job = faktory::Job::new(INGEST_TELEGRAM_JOB, vec![value]).on_queue(queue);
-    let job_id = job.id().to_owned();
-
-    faktory
+    let job_id = faktory
         .enqueue_job(job, None)
         .await
         .map_err(actix_web::error::ErrorBadRequest)?;
@@ -282,10 +268,6 @@ async fn telegram_webhook(
     tracing::trace!(%job_id, "enqueued message");
 
     Ok(HttpResponse::Ok().body("OK"))
-}
-
-fn is_high_priority(update: &tgbotapi::Update) -> bool {
-    update.inline_query.is_some()
 }
 
 #[derive(Deserialize)]
@@ -314,17 +296,9 @@ async fn fuzzysearch_webhook(
     let mut data = [0u8; 8];
     base64::decode_config_slice(&hash, base64::STANDARD, &mut data).unwrap();
 
-    let value = serde_json::Value::Array(
-        data.iter()
-            .map(|b| serde_json::Value::Number(serde_json::Number::from(*b)))
-            .collect(),
-    );
+    let job = NewHashJob { hash: data };
 
-    let job =
-        faktory::Job::new(FUZZYSEARCH_NEW_HASH_JOB, vec![value]).on_queue(FOXBOT_DEFAULT_QUEUE);
-    let job_id = job.id().to_owned();
-
-    faktory
+    let job_id = faktory
         .enqueue_job(job, None)
         .await
         .map_err(actix_web::error::ErrorBadRequest)?;
@@ -373,10 +347,10 @@ async fn coconut_webhook(
 
     let display_name = query.name;
 
-    let event = if let Some(progress) = &data.progress {
+    let job = if let Some(progress) = &data.progress {
         tracing::debug!("event was progress");
 
-        CoconutEvent::Progress {
+        CoconutEventJob::Progress {
             display_name,
             progress: progress.to_string(),
         }
@@ -401,7 +375,7 @@ async fn coconut_webhook(
             ));
         };
 
-        CoconutEvent::Completed {
+        CoconutEventJob::Completed {
             display_name,
             thumb_url,
             video_url: video_url.to_owned(),
@@ -412,15 +386,9 @@ async fn coconut_webhook(
         ));
     };
 
-    tracing::info!("computed event: {:?}", event);
+    tracing::info!("computed event: {:?}", job);
 
-    let event = serde_json::to_value(&event)
-        .map_err(|_err| actix_web::error::ErrorInternalServerError("could not serialize event"))?;
-
-    let job = faktory::Job::new(COCONUT_PROGRESS_JOB, vec![event]).on_queue(FOXBOT_DEFAULT_QUEUE);
-    let job_id = job.id().to_owned();
-
-    faktory
+    let job_id = faktory
         .enqueue_job(job, None)
         .await
         .map_err(actix_web::error::ErrorBadRequest)?;
@@ -428,36 +396,4 @@ async fn coconut_webhook(
     tracing::trace!(%job_id, "enqueued video event");
 
     Ok(HttpResponse::Ok().body("OK"))
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_is_high_priority() {
-        let test_cases = [
-            (
-                tgbotapi::Update {
-                    ..Default::default()
-                },
-                false,
-            ),
-            (
-                tgbotapi::Update {
-                    inline_query: Some(tgbotapi::InlineQuery {
-                        id: "abc".to_string(),
-                        from: tgbotapi::User::default(),
-                        query: "abc".to_string(),
-                        offset: "abc".to_string(),
-                    }),
-                    ..Default::default()
-                },
-                true,
-            ),
-        ];
-
-        for (update, expected) in test_cases {
-            let result = super::is_high_priority(&update);
-            assert_eq!(result, expected);
-        }
-    }
 }

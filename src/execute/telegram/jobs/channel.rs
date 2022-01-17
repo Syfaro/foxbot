@@ -3,21 +3,22 @@ use std::{ops::Add, sync::Arc};
 use redis::AsyncCommands;
 use tgbotapi::requests::GetChatMember;
 
-use crate::{execute::telegram::Context, models, sites::PostInfo, utils, Error};
-
-#[derive(serde::Deserialize, serde::Serialize)]
-struct MessageEdit {
-    chat_id: String,
-    message_id: i32,
-    media_group_id: Option<String>,
-    firsts: Vec<(models::Sites, String)>,
-}
+use crate::{
+    execute::{
+        telegram::Context,
+        telegram_jobs::{ChannelEditJob, MessageEdit},
+    },
+    models,
+    sites::PostInfo,
+    utils, Error,
+};
 
 #[tracing::instrument(skip(cx, job), fields(job_id = job.id()))]
-pub async fn process_channel_update(cx: Arc<Context>, job: faktory::Job) -> Result<(), Error> {
-    let data = job.args().iter().next().ok_or(Error::Missing)?.to_owned();
-    let message: tgbotapi::Message = serde_json::value::from_value(data)?;
-
+pub async fn process_channel_update(
+    cx: Arc<Context>,
+    job: faktory::Job,
+    message: tgbotapi::Message,
+) -> Result<(), Error> {
     tracing::trace!("got enqueued message: {:?}", message);
 
     let has_linked_chat = super::store_linked_chat(&cx, &message).await?;
@@ -99,18 +100,15 @@ pub async fn process_channel_update(cx: Arc<Context>, job: faktory::Job) -> Resu
         .map(|(site, file)| (site, file.url()))
         .collect();
 
-    let data = serde_json::to_value(MessageEdit {
-        chat_id: message.chat.id.to_string(),
-        message_id: message.message_id,
-        media_group_id: message.media_group_id,
-        firsts,
-    })?;
-
-    let job = faktory::Job::new(
-        "channel_edit",
-        vec![data, serde_json::to_value(has_linked_chat).unwrap()],
-    )
-    .on_queue(crate::web::FOXBOT_DEFAULT_QUEUE);
+    let job = ChannelEditJob {
+        message_edit: MessageEdit {
+            chat_id: message.chat.id.to_string(),
+            message_id: message.message_id,
+            media_group_id: message.media_group_id,
+            firsts,
+        },
+        has_linked_chat,
+    };
 
     cx.faktory.enqueue_job(job, None).await?;
 
@@ -118,38 +116,24 @@ pub async fn process_channel_update(cx: Arc<Context>, job: faktory::Job) -> Resu
 }
 
 #[tracing::instrument(skip(cx, job), fields(job_id = job.id()))]
-pub async fn process_channel_edit(cx: Arc<Context>, job: faktory::Job) -> Result<(), Error> {
-    let mut args = job.args().iter();
+pub async fn process_channel_edit(
+    cx: Arc<Context>,
+    job: faktory::Job,
+    (message_edit, has_linked_chat): (MessageEdit, bool),
+) -> Result<(), Error> {
+    tracing::trace!("got enqueued edit: {:?}", message_edit);
 
-    let data: serde_json::Value = args.next().ok_or(Error::Missing)?.to_owned();
-
-    tracing::trace!("got enqueued edit: {:?}", data);
-
-    let MessageEdit {
-        chat_id,
-        message_id,
-        media_group_id,
-        firsts,
-    } = serde_json::value::from_value(data.clone())?;
-    let chat_id: &str = &chat_id;
-
-    let has_linked_chat: bool = args
-        .next()
-        .map(|has_linked_chat| has_linked_chat.to_owned())
-        .map(|has_linked_chat| serde_json::from_value(has_linked_chat).unwrap())
-        .unwrap_or(false);
+    let chat_id: &str = &message_edit.chat_id;
 
     if let Some(at) = super::check_more_time(&cx.redis, chat_id).await {
         tracing::trace!("need to wait more time for this chat: {}", at);
 
-        let mut job = faktory::Job::new(
-            "channel_edit",
-            vec![data, serde_json::to_value(has_linked_chat).unwrap()],
-        )
-        .on_queue(crate::web::FOXBOT_DEFAULT_QUEUE);
-        job.at = Some(at);
+        let job = ChannelEditJob {
+            message_edit,
+            has_linked_chat,
+        };
 
-        cx.faktory.enqueue_job(job, None).await?;
+        cx.faktory.enqueue_job_at(job, None, Some(at)).await?;
 
         return Ok(());
     }
@@ -158,16 +142,17 @@ pub async fn process_channel_edit(cx: Arc<Context>, job: faktory::Job) -> Result
 
     // If this photo was part of a media group, we should set a caption on
     // the image because we can't make an inline keyboard on it.
-    let resp = if has_linked_chat || media_group_id.is_some() {
-        let caption = firsts
-            .into_iter()
-            .map(|(_site, url)| url)
+    let resp = if has_linked_chat || message_edit.media_group_id.is_some() {
+        let caption = message_edit
+            .firsts
+            .iter()
+            .map(|(_site, url)| url.to_owned())
             .collect::<Vec<_>>()
             .join("\n");
 
         let edit_caption_markup = tgbotapi::requests::EditMessageCaption {
             chat_id: chat_id.into(),
-            message_id: Some(message_id),
+            message_id: Some(message_edit.message_id),
             caption: Some(caption),
             ..Default::default()
         };
@@ -175,11 +160,12 @@ pub async fn process_channel_edit(cx: Arc<Context>, job: faktory::Job) -> Result
         cx.bot.make_request(&edit_caption_markup).await
     // Not a media group, we should create an inline keyboard.
     } else {
-        let buttons: Vec<_> = firsts
-            .into_iter()
+        let buttons: Vec<_> = message_edit
+            .firsts
+            .iter()
             .map(|(site, url)| tgbotapi::InlineKeyboardButton {
                 text: site.as_str().to_string(),
-                url: Some(url),
+                url: Some(url.to_owned()),
                 ..Default::default()
             })
             .collect();
@@ -196,7 +182,7 @@ pub async fn process_channel_edit(cx: Arc<Context>, job: faktory::Job) -> Result
 
         let edit_reply_markup = tgbotapi::requests::EditMessageReplyMarkup {
             chat_id: chat_id.into(),
-            message_id: Some(message_id),
+            message_id: Some(message_edit.message_id),
             reply_markup: Some(tgbotapi::requests::ReplyMarkup::InlineKeyboardMarkup(
                 markup,
             )),
@@ -224,14 +210,12 @@ pub async fn process_channel_edit(cx: Arc<Context>, job: faktory::Job) -> Result
 
             super::needs_more_time(&cx.redis, chat_id, retry_at).await;
 
-            let mut job = faktory::Job::new(
-                "channel_edit",
-                vec![data, serde_json::to_value(has_linked_chat).unwrap()],
-            )
-            .on_queue(crate::web::FOXBOT_DEFAULT_QUEUE);
-            job.at = Some(retry_at);
+            let job = ChannelEditJob {
+                message_edit,
+                has_linked_chat,
+            };
 
-            cx.faktory.enqueue_job(job, None).await?;
+            cx.faktory.enqueue_job_at(job, None, Some(retry_at)).await?;
 
             Ok(())
         }
@@ -365,7 +349,7 @@ async fn store_channel_edit(cx: &Context, message: &tgbotapi::Message) -> Result
 mod tests {
     async fn get_redis() -> redis::aio::ConnectionManager {
         let redis_client =
-            redis::Client::open(std::env::var("REDIS_DSN").expect("Missing REDIS_DSN")).unwrap();
+            redis::Client::open(std::env::var("REDIS_URL").expect("Missing REDIS_URL")).unwrap();
         redis::aio::ConnectionManager::new(redis_client)
             .await
             .expect("unable to open Redis connection")
