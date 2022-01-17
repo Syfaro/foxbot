@@ -114,7 +114,7 @@ pub async fn telegram(args: Args, config: RunConfig, telegram_config: TelegramCo
         .await
         .expect("could not connect to database");
 
-    let sites = Mutex::new(super::get_sites(&pool, &config).await);
+    let sites = Mutex::new(crate::sites::get_all_sites(&config, pool.clone()).await);
 
     let faktory = FaktoryClient::connect(&config.faktory_url)
         .await

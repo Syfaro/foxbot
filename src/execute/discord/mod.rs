@@ -41,20 +41,7 @@ pub async fn discord(config: RunConfig, discord_config: DiscordConfig) {
         .await
         .expect("could not create redis connection manager");
 
-    let sites = crate::sites::get_all_sites(
-        config.furaffinity_cookie_a.clone(),
-        config.furaffinity_cookie_b.clone(),
-        config.fuzzysearch_api_token.clone(),
-        config.weasyl_api_token.clone(),
-        config.twitter_consumer_key.clone(),
-        config.twitter_consumer_secret.clone(),
-        config.inkbunny_username.clone(),
-        config.inkbunny_password.clone(),
-        config.e621_login.clone(),
-        config.e621_api_token.clone(),
-        pool.clone(),
-    )
-    .await;
+    let sites = crate::sites::get_all_sites(&config, pool.clone()).await;
 
     let sites = Arc::new(Mutex::new(sites));
 

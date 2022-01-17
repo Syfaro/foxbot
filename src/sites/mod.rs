@@ -72,34 +72,44 @@ pub trait Site {
     async fn get_images(&mut self, user: &User, url: &str) -> Result<Option<Vec<PostInfo>>, Error>;
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn get_all_sites(
-    fa_a: String,
-    fa_b: String,
-    fuzzysearch_apitoken: String,
-    weasyl_apitoken: String,
-    twitter_consumer_key: String,
-    twitter_consumer_secret: String,
-    inkbunny_username: String,
-    inkbunny_password: String,
-    e621_login: String,
-    e621_api_key: String,
+    config: &crate::RunConfig,
     pool: sqlx::Pool<sqlx::Postgres>,
 ) -> Vec<BoxedSite> {
     vec![
         Box::new(E621::new(
             E621Host::E621,
-            e621_login.clone(),
-            e621_api_key.clone(),
+            config.e621_api_token.clone(),
+            config.e621_login.clone(),
         )),
-        Box::new(E621::new(E621Host::E926, e621_login, e621_api_key)),
-        Box::new(FurAffinity::new((fa_a, fa_b), fuzzysearch_apitoken.clone())),
-        Box::new(Weasyl::new(weasyl_apitoken)),
-        Box::new(Twitter::new(twitter_consumer_key, twitter_consumer_secret, pool).await),
-        Box::new(Inkbunny::new(inkbunny_username, inkbunny_password)),
+        Box::new(E621::new(
+            E621Host::E926,
+            config.e621_api_token.clone(),
+            config.e621_login.clone(),
+        )),
+        Box::new(FurAffinity::new(
+            (
+                config.furaffinity_cookie_a.clone(),
+                config.furaffinity_cookie_b.clone(),
+            ),
+            config.fuzzysearch_api_token.clone(),
+        )),
+        Box::new(Weasyl::new(config.weasyl_api_token.clone())),
+        Box::new(
+            Twitter::new(
+                config.twitter_consumer_key.clone(),
+                config.twitter_consumer_secret.clone(),
+                pool,
+            )
+            .await,
+        ),
+        Box::new(Inkbunny::new(
+            config.inkbunny_username.clone(),
+            config.inkbunny_password.clone(),
+        )),
         Box::new(Mastodon::default()),
         Box::new(DeviantArt::default()),
-        Box::new(Direct::new(fuzzysearch_apitoken)),
+        Box::new(Direct::new(config.fuzzysearch_api_token.clone())),
     ]
 }
 
