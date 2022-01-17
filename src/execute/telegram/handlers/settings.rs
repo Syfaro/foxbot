@@ -65,7 +65,7 @@ async fn order(cx: &Context, callback_query: &CallbackQuery, data: &str) -> Resu
         .await;
 
     if data.ends_with(":e") {
-        let text = utils::get_message(&bundle, "settings-unsupported", None).unwrap();
+        let text = utils::get_message(&bundle, "settings-unsupported", None);
 
         let answer = AnswerCallbackQuery {
             callback_query_id: callback_query.id.clone(),
@@ -84,7 +84,7 @@ async fn order(cx: &Context, callback_query: &CallbackQuery, data: &str) -> Resu
         let mut args = FluentArgs::new();
         args.set("name", site.as_str());
 
-        let text = utils::get_message(&bundle, "settings-move-unable", Some(args)).unwrap();
+        let text = utils::get_message(&bundle, "settings-move-unable", Some(args));
 
         let answer = AnswerCallbackQuery {
             callback_query_id: callback_query.id.clone(),
@@ -139,7 +139,7 @@ async fn order(cx: &Context, callback_query: &CallbackQuery, data: &str) -> Resu
         let mut args = FluentArgs::new();
         args.set("name", site.as_str());
 
-        let text = utils::get_message(&bundle, "settings-move-updated", Some(args)).unwrap();
+        let text = utils::get_message(&bundle, "settings-move-updated", Some(args));
 
         let answer = AnswerCallbackQuery {
             callback_query_id: callback_query.id.clone(),
@@ -161,7 +161,7 @@ async fn order(cx: &Context, callback_query: &CallbackQuery, data: &str) -> Resu
         return Ok(Completed);
     }
 
-    let text = utils::get_message(&bundle, "settings-site-order", None).unwrap();
+    let text = utils::get_message(&bundle, "settings-site-order", None);
 
     let keyboard = sort_order_keyboard(&cx.pool, &callback_query.from).await?;
 
@@ -196,7 +196,7 @@ async fn inline_history_keyboard(
 
     let bundle = cx.get_fluent_bundle(user.language_code.as_deref()).await;
 
-    let message = utils::get_message(&bundle, message_key, None).unwrap();
+    let message = utils::get_message(&bundle, message_key, None);
 
     InlineKeyboardMarkup {
         inline_keyboard: vec![vec![InlineKeyboardButton {
@@ -218,7 +218,7 @@ async fn inline_history(
         .get_fluent_bundle(callback_query.from.language_code.as_deref())
         .await;
 
-    let text = utils::get_message(&bundle, "settings-inline-history-description", None).unwrap();
+    let text = utils::get_message(&bundle, "settings-inline-history-description", None);
 
     if data.ends_with(":e") || data.ends_with(":d") {
         let enabled = data.chars().last().unwrap_or_default() == 'e';
@@ -228,7 +228,7 @@ async fn inline_history(
             "settings-inline-history-disabled"
         };
 
-        let message = utils::get_message(&bundle, message_key, None).unwrap();
+        let message = utils::get_message(&bundle, message_key, None);
 
         models::UserConfig::set(
             &cx.pool,
@@ -295,8 +295,8 @@ async fn send_settings_message(cx: &Context, message: &Message) -> Result<Messag
     let bundle = cx.get_fluent_bundle(from).await;
 
     let (site_preference, inline_history) = (
-        utils::get_message(&bundle, "settings-site-preference", None).unwrap(),
-        utils::get_message(&bundle, "settings-inline-history", None).unwrap(),
+        utils::get_message(&bundle, "settings-site-preference", None),
+        utils::get_message(&bundle, "settings-inline-history", None),
     );
 
     let keyboard = InlineKeyboardMarkup {
@@ -314,7 +314,7 @@ async fn send_settings_message(cx: &Context, message: &Message) -> Result<Messag
         ],
     };
 
-    let text = utils::get_message(&bundle, "settings-main", None).unwrap();
+    let text = utils::get_message(&bundle, "settings-main", None);
 
     let message = SendMessage {
         chat_id: message.chat_id(),

@@ -55,8 +55,8 @@ impl Handler for PhotoHandler {
 
         if matches.is_empty() {
             let (text, subscribe) = (
-                utils::get_message(&bundle, "reverse-no-results", None).unwrap(),
-                utils::get_message(&bundle, "reverse-subscribe", None).unwrap(),
+                utils::get_message(&bundle, "reverse-no-results", None),
+                utils::get_message(&bundle, "reverse-subscribe", None),
             );
 
             cx.make_request(&SendMessage {

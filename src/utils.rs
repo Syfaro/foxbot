@@ -509,11 +509,7 @@ pub fn chat_from_update(update: &tgbotapi::Update) -> Option<&tgbotapi::Chat> {
 }
 
 /// Get a message from the bundle with a language code, if provided.
-pub fn get_message(
-    bundle: &Bundle,
-    id: &str,
-    args: Option<FluentArgs>,
-) -> Result<String, Vec<fluent_bundle::FluentError>> {
+pub fn get_message(bundle: &Bundle, id: &str, args: Option<FluentArgs>) -> String {
     let msg = bundle
         .get_message(id)
         .ok_or(Error::Missing)
@@ -526,9 +522,9 @@ pub fn get_message(
     let value = bundle.format_pattern(pattern, args.as_ref(), &mut errors);
 
     if errors.is_empty() {
-        Ok(value.to_string())
+        value.to_string()
     } else {
-        Err(errors)
+        panic!("could not get message {}, had errors: {:?}", id, errors)
     }
 }
 
@@ -917,7 +913,7 @@ pub fn first_of_each_site(
 pub fn source_reply(matches: &[fuzzysearch::File], bundle: &Bundle) -> String {
     let first = match matches.first() {
         Some(result) => result,
-        None => return get_message(bundle, "reverse-no-results", None).unwrap(),
+        None => return get_message(bundle, "reverse-no-results", None),
     };
 
     let similar: Vec<&fuzzysearch::File> = matches
@@ -935,17 +931,17 @@ pub fn source_reply(matches: &[fuzzysearch::File], bundle: &Bundle) -> String {
         args.set("link", first.url());
 
         if let Some(rating) = get_rating_bundle_name(&first.rating) {
-            let rating = get_message(bundle, rating, None).unwrap();
+            let rating = get_message(bundle, rating, None);
             args.set("rating", rating);
 
-            get_message(bundle, "reverse-result", Some(args)).unwrap()
+            get_message(bundle, "reverse-result", Some(args))
         } else {
-            get_message(bundle, "reverse-result-unknown", Some(args)).unwrap()
+            get_message(bundle, "reverse-result-unknown", Some(args))
         }
     } else {
         let mut items = Vec::with_capacity(2 + similar.len());
 
-        let text = get_message(bundle, "reverse-multiple-results", None).unwrap();
+        let text = get_message(bundle, "reverse-multiple-results", None);
         items.push(text);
 
         for file in vec![first].into_iter().chain(similar) {
@@ -953,12 +949,12 @@ pub fn source_reply(matches: &[fuzzysearch::File], bundle: &Bundle) -> String {
             args.set("link", file.url());
 
             let result = if let Some(rating) = get_rating_bundle_name(&file.rating) {
-                let rating = get_message(bundle, rating, None).unwrap();
+                let rating = get_message(bundle, rating, None);
                 args.set("rating", rating);
 
-                get_message(bundle, "reverse-multiple-item", Some(args)).unwrap()
+                get_message(bundle, "reverse-multiple-item", Some(args))
             } else {
-                get_message(bundle, "reverse-multiple-item-unknown", Some(args)).unwrap()
+                get_message(bundle, "reverse-multiple-item-unknown", Some(args))
             };
 
             items.push(result);
@@ -997,7 +993,7 @@ pub fn build_alternate_response(bundle: &Bundle, mut items: AlternateItems) -> (
     });
 
     let mut s = String::new();
-    s.push_str(&get_message(bundle, "alternate-title", None).unwrap());
+    s.push_str(&get_message(bundle, "alternate-title", None));
     s.push_str("\n\n");
 
     for item in items {
@@ -1017,7 +1013,7 @@ pub fn build_alternate_response(bundle: &Bundle, mut items: AlternateItems) -> (
             .join(", ");
         let mut args = FluentArgs::new();
         args.set("name", artist_name);
-        s.push_str(&get_message(bundle, "alternate-posted-by", Some(args)).unwrap());
+        s.push_str(&get_message(bundle, "alternate-posted-by", Some(args)));
         s.push('\n');
         let mut subs: Vec<fuzzysearch::File> = item.1.to_vec();
         subs.sort_by(|a, b| a.id().partial_cmp(&b.id()).unwrap());
@@ -1029,11 +1025,11 @@ pub fn build_alternate_response(bundle: &Bundle, mut items: AlternateItems) -> (
             args.set("link", sub.url());
             args.set("distance", sub.distance.unwrap_or(10));
             let message = if let Some(rating) = get_rating_bundle_name(&sub.rating) {
-                let rating = get_message(bundle, rating, None).unwrap();
+                let rating = get_message(bundle, rating, None);
                 args.set("rating", rating);
-                get_message(bundle, "alternate-distance", Some(args)).unwrap()
+                get_message(bundle, "alternate-distance", Some(args))
             } else {
-                get_message(bundle, "alternate-distance-unknown", Some(args)).unwrap()
+                get_message(bundle, "alternate-distance-unknown", Some(args))
             };
             s.push_str(&message);
             s.push('\n');

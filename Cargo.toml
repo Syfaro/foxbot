@@ -68,4 +68,4 @@ twilight-model = "0.8"
 twilight-util = {version = "0.8", features = ["builder"]}
 unic-langid = "0.9"
 url = "2"
-uuid = {version = "0.8", features = ["serde", "v4"]}
+uuid = "0.8"

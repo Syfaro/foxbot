@@ -405,7 +405,7 @@ impl Context {
     ) -> Result<tgbotapi::Message, Error> {
         let bundle = self.get_fluent_bundle(message).await;
 
-        let text = utils::get_message(&bundle, name, None).unwrap();
+        let text = utils::get_message(&bundle, name, None);
 
         let send_message = tgbotapi::requests::SendMessage {
             chat_id: message.chat_id(),
@@ -428,7 +428,7 @@ impl Context {
         let random_artwork = *STARTING_ARTWORK.choose(&mut rand::thread_rng()).unwrap();
         let bundle = self.get_fluent_bundle(message).await;
 
-        let try_me = utils::get_message(&bundle, "welcome-try-me", None).unwrap();
+        let try_me = utils::get_message(&bundle, "welcome-try-me", None);
 
         let reply_markup =
             tgbotapi::requests::ReplyMarkup::InlineKeyboardMarkup(tgbotapi::InlineKeyboardMarkup {
@@ -445,7 +445,7 @@ impl Context {
             "welcome"
         };
 
-        let welcome = utils::get_message(&bundle, name, None).unwrap();
+        let welcome = utils::get_message(&bundle, name, None);
 
         let send_message = tgbotapi::requests::SendMessage {
             chat_id: message.chat_id(),
@@ -499,11 +499,11 @@ impl Context {
 
             if u.is_nil() {
                 if recent_error_count > 0 {
-                    utils::get_message(&bundle, "error-generic-count", Some(args)).unwrap()
+                    utils::get_message(&bundle, "error-generic-count", Some(args))
                 } else if has_user_message {
-                    utils::get_message(&bundle, "error-generic-message", Some(args)).unwrap()
+                    utils::get_message(&bundle, "error-generic-message", Some(args))
                 } else {
-                    utils::get_message(&bundle, "error-generic", None).unwrap()
+                    utils::get_message(&bundle, "error-generic", None)
                 }
             } else {
                 let f = format!("`{}`", u);
@@ -517,7 +517,7 @@ impl Context {
                     "error-uuid"
                 };
 
-                utils::get_message(&bundle, name, Some(args)).unwrap()
+                utils::get_message(&bundle, name, Some(args))
             }
         };
 

@@ -34,7 +34,7 @@ impl Handler for ErrorCleanup {
                 let lang = callback_query.from.language_code.as_deref();
                 let bundle = cx.get_fluent_bundle(lang).await;
 
-                let message = utils::get_message(&bundle, "error-delete-callback", None).unwrap();
+                let message = utils::get_message(&bundle, "error-delete-callback", None);
 
                 let answer = requests::AnswerCallbackQuery {
                     callback_query_id: callback_query.id.clone(),
@@ -68,7 +68,7 @@ impl Handler for ErrorCleanup {
                 let lang = callback_query.from.language_code.as_deref();
                 let bundle = cx.get_fluent_bundle(lang).await;
 
-                utils::get_message(&bundle, "error-deleted", None).unwrap()
+                utils::get_message(&bundle, "error-deleted", None)
             }
         };
 

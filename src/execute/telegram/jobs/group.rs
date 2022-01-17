@@ -159,16 +159,16 @@ pub async fn process_group_photo(cx: Arc<Context>, job: faktory::Job) -> Result<
             args.set("link", m.url());
 
             if let Some(rating) = utils::get_rating_bundle_name(&m.rating) {
-                let rating = utils::get_message(&bundle, rating, None).unwrap();
+                let rating = utils::get_message(&bundle, rating, None);
                 args.set("rating", rating);
-                utils::get_message(&bundle, "automatic-single", Some(args)).unwrap()
+                utils::get_message(&bundle, "automatic-single", Some(args))
             } else {
-                utils::get_message(&bundle, "automatic-single-unknown", Some(args)).unwrap()
+                utils::get_message(&bundle, "automatic-single-unknown", Some(args))
             }
         } else {
             let mut buf = String::new();
 
-            buf.push_str(&utils::get_message(&bundle, "automatic-multiple", None).unwrap());
+            buf.push_str(&utils::get_message(&bundle, "automatic-multiple", None));
             buf.push('\n');
 
             for result in wanted_matches {
@@ -176,12 +176,11 @@ pub async fn process_group_photo(cx: Arc<Context>, job: faktory::Job) -> Result<
                 args.set("link", result.url());
 
                 let message = if let Some(rating) = utils::get_rating_bundle_name(&result.rating) {
-                    let rating = utils::get_message(&bundle, rating, None).unwrap();
+                    let rating = utils::get_message(&bundle, rating, None);
                     args.set("rating", rating);
-                    utils::get_message(&bundle, "automatic-multiple-result", Some(args)).unwrap()
+                    utils::get_message(&bundle, "automatic-multiple-result", Some(args))
                 } else {
                     utils::get_message(&bundle, "automatic-multiple-result-unknown", Some(args))
-                        .unwrap()
                 };
 
                 buf.push_str(&message);
@@ -470,8 +469,7 @@ pub async fn process_group_mediagroup_check(
             let link = format!("{}/mg/{}", cx.config.public_endpoint, media_group_id);
             let mut args = FluentArgs::new();
             args.set("link", link);
-            let message =
-                utils::get_message(&bundle, "automatic-sources-link", Some(args)).unwrap();
+            let message = utils::get_message(&bundle, "automatic-sources-link", Some(args));
 
             let send_message = tgbotapi::requests::SendMessage {
                 chat_id: first_message.chat_id(),
@@ -563,7 +561,7 @@ pub async fn process_group_mediagroup_check(
         let mut args = FluentArgs::new();
         args.set("number", index + 1);
 
-        let image = utils::get_message(&bundle, "automatic-image-number", Some(args)).unwrap();
+        let image = utils::get_message(&bundle, "automatic-image-number", Some(args));
 
         buf.push_str(&image);
         buf.push('\n');

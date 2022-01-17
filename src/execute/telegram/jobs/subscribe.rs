@@ -68,19 +68,22 @@ pub async fn process_hash_new(cx: Arc<Context>, job: faktory::Job) -> Result<(),
         let mut args = FluentArgs::new();
         args.set("link", file.url());
 
-        utils::get_message(&bundle, "subscribe-found-single", Some(args)).unwrap()
+        utils::get_message(&bundle, "subscribe-found-single", Some(args))
     } else {
         let mut buf = String::new();
 
-        buf.push_str(&utils::get_message(&bundle, "subscribe-found-multiple", None).unwrap());
+        buf.push_str(&utils::get_message(
+            &bundle,
+            "subscribe-found-multiple",
+            None,
+        ));
         buf.push('\n');
 
         for result in matches {
             let mut args = FluentArgs::new();
             args.set("link", result.url());
 
-            let message =
-                utils::get_message(&bundle, "subscribe-found-multiple-item", Some(args)).unwrap();
+            let message = utils::get_message(&bundle, "subscribe-found-multiple-item", Some(args));
 
             buf.push_str(&message);
             buf.push('\n');

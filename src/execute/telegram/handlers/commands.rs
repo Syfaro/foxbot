@@ -218,7 +218,7 @@ impl CommandHandler {
 
             let bundle = cx.get_fluent_bundle(from.language_code.as_deref()).await;
 
-            let text = utils::get_message(&bundle, "mirror-missing", Some(args)).unwrap();
+            let text = utils::get_message(&bundle, "mirror-missing", Some(args));
 
             let send_message = SendMessage {
                 chat_id: message.chat_id(),

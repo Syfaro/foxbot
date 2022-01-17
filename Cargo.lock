@@ -524,9 +524,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "3.0.7"
+version = "3.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12e8611f9ae4e068fa3e56931fded356ff745e70987ff76924a6e0ab1c8ef2e3"
+checksum = "31b34190c12bd1d613deba77e1cc13e68eaf4a0d51e389dbd485b7bfe15a47c0"
 dependencies = [
  "atty",
  "bitflags",
@@ -2944,7 +2944,7 @@ checksum = "568a8e6258aa33c13358f81fd834adb854c6f7c9468520910a9b1e8fac068012"
 [[package]]
 name = "sentry"
 version = "0.23.0"
-source = "git+https://github.com/getsentry/sentry-rust.git#e163d4e22b7b2c02a87b9b6b5f67f3269799ecd0"
+source = "git+https://github.com/getsentry/sentry-rust.git#6a2f6bb5af7741c3e97353c9867541c9566f0c1a"
 dependencies = [
  "httpdate",
  "reqwest",
@@ -2958,7 +2958,7 @@ dependencies = [
 [[package]]
 name = "sentry-backtrace"
 version = "0.23.0"
-source = "git+https://github.com/getsentry/sentry-rust.git#e163d4e22b7b2c02a87b9b6b5f67f3269799ecd0"
+source = "git+https://github.com/getsentry/sentry-rust.git#6a2f6bb5af7741c3e97353c9867541c9566f0c1a"
 dependencies = [
  "backtrace",
  "lazy_static",
@@ -2969,7 +2969,7 @@ dependencies = [
 [[package]]
 name = "sentry-contexts"
 version = "0.23.0"
-source = "git+https://github.com/getsentry/sentry-rust.git#e163d4e22b7b2c02a87b9b6b5f67f3269799ecd0"
+source = "git+https://github.com/getsentry/sentry-rust.git#6a2f6bb5af7741c3e97353c9867541c9566f0c1a"
 dependencies = [
  "hostname",
  "libc",
@@ -2981,7 +2981,7 @@ dependencies = [
 [[package]]
 name = "sentry-core"
 version = "0.23.0"
-source = "git+https://github.com/getsentry/sentry-rust.git#e163d4e22b7b2c02a87b9b6b5f67f3269799ecd0"
+source = "git+https://github.com/getsentry/sentry-rust.git#6a2f6bb5af7741c3e97353c9867541c9566f0c1a"
 dependencies = [
  "chrono",
  "lazy_static",
@@ -2994,7 +2994,7 @@ dependencies = [
 [[package]]
 name = "sentry-panic"
 version = "0.23.0"
-source = "git+https://github.com/getsentry/sentry-rust.git#e163d4e22b7b2c02a87b9b6b5f67f3269799ecd0"
+source = "git+https://github.com/getsentry/sentry-rust.git#6a2f6bb5af7741c3e97353c9867541c9566f0c1a"
 dependencies = [
  "sentry-backtrace",
  "sentry-core",
@@ -3003,7 +3003,7 @@ dependencies = [
 [[package]]
 name = "sentry-tracing"
 version = "0.23.0"
-source = "git+https://github.com/getsentry/sentry-rust.git#e163d4e22b7b2c02a87b9b6b5f67f3269799ecd0"
+source = "git+https://github.com/getsentry/sentry-rust.git#6a2f6bb5af7741c3e97353c9867541c9566f0c1a"
 dependencies = [
  "sentry-core",
  "tracing-core",
@@ -3013,7 +3013,7 @@ dependencies = [
 [[package]]
 name = "sentry-types"
 version = "0.23.0"
-source = "git+https://github.com/getsentry/sentry-rust.git#e163d4e22b7b2c02a87b9b6b5f67f3269799ecd0"
+source = "git+https://github.com/getsentry/sentry-rust.git#6a2f6bb5af7741c3e97353c9867541c9566f0c1a"
 dependencies = [
  "chrono",
  "debugid",
@@ -3081,12 +3081,12 @@ dependencies = [
 
 [[package]]
 name = "serde_urlencoded"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edfa57a7f8d9c1d260a549e7224100f6c43d43f9103e06dd8b4095a9b2b43ce9"
+checksum = "d3491c14715ca2294c4d6a88f15e84739788c1d030eed8c110436aafdaa2f3fd"
 dependencies = [
  "form_urlencoded",
- "itoa 0.4.8",
+ "itoa 1.0.1",
  "ryu",
  "serde",
 ]

@@ -86,7 +86,7 @@ impl SubscribeHandler {
         {
             tracing::error!("unable to add hash subscription: {:?}", err);
 
-            let text = utils::get_message(&bundle, "subscribe-error", None).unwrap();
+            let text = utils::get_message(&bundle, "subscribe-error", None);
 
             cx.bot
                 .make_request(&AnswerCallbackQuery {
@@ -121,7 +121,7 @@ impl SubscribeHandler {
                 .await;
         }
 
-        let text = utils::get_message(&bundle, "subscribe-success", None).unwrap();
+        let text = utils::get_message(&bundle, "subscribe-success", None);
 
         cx.bot
             .make_request(&AnswerCallbackQuery {

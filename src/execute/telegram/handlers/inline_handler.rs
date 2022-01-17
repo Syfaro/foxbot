@@ -61,7 +61,7 @@ impl InlineHandler {
 
         let bundle = cx.get_fluent_bundle(lang).await;
 
-        let video_starting = utils::get_message(&bundle, "video-starting", None).unwrap();
+        let video_starting = utils::get_message(&bundle, "video-starting", None);
 
         let send_message = SendMessage {
             chat_id: message.chat_id(),
@@ -260,8 +260,8 @@ impl Handler for InlineHandler {
         if responses.is_empty() && !inline.query.is_empty() {
             let article = InlineQueryResult::article(
                 utils::generate_id(),
-                utils::get_message(&bundle, "inline-no-results-title", None).unwrap(),
-                utils::get_message(&bundle, "inline-no-results-body", None).unwrap(),
+                utils::get_message(&bundle, "inline-no-results-title", None),
+                utils::get_message(&bundle, "inline-no-results-body", None),
             );
 
             responses.push((ResultType::Ready, article));
@@ -293,7 +293,7 @@ impl Handler for InlineHandler {
             if answer_inline.results.is_empty() {
                 // If the query was empty, display a help button to make it easy to get
                 // started using the bot.
-                let help_text = utils::get_message(&bundle, "inline-help", None).unwrap();
+                let help_text = utils::get_message(&bundle, "inline-help", None);
 
                 answer_inline.switch_pm_text = Some(help_text);
                 answer_inline.switch_pm_parameter = Some("help".to_string());
@@ -306,7 +306,7 @@ impl Handler for InlineHandler {
         // If we had a video that needed to be processed, replace the switch pm
         // parameters to go and process that video.
         if let Some(video) = has_video {
-            let process_text = utils::get_message(&bundle, "inline-process", None).unwrap();
+            let process_text = utils::get_message(&bundle, "inline-process", None);
 
             answer_inline.switch_pm_text = Some(process_text);
             answer_inline.switch_pm_parameter = Some(video.id);
@@ -354,7 +354,7 @@ async fn video_progress(cx: &Context, display_name: &str, progress: &str) -> Res
     let mut args = FluentArgs::new();
     args.set("percent", progress.to_string());
 
-    let msg = utils::get_message(&bundle, "video-progress", Some(args)).unwrap();
+    let msg = utils::get_message(&bundle, "video-progress", Some(args));
 
     for message in messages {
         let edit_message = EditMessageText {
@@ -396,7 +396,7 @@ async fn video_complete(
 
     let bundle = cx.get_fluent_bundle(None).await;
 
-    let video_return_button = utils::get_message(&bundle, "video-return-button", None).unwrap();
+    let video_return_button = utils::get_message(&bundle, "video-return-button", None);
 
     // First, we should handle one message to upload the file. This is a
     // special case because afterwards all additional messages can be sent
@@ -503,7 +503,7 @@ async fn process_result(
 ) -> Result<Option<Vec<(ResultType, InlineQueryResult)>>, Error> {
     let bundle = cx.get_fluent_bundle(from.language_code.as_deref()).await;
 
-    let direct = utils::get_message(&bundle, "inline-direct", None).unwrap();
+    let direct = utils::get_message(&bundle, "inline-direct", None);
 
     let mut row = vec![InlineKeyboardButton {
         text: direct,

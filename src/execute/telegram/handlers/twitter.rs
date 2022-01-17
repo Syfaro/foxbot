@@ -28,7 +28,7 @@ impl Handler for TwitterHandler {
 
             let bundle = cx.get_fluent_bundle(None).await;
 
-            let text = utils::get_message(&bundle, "twitter-welcome", Some(args)).unwrap();
+            let text = utils::get_message(&bundle, "twitter-welcome", Some(args));
 
             let message = tgbotapi::requests::SendMessage {
                 chat_id: telegram_id.into(),
@@ -102,11 +102,11 @@ async fn handle_command(
 
             let bundle = cx.get_fluent_bundle(user.language_code.as_deref()).await;
 
-            let text = utils::get_message(&bundle, "twitter-existing-account", Some(args)).unwrap();
+            let text = utils::get_message(&bundle, "twitter-existing-account", Some(args));
 
             let (change, remove) = (
-                utils::get_message(&bundle, "twitter-change-anyway", None).unwrap(),
-                utils::get_message(&bundle, "twitter-remove-account", None).unwrap(),
+                utils::get_message(&bundle, "twitter-change-anyway", None),
+                utils::get_message(&bundle, "twitter-remove-account", None),
             );
 
             let markup = tgbotapi::requests::ReplyMarkup::InlineKeyboardMarkup(
@@ -197,7 +197,7 @@ async fn handle_remove(
         .get_fluent_bundle(callback.from.language_code.as_deref())
         .await;
 
-    let text = utils::get_message(&bundle, "twitter-removed-account", None).unwrap();
+    let text = utils::get_message(&bundle, "twitter-removed-account", None);
 
     let edit_message = tgbotapi::requests::EditMessageText {
         chat_id: message.chat_id(),
@@ -227,7 +227,7 @@ async fn prepare_authorization_link(cx: &Context, user: &tgbotapi::User) -> Resu
 
     let bundle = cx.get_fluent_bundle(user.language_code.as_deref()).await;
 
-    let text = utils::get_message(&bundle, "twitter-callback", Some(args)).unwrap();
+    let text = utils::get_message(&bundle, "twitter-callback", Some(args));
 
     Ok(text)
 }
