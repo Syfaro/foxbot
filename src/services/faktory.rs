@@ -125,6 +125,8 @@ where
         let context = self.context.clone();
 
         let handler = move |job: faktory::Job| -> Result<(), E> {
+            sentry::start_session();
+
             let custom_strings: HashMap<String, String> = job
                 .custom
                 .iter()
@@ -149,22 +151,26 @@ where
             let result = rt.block_on(f(context.clone(), job).in_current_span());
             let execution_time = execution_time.stop_and_record();
 
-            match result {
+            let (result, status) = match result {
                 Ok(_) => {
                     tracing::info!(execution_time, "job completed");
-                    Ok(())
+                    (Ok(()), sentry::protocol::SessionStatus::Exited)
                 }
                 Err(err) if !err.is_retryable() => {
                     JOB_FAILURE_COUNT.with_label_values(&[name]).inc();
                     tracing::warn!(execution_time, "job failed, and marked as not retryable");
-                    Ok(())
+                    (Ok(()), sentry::protocol::SessionStatus::Abnormal)
                 }
                 Err(err) => {
                     JOB_FAILURE_COUNT.with_label_values(&[name]).inc();
                     tracing::error!(execution_time, "job failed, will retry: {:?}", err);
-                    Err(err)
+                    (Err(err), sentry::protocol::SessionStatus::Abnormal)
                 }
-            }
+            };
+
+            sentry::end_session_with_status(status);
+
+            result
         };
 
         self.consumer_builder.register(name, handler);

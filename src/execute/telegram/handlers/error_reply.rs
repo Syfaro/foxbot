@@ -1,12 +1,11 @@
 use async_trait::async_trait;
-use tgbotapi::*;
+
+use crate::{execute::telegram::Context, needs_field, Error};
 
 use super::{
     Handler,
     Status::{self, *},
 };
-use crate::MessageHandler;
-use foxbot_utils::*;
 
 pub struct ErrorReplyHandler {
     client: reqwest::Client,
@@ -28,9 +27,9 @@ impl Handler for ErrorReplyHandler {
 
     async fn handle(
         &self,
-        handler: &MessageHandler,
-        update: &Update,
-        _command: Option<&Command>,
+        cx: &Context,
+        update: &tgbotapi::Update,
+        _command: Option<&tgbotapi::Command>,
     ) -> Result<Status, Error> {
         let message = needs_field!(update, message);
         let text = needs_field!(message, text);
@@ -40,7 +39,7 @@ impl Handler for ErrorReplyHandler {
         let entities = needs_field!(reply_message, entities);
 
         // Only want to look at messages that are replies to this bot
-        if reply_message_from.id != handler.bot_user.id {
+        if reply_message_from.id != cx.bot_user.id {
             return Ok(Ignored);
         }
 
@@ -49,12 +48,7 @@ impl Handler for ErrorReplyHandler {
             _ => return Ok(Ignored),
         };
 
-        let dsn = match &handler.config.sentry_dsn {
-            Some(dsn) => dsn,
-            _ => return Ok(Completed),
-        };
-
-        let auth = format!("DSN {}", dsn);
+        let auth = format!("DSN {}", cx.config.sentry_url);
 
         let data = SentryFeedback {
             comments: text.to_string(),
@@ -70,17 +64,14 @@ impl Handler for ErrorReplyHandler {
         self.client
             .post(&format!(
                 "https://sentry.io/api/0/projects/{}/{}/user-feedback/",
-                handler.config.sentry_organization_slug.as_ref().unwrap(),
-                handler.config.sentry_project_slug.as_ref().unwrap()
+                cx.config.sentry_organization_slug, cx.config.sentry_project_slug
             ))
             .json(&data)
             .header(reqwest::header::AUTHORIZATION, auth)
             .send()
             .await?;
 
-        handler
-            .send_generic_reply(message, "error-feedback")
-            .await?;
+        cx.send_generic_reply(message, "error-feedback").await?;
 
         Ok(Completed)
     }
@@ -94,11 +85,11 @@ struct SentryFeedback {
     email: String,
 }
 
-fn get_code_block(entities: &[MessageEntity], text: &str) -> Option<String> {
+fn get_code_block(entities: &[tgbotapi::MessageEntity], text: &str) -> Option<String> {
     // Find any code blocks, ignore if there's more than one
     let code_blocks = entities
         .iter()
-        .filter(|entity| entity.entity_type == MessageEntityType::Code)
+        .filter(|entity| entity.entity_type == tgbotapi::MessageEntityType::Code)
         .collect::<Vec<_>>();
     if code_blocks.len() != 1 {
         return None;

@@ -5,6 +5,7 @@ use intl_memoizer::concurrent::IntlLangMemoizer;
 use redis::AsyncCommands;
 use sha2::{Digest, Sha256};
 use tracing::Instrument;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::{
     models::{self, Chat, User},
@@ -1227,5 +1228,69 @@ pub fn link_was_seen(
             Some(link_id) => link_id == source_id,
             _ => false,
         },
+    )
+}
+
+/// Add current opentelemetry span to a Sentry scope.
+pub fn add_sentry_tracing(scope: &mut sentry::Scope) {
+    let context = tracing::Span::current().context();
+
+    let mut headers: reqwest::header::HeaderMap = Default::default();
+    opentelemetry::global::get_text_map_propagator(|propagator| {
+        propagator.inject_context(
+            &context,
+            &mut opentelemetry_http::HeaderInjector(&mut headers),
+        )
+    });
+
+    for (name, value) in headers {
+        let name = match name {
+            Some(name) => name,
+            None => continue,
+        };
+
+        let value = match value.to_str() {
+            Ok(value) => value,
+            Err(_err) => continue,
+        };
+
+        scope.set_extra(&name.to_string(), value.into());
+    }
+}
+
+/// Tags to add to a sentry event.
+type SentryTags<'a> = Option<Vec<(&'a str, String)>>;
+
+/// Run a callback within a Sentry scope with a given user and tags.
+pub fn with_user_scope<C, R>(
+    from: Option<&tgbotapi::User>,
+    err: &crate::Error,
+    tags: SentryTags,
+    callback: C,
+) -> R
+where
+    C: FnOnce(&crate::Error) -> R,
+{
+    tracing::trace!("updating sentry scope for user {:?}", from);
+
+    sentry::with_scope(
+        |scope| {
+            add_sentry_tracing(scope);
+
+            if let Some(user) = from {
+                scope.set_user(Some(sentry::User {
+                    id: Some(user.id.to_string()),
+                    username: user.username.clone(),
+                    ..Default::default()
+                }));
+            };
+
+            if let Some(tags) = tags {
+                for tag in tags {
+                    scope.set_tag(tag.0, tag.1);
+                }
+            }
+        },
+        || callback(err),
     )
 }

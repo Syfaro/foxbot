@@ -62,6 +62,13 @@ impl From<&tgbotapi::User> for User {
     }
 }
 
+impl From<twilight_model::id::UserId> for User {
+    fn from(user_id: twilight_model::id::UserId) -> Self {
+        let id: u64 = user_id.0.into();
+        Self::Discord(id.into())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Sites {
     FurAffinity,

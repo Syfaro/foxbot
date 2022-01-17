@@ -2,6 +2,7 @@ use sqlx::PgPool;
 
 use crate::sites;
 
+pub mod discord;
 pub mod telegram;
 
 async fn get_sites(pool: &PgPool, config: &crate::RunConfig) -> Vec<sites::BoxedSite> {

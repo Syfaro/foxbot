@@ -12,6 +12,7 @@ env = ["dotenv"]
 actix-router = "=0.5.0-beta.4"
 actix-web = "=4.0.0-beta.19"
 actix-web-opentelemetry = "=0.11.0-beta.7"
+anyhow = "1"
 askama = "0.11"
 async-trait = "0.1"
 base64 = "0.13"
@@ -35,6 +36,7 @@ intl-memoizer = "0.5"
 lazy_static = "1"
 linkify = "0.8"
 opentelemetry = "0.16"
+opentelemetry-http = "0.5"
 prometheus = {version = "0.13", features = ["process"]}
 rand = "0.8"
 redis = {version = "0.21", features = ["connection-manager", "tokio-comp"]}
@@ -43,6 +45,8 @@ reqwest = {version = "0.11", features = ["json"]}
 rusoto_core = "0.47"
 rusoto_credential = "0.47"
 rusoto_s3 = "0.47"
+sentry = {git = "https://github.com/getsentry/sentry-rust.git"}
+sentry-tracing = {git = "https://github.com/getsentry/sentry-rust.git"}
 serde = {version = "1", features = ["derive"]}
 serde_json = "1"
 sha2 = "0.10"
@@ -54,7 +58,13 @@ tokio-stream = "0.1"
 tracing = "0.1"
 tracing-actix-web = {version = "=0.5.0-beta.9", features = ["opentelemetry_0_16"]}
 tracing-opentelemetry = "0.16"
-tracing-subscriber = "0.3"
+tracing-subscriber = {version = "0.3", features = ["env-filter"]}
+twilight-cache-inmemory = "0.8"
+twilight-embed-builder = "0.8"
+twilight-gateway = {version = "0.8", features = ["tracing"]}
+twilight-http = {version = "0.8", features = ["tracing"]}
+twilight-model = "0.8"
+twilight-util = {version = "0.8", features = ["builder"]}
 unic-langid = "0.9"
 url = "2"
 uuid = {version = "0.8", features = ["serde", "v4"]}

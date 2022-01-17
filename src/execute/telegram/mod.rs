@@ -1,14 +1,16 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use fluent_bundle::{bundle::FluentBundle, FluentResource};
+use fluent_bundle::{bundle::FluentBundle, FluentArgs, FluentResource};
 use fuzzysearch::FuzzySearch;
 use intl_memoizer::concurrent::IntlLangMemoizer;
 use rand::prelude::SliceRandom;
+use redis::AsyncCommands;
 use sqlx::PgPool;
 use tgbotapi::{Telegram, TelegramRequest};
 use tokio::sync::{Mutex, RwLock};
 use tracing::Instrument;
 use unic_langid::LanguageIdentifier;
+use uuid::Uuid;
 
 use crate::{
     services::{
@@ -16,7 +18,7 @@ use crate::{
         faktory::{FaktoryClient, FaktoryWorkerEnvironment},
     },
     sites::BoxedSite,
-    utils, Error, RunConfig, L10N_LANGS, L10N_RESOURCES,
+    utils, Args, Error, ErrorMetadata, RunConfig, TelegramConfig, L10N_LANGS, L10N_RESOURCES,
 };
 
 mod handlers;
@@ -36,6 +38,10 @@ static STARTING_ARTWORK: &[&str] = &[
 ];
 
 pub struct Config {
+    pub sentry_url: String,
+    pub sentry_organization_slug: String,
+    pub sentry_project_slug: String,
+
     pub public_endpoint: String,
 
     pub s3_url: String,
@@ -45,16 +51,16 @@ pub struct Config {
     pub twitter_keypair: egg_mode::KeyPair,
 }
 
-pub fn start_telegram(config: RunConfig) {
+pub fn start_telegram(args: Args, config: RunConfig, telegram_config: TelegramConfig) {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("could not create runtime");
 
-    rt.block_on(run_telegram(config))
+    rt.block_on(run_telegram(args, config, telegram_config))
 }
 
-async fn run_telegram(config: RunConfig) {
+async fn run_telegram(args: Args, config: RunConfig, telegram_config: TelegramConfig) {
     let mut dir = std::env::current_dir().expect("Unable to get directory");
     dir.push("langs");
 
@@ -93,7 +99,7 @@ async fn run_telegram(config: RunConfig) {
         .await
         .expect("could not create redis connection manager");
 
-    let bot = tgbotapi::Telegram::new(config.telegram_api_token);
+    let bot = tgbotapi::Telegram::new(telegram_config.telegram_api_token);
 
     let bot_user = bot
         .make_request(&tgbotapi::requests::GetMe)
@@ -133,6 +139,10 @@ async fn run_telegram(config: RunConfig) {
         egg_mode::KeyPair::new(config.twitter_consumer_key, config.twitter_consumer_secret);
 
     let telegram_config = Config {
+        sentry_url: args.sentry_url.to_string(),
+        sentry_organization_slug: config.sentry_organization_slug,
+        sentry_project_slug: config.sentry_project_slug,
+
         s3_bucket: config.s3_bucket,
         s3_url: config.s3_url,
 
@@ -150,7 +160,7 @@ async fn run_telegram(config: RunConfig) {
         Box::new(handlers::PhotoHandler),
         Box::new(handlers::CommandHandler),
         Box::new(handlers::GroupSourceHandler),
-        // Box::new(handlers::ErrorReplyHandler::new()),
+        Box::new(handlers::ErrorReplyHandler::new()),
         Box::new(handlers::SettingsHandler),
         Box::new(handlers::TwitterHandler),
         Box::new(handlers::SubscribeHandler),
@@ -429,11 +439,119 @@ impl Context {
         tags: Option<Vec<(&str, String)>>,
         callback: C,
     ) where
-        C: FnOnce(&Error) -> uuid::Uuid,
+        C: FnOnce(&crate::Error) -> Uuid,
     {
-        tracing::error!("reporting error: {:?}", err);
+        tracing::warn!("sending error: {:?}", err);
 
-        todo!()
+        let u = utils::with_user_scope(message.from.as_ref(), &err, tags, callback);
+
+        let mut conn = self.redis.clone();
+
+        let key_list = format!("errors:list:{}", message.chat.id);
+        let key_message_id = format!("errors:message-id:{}", message.chat.id);
+
+        let recent_error_count: i32 = conn.llen(&key_list).await.ok().unwrap_or(0);
+
+        let _ = conn.lpush::<_, _, ()>(&key_list, u.to_string()).await;
+        let _ = conn.expire::<_, ()>(&key_list, 60 * 5).await;
+        let _ = conn.expire::<_, ()>(&key_message_id, 60 * 5).await;
+
+        let bundle = self.get_fluent_bundle(message).await;
+        let user_message = err.user_message();
+
+        let msg = {
+            let mut args = FluentArgs::new();
+            args.set("count", recent_error_count + 1);
+
+            let has_user_message = if let Some(message) = user_message {
+                args.set("message", message);
+                true
+            } else {
+                false
+            };
+
+            if u.is_nil() {
+                if recent_error_count > 0 {
+                    utils::get_message(&bundle, "error-generic-count", Some(args)).unwrap()
+                } else if has_user_message {
+                    utils::get_message(&bundle, "error-generic-message", Some(args)).unwrap()
+                } else {
+                    utils::get_message(&bundle, "error-generic", None).unwrap()
+                }
+            } else {
+                let f = format!("`{}`", u);
+                args.set("uuid", f);
+
+                let name = if recent_error_count > 0 {
+                    "error-uuid-count"
+                } else if has_user_message {
+                    "error-uuid-message"
+                } else {
+                    "error-uuid"
+                };
+
+                utils::get_message(&bundle, name, Some(args)).unwrap()
+            }
+        };
+
+        let delete_markup = Some(tgbotapi::requests::ReplyMarkup::InlineKeyboardMarkup(
+            tgbotapi::InlineKeyboardMarkup {
+                inline_keyboard: vec![vec![tgbotapi::InlineKeyboardButton {
+                    text: "Delete".to_string(),
+                    callback_data: Some("delete".to_string()),
+                    ..Default::default()
+                }]],
+            },
+        ));
+
+        if recent_error_count > 0 {
+            let message_id: i32 = match conn.get(&key_message_id).await {
+                Ok(id) => id,
+                Err(err) => {
+                    tracing::error!("could not retrieve message id to edit: {}", err);
+                    return;
+                }
+            };
+
+            let edit_message = tgbotapi::requests::EditMessageText {
+                chat_id: message.chat_id(),
+                message_id: Some(message_id),
+                text: msg,
+                parse_mode: Some(tgbotapi::requests::ParseMode::Markdown),
+                reply_markup: delete_markup,
+                ..Default::default()
+            };
+
+            if let Err(err) = self.make_request(&edit_message).await {
+                tracing::error!("could not update error message: {}", err);
+
+                let _ = conn.del::<_, ()>(&key_list).await;
+                let _ = conn.del::<_, ()>(&key_message_id).await;
+            }
+        } else {
+            let send_message = tgbotapi::requests::SendMessage {
+                chat_id: message.chat_id(),
+                text: msg,
+                parse_mode: Some(tgbotapi::requests::ParseMode::Markdown),
+                reply_to_message_id: Some(message.message_id),
+                reply_markup: delete_markup,
+                ..Default::default()
+            };
+
+            match self.make_request(&send_message).await {
+                Ok(resp) => {
+                    if let Err(err) = conn
+                        .set_ex::<_, _, ()>(key_message_id, resp.message_id, 60 * 5)
+                        .await
+                    {
+                        tracing::error!("unable to set redis error message id: {}", err);
+                    }
+                }
+                Err(err) => {
+                    tracing::error!("unable to send error message: {}", err);
+                }
+            }
+        }
     }
 }
 
@@ -472,6 +590,23 @@ async fn process_update(cx: &Context, update: tgbotapi::Update) -> Result<(), Er
             }
             Err(err) => {
                 tracing::error!(handled_by = handler.name(), "handler error: {:?}", err);
+
+                let mut tags = vec![("handler", handler.name().to_string())];
+                if let Some(chat) = chat {
+                    tags.push(("chat_id", chat.id.to_string()));
+                }
+                if let Some(command) = command {
+                    tags.push(("command", command.name));
+                }
+
+                if let Some(message) = update.message {
+                    cx.report_error(&message, err, Some(tags), sentry::capture_error)
+                        .await;
+                } else {
+                    tracing::warn!("could not send error message to user");
+                    sentry::capture_error(&err);
+                }
+
                 break;
             }
             _ => (),

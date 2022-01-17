@@ -1,7 +1,8 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, num::NonZeroU64};
 
 use clap::{Parser, Subcommand};
 use thiserror::Error;
+use tracing_subscriber::prelude::*;
 
 mod execute;
 mod models;
@@ -16,6 +17,9 @@ pub static L10N_LANGS: &[&str] = &["en-US"];
 
 #[derive(Clone, Debug, Parser)]
 pub struct Args {
+    #[clap(long, env)]
+    pub sentry_url: sentry::types::Dsn,
+
     #[clap(subcommand)]
     pub command: Command,
 }
@@ -28,7 +32,8 @@ pub enum Command {
 
 #[derive(Clone, Debug, Subcommand)]
 pub enum RunService {
-    Telegram,
+    Telegram(TelegramConfig),
+    Discord(DiscordConfig),
 }
 
 #[derive(Clone, Debug, Parser)]
@@ -86,13 +91,14 @@ pub struct RunConfig {
     #[clap(long, env)]
     pub redis_url: String,
 
+    #[clap(long, env)]
+    pub sentry_organization_slug: String,
+    #[clap(long, env)]
+    pub sentry_project_slug: String,
+
     /// The base address where the ingest service is available.
     #[clap(long, env)]
     pub public_endpoint: String,
-
-    /// Telegram API token, as provided by Botfather.
-    #[clap(long, env)]
-    pub telegram_api_token: String,
 
     #[clap(long, env)]
     pub fuzzysearch_api_token: String,
@@ -151,6 +157,23 @@ pub struct RunConfig {
     service: RunService,
 }
 
+#[derive(Clone, Debug, Parser)]
+pub struct TelegramConfig {
+    /// Telegram API token, as provided by Botfather.
+    #[clap(long, env)]
+    pub telegram_api_token: String,
+}
+
+#[derive(Clone, Debug, Parser)]
+pub struct DiscordConfig {
+    #[clap(long, env)]
+    pub discord_token: String,
+    #[clap(long, env)]
+    pub discord_application_id: NonZeroU64,
+    #[clap(long, env)]
+    pub find_source_command: NonZeroU64,
+}
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("faktory error: {0}")]
@@ -173,6 +196,8 @@ pub enum Error {
     Join(#[from] tokio::task::JoinError),
     #[error("s3 error: {0}")]
     S3(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("discord http error: {0}")]
+    DiscordHttp(#[from] twilight_http::Error),
 
     #[error("bot issue: {0}")]
     Bot(Cow<'static, str>),
@@ -253,14 +278,31 @@ fn main() {
     #[cfg(feature = "dotenv")]
     dotenv::dotenv().expect("could not load dotenv");
 
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .with(sentry_tracing::layer())
+        .with(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
 
     let args = Args::parse();
 
-    match args.command {
+    let _sentry = sentry::init(sentry::ClientOptions {
+        dsn: Some(args.sentry_url.clone()),
+        release: sentry::release_name!(),
+        attach_stacktrace: true,
+        session_mode: sentry::SessionMode::Request,
+        ..Default::default()
+    });
+
+    match args.command.clone() {
         Command::Web(config) => web::web(*config),
-        Command::Run(command) => match command.service {
-            RunService::Telegram => execute::telegram::start_telegram(*command),
+        Command::Run(run_config) => match run_config.service.clone() {
+            RunService::Telegram(telegram_config) => {
+                execute::telegram::start_telegram(args, *run_config, telegram_config)
+            }
+            RunService::Discord(discord_config) => {
+                execute::discord::start_discord(*run_config, discord_config)
+            }
         },
     }
 }
