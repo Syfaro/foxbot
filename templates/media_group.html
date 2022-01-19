@@ -1,0 +1,41 @@
+{% extends "_base.html" %}
+
+{% block content %}
+<h1>Media Group Sources</h1>
+
+<style>
+    img {
+        display: inline-block;
+        max-width: 100%;
+    }
+
+    ul {
+        padding: 0;
+        -webkit-padding-start: 0;
+    }
+</style>
+
+{% for item in items %}
+<section>
+    <p>
+        <img src="{{cdn_prefix}}/mg/{{item.media_group_id}}/{{item.file_id}}">
+    </p>
+
+    <ul>
+        {% for url in item.urls %}
+        <li><a href="{{url}}">{{url}}</a></li>
+        {% else %}
+        <li>No matches found</li>
+        {% endfor %}
+    </ul>
+</section>
+{% else %}
+<p>
+    No items were found. It's likely the content here was already deleted.
+</p>
+
+<p>
+    Try forwarding the images you're interested in to <a href="https://t.me/FoxBot">@FoxBot</a> directly.
+</p>
+{% endfor %}
+{% endblock %}

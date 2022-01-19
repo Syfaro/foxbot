@@ -1,0 +1,429 @@
+use std::{borrow::Cow, num::NonZeroU64};
+
+use clap::{Parser, Subcommand};
+use opentelemetry::KeyValue;
+use prometheus::Encoder;
+use thiserror::Error;
+use tracing_subscriber::prelude::*;
+
+mod execute;
+mod models;
+mod services;
+mod sites;
+mod utils;
+mod web;
+
+pub static L10N_RESOURCES: &[&str] = &["foxbot.ftl"];
+pub static L10N_LANGS: &[&str] = &["en-US"];
+
+#[derive(Clone, Debug, Parser)]
+pub struct Args {
+    #[clap(long, env)]
+    pub sentry_url: sentry::types::Dsn,
+
+    #[clap(long, env)]
+    pub metrics_host: std::net::SocketAddr,
+
+    #[clap(long, env, arg_enum)]
+    pub jaeger_type: JaegerType,
+
+    #[clap(long, env)]
+    pub jaeger_endpoint: String,
+
+    #[clap(subcommand)]
+    pub command: Command,
+}
+
+#[derive(Clone, Debug, PartialEq, clap::ArgEnum)]
+pub enum JaegerType {
+    Agent,
+    Collector,
+}
+
+#[derive(Clone, Debug, Subcommand)]
+pub enum Command {
+    Web(Box<WebConfig>),
+    Run(Box<RunConfig>),
+}
+
+#[derive(Clone, Debug, Subcommand)]
+pub enum RunService {
+    Telegram(TelegramConfig),
+    Discord(DiscordConfig),
+}
+
+#[derive(Clone, Debug, Parser)]
+pub struct WebConfig {
+    /// The base address where the ingest service is available.
+    #[clap(long, env)]
+    pub public_endpoint: String,
+
+    /// Address to listen for incoming requests.
+    #[clap(long, env)]
+    pub http_host: String,
+
+    /// Telegram API token, as provided by Botfather.
+    #[clap(long, env)]
+    pub telegram_api_token: String,
+
+    /// URL for Faktory instance.
+    #[clap(long, env)]
+    pub faktory_url: String,
+
+    /// Shared secret for Coconut.
+    #[clap(long, env)]
+    pub coconut_secret: String,
+
+    /// API key for FuzzySearch.
+    #[clap(long, env)]
+    pub fuzzysearch_api_key: String,
+
+    /// CDN prefix.
+    #[clap(long, env)]
+    pub cdn_prefix: String,
+
+    /// PostgreSQL DSN.
+    #[clap(long, env)]
+    pub database_url: String,
+
+    /// Twitter consumer key.
+    #[clap(long, env)]
+    pub twitter_consumer_key: String,
+
+    /// Twitter consumer secret.
+    #[clap(long, env)]
+    pub twitter_consumer_secret: String,
+}
+
+#[derive(Clone, Debug, Parser)]
+pub struct RunConfig {
+    /// PostgreSQL DSN.
+    #[clap(long, env)]
+    pub database_url: String,
+    /// URL for Faktory instance.
+    #[clap(long, env)]
+    pub faktory_url: String,
+    /// URL for Redis.
+    #[clap(long, env)]
+    pub redis_url: String,
+
+    /// Sentry organization slug, for error feedback.
+    #[clap(long, env)]
+    pub sentry_organization_slug: String,
+    /// Sentry project slug, for error feedback.
+    #[clap(long, env)]
+    pub sentry_project_slug: String,
+
+    /// The base address where the ingest service is available.
+    #[clap(long, env)]
+    pub public_endpoint: String,
+
+    /// API token for FuzzySearch.
+    #[clap(long, env)]
+    pub fuzzysearch_api_token: String,
+
+    /// Shared secret for Coconut.
+    #[clap(long, env)]
+    pub coconut_secret: String,
+
+    /// B2 account ID for video storage.
+    #[clap(long, env)]
+    pub b2_account_id: String,
+    /// B2 app key for video storage.
+    #[clap(long, env)]
+    pub b2_app_key: String,
+    /// B2 bucket ID for video storage.
+    #[clap(long, env)]
+    pub b2_bucket_id: String,
+
+    /// S3 endpoint for image storage.
+    #[clap(long, env)]
+    pub s3_endpoint: String,
+    /// S3 region for image storage.
+    #[clap(long, env)]
+    pub s3_region: String,
+    /// S3 bucket for image storage.
+    #[clap(long, env)]
+    pub s3_bucket: String,
+    /// S3 URL prefix for image storage.
+    #[clap(long, env)]
+    pub s3_url: String,
+    /// S3 access token.
+    #[clap(long, env)]
+    pub s3_token: String,
+    /// S3 secret token.
+    #[clap(long, env)]
+    pub s3_secret: String,
+
+    /// API token for Coconut.
+    #[clap(long, env)]
+    pub coconut_api_token: String,
+
+    /// FurAffinity login cookie a.
+    #[clap(long, env)]
+    pub furaffinity_cookie_a: String,
+    /// FurAffinity login cookie b.
+    #[clap(long, env)]
+    pub furaffinity_cookie_b: String,
+
+    /// Weasyl API token.
+    #[clap(long, env)]
+    pub weasyl_api_token: String,
+
+    /// Twitter consumer key.
+    #[clap(long, env)]
+    pub twitter_consumer_key: String,
+    /// Twitter consumer secret.
+    #[clap(long, env)]
+    pub twitter_consumer_secret: String,
+
+    /// Inkbunny username.
+    #[clap(long, env)]
+    pub inkbunny_username: String,
+    /// Inkbunny password.
+    #[clap(long, env)]
+    pub inkbunny_password: String,
+
+    /// E621 login.
+    #[clap(long, env)]
+    pub e621_login: String,
+    /// E621 API token.
+    #[clap(long, env)]
+    pub e621_api_token: String,
+
+    /// The type of service to run.
+    #[clap(subcommand)]
+    service: RunService,
+}
+
+#[derive(Clone, Debug, Parser)]
+pub struct TelegramConfig {
+    /// Telegram API token, as provided by Botfather.
+    #[clap(long, env)]
+    pub telegram_api_token: String,
+
+    /// Number of workers to process jobs.
+    #[clap(long, env, default_value = "2")]
+    pub worker_threads: usize,
+}
+
+#[derive(Clone, Debug, Parser)]
+pub struct DiscordConfig {
+    /// Discord API token.
+    #[clap(long, env)]
+    pub discord_token: String,
+    /// Discord application ID.
+    #[clap(long, env)]
+    pub discord_application_id: NonZeroU64,
+    /// ID of registered find source command.
+    #[clap(long, env)]
+    pub find_source_command: NonZeroU64,
+}
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("faktory error: {0}")]
+    Faktory(#[from] crate::services::faktory::FaktoryError),
+    #[error("database error: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("json error: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("twitter error: {0}")]
+    Twitter(#[from] egg_mode::error::Error),
+    #[error("telegram error: {0}")]
+    Telegram(#[from] tgbotapi::Error),
+    #[error("redis error: {0}")]
+    Redis(#[from] redis::RedisError),
+    #[error("network error: {0}")]
+    Network(#[from] reqwest::Error),
+    #[error("image error: {0}")]
+    Image(#[from] image::error::ImageError),
+    #[error("join error: {0}")]
+    Join(#[from] tokio::task::JoinError),
+    #[error("s3 error: {0}")]
+    S3(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("discord http error: {0}")]
+    DiscordHttp(#[from] twilight_http::Error),
+
+    #[error("bot issue: {0}")]
+    Bot(Cow<'static, str>),
+    #[error("limit exceeded: {0}")]
+    Limit(Cow<'static, str>),
+    #[error("essential data was missing")]
+    Missing,
+
+    #[error("{message}")]
+    UserMessage {
+        message: Cow<'static, str>,
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
+}
+
+impl Error {
+    pub fn bot<M>(message: M) -> Self
+    where
+        M: Into<Cow<'static, str>>,
+    {
+        Self::Bot(message.into())
+    }
+
+    pub fn limit<M>(name: M) -> Self
+    where
+        M: Into<Cow<'static, str>>,
+    {
+        Self::Limit(name.into())
+    }
+
+    pub fn user_message<M>(message: M) -> Self
+    where
+        M: Into<Cow<'static, str>>,
+    {
+        Self::UserMessage {
+            message: message.into(),
+            source: None,
+        }
+    }
+
+    pub fn user_message_with_error<M, S>(message: M, source: S) -> Self
+    where
+        M: Into<Cow<'static, str>>,
+        S: Into<Box<dyn std::error::Error + Send + Sync>>,
+    {
+        Self::UserMessage {
+            message: message.into(),
+            source: Some(source.into()),
+        }
+    }
+}
+
+impl<E: 'static + std::error::Error + Send + Sync> From<rusoto_core::RusotoError<E>> for Error {
+    fn from(err: rusoto_core::RusotoError<E>) -> Self {
+        Self::S3(Box::new(err))
+    }
+}
+
+pub trait ErrorMetadata {
+    fn is_retryable(&self) -> bool;
+    fn user_message(&self) -> Option<&str>;
+}
+
+impl ErrorMetadata for Error {
+    fn is_retryable(&self) -> bool {
+        matches!(self, Error::Missing)
+    }
+
+    fn user_message(&self) -> Option<&str> {
+        match self {
+            Self::UserMessage { message, .. } => Some(message),
+            _ => None,
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    #[cfg(feature = "dotenv")]
+    dotenv::dotenv().expect("could not load dotenv");
+
+    let args = Args::parse();
+
+    opentelemetry::global::set_text_map_propagator(opentelemetry_jaeger::Propagator::new());
+
+    let service_name = match &args.command {
+        Command::Web(_) => "foxbot-web",
+        Command::Run(run) => match run.service {
+            RunService::Discord(_) => "foxbot-discord",
+            RunService::Telegram(_) => "foxbot-telegram",
+        },
+    };
+
+    let tracer = match args.jaeger_type {
+        JaegerType::Agent => {
+            opentelemetry_jaeger::new_pipeline().with_agent_endpoint(&args.jaeger_endpoint)
+        }
+        JaegerType::Collector => {
+            opentelemetry_jaeger::new_pipeline().with_collector_endpoint(&args.jaeger_endpoint)
+        }
+    };
+
+    let tracer = tracer
+        .with_service_name(service_name)
+        .with_tags(vec![KeyValue::new("version", env!("CARGO_PKG_VERSION"))])
+        .install_batch(opentelemetry::runtime::Tokio)
+        .expect("could not create jaeger tracer");
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .with(sentry_tracing::layer())
+        .with(tracing_subscriber::EnvFilter::from_default_env())
+        .with(tracing_opentelemetry::layer().with_tracer(tracer))
+        .init();
+
+    let _sentry = sentry::init(sentry::ClientOptions {
+        dsn: Some(args.sentry_url.clone()),
+        release: sentry::release_name!(),
+        attach_stacktrace: true,
+        session_mode: sentry::SessionMode::Request,
+        ..Default::default()
+    });
+
+    metrics_server(args.metrics_host);
+
+    match args.command.clone() {
+        Command::Web(config) => web::web(*config).await,
+        Command::Run(run_config) => match run_config.service.clone() {
+            RunService::Telegram(telegram_config) => {
+                execute::start_telegram(args, *run_config, telegram_config).await
+            }
+            RunService::Discord(discord_config) => {
+                execute::start_discord(*run_config, discord_config).await
+            }
+        },
+    }
+
+    opentelemetry::global::shutdown_tracer_provider();
+}
+
+fn metrics_server(host: std::net::SocketAddr) {
+    tokio::task::spawn(async move {
+        tracing::info!("starting metrics server");
+
+        let svc = hyper::service::make_service_fn(|_conn| async {
+            Ok::<_, std::convert::Infallible>(hyper::service::service_fn(metrics_handler))
+        });
+
+        let server = hyper::server::Server::bind(&host).serve(svc);
+
+        server.await.expect("metrics server error");
+
+        tracing::warn!("metrics server ended");
+    });
+}
+
+async fn metrics_handler(
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, std::convert::Infallible> {
+    match req.uri().path() {
+        "/health" => health(),
+        "/metrics" => metrics(),
+        _ => {
+            let mut not_found = hyper::Response::new(hyper::Body::default());
+            *not_found.status_mut() = hyper::StatusCode::NOT_FOUND;
+            Ok(not_found)
+        }
+    }
+}
+
+fn health() -> Result<hyper::Response<hyper::Body>, std::convert::Infallible> {
+    Ok(hyper::Response::new(hyper::Body::from("OK")))
+}
+
+fn metrics() -> Result<hyper::Response<hyper::Body>, std::convert::Infallible> {
+    let mut buffer = Vec::new();
+    let encoder = prometheus::TextEncoder::new();
+
+    let metric_families = prometheus::gather();
+    encoder.encode(&metric_families, &mut buffer).unwrap();
+
+    Ok(hyper::Response::new(hyper::Body::from(buffer)))
+}

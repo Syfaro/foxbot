@@ -1,0 +1,28 @@
+name: Debug
+
+on:
+  push:
+
+jobs:
+  clippy_check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v1
+      - run: rustup component add clippy
+      - uses: Swatinem/rust-cache@v1
+      - uses: actions-rs/clippy-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  sourcegraph:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+      - name: Generate LSIF data
+        uses: sourcegraph/lsif-rust-action@main
+      - name: Upload LSIF data
+        uses: sourcegraph/lsif-upload-action@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}

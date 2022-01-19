@@ -7,24 +7,24 @@
 welcome =
     Hi, I'm { -botName }.
     
-    If you use me as an inline bot, I'll mirror content from many furry sites. When I post the image I'll include a direct link and a source link, if available. You can add your Twitter account with /twitter to get content from locked accounts you follow.
+    If used as an inline bot, I'll mirror content from many furry sites. When I post the image I'll include a direct link and a source link, if available. You can add your Twitter account with /twitter to get content from locked accounts you follow.
     
-    If you send me an image, I'll try to find the source on FA.
+    When you send me an image, I'll try to find the source on FurAffinity, e621, Weasyl, or Twitter.
     
     Add me to your group for features like /mirror (where I mirror all the links in a message, including messages you reply to) or /source (where I attempt to find the source of an image you're replying to).
     
-    If I'm given edit permissions in your channel, I'll automatically edit posts to include a source link.
+    If given edit permissions in your channel, I'll automatically edit posts to include a source link.
     
     For more details, visit { -docsLink }. Also check out { -newsChannelName } for feature updates.
     
-    Contact my creator { -creatorName } if you have any issues or feature suggestions.
+    Contact my creator { -creatorName } if you have any issues or suggestions.
 
 welcome-group =
     Hi, I'm { -botName }.
     
     I'm here to help with sharing images! If you use me as an inline bot, I can easily get images from most furry sites, while keeping a link to the original source.
     
-    I've also got a few commands to help in groups:
+    I've got a few commands to help in groups:
     · /mirror - I'll look at all the links in your message or the message you're replying to and mirror them
     · /source - I'll attempt to find if the photo you're replying to has been posted on FurAffinity
     
@@ -66,7 +66,6 @@ reverse-subscribe = Notify Me
 twitter-callback = Please follow this link to add your Twitter account: { $link }
 twitter-welcome = Welcome aboard, { $userName }!
 twitter-private = Let's do this in a private chat.
-twitter-not-for-you = It doesn't look like anything to me
 twitter-existing-account = It looks like you already have the account { $account } added. Are you sure you want to change this?
 twitter-change-anyway = Change Account 
 twitter-remove-account = Remove Account
@@ -155,8 +154,8 @@ rating-unknown = Unknown
 subscribe-error = Unable to subscribe to notifications
 subscribe-success = I'll let you know if I find this later!
 subscribe-found-single =
-    I found a match to an image you were looking for!
+    I found a match to a previously searched image!
     
     You can see it here: { $link }
-subscribe-found-multiple = I found matches for an image you were looking for!
+subscribe-found-multiple = I found matches to a previously searched image!
 subscribe-found-multiple-item = · { $link }
