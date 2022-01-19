@@ -5,8 +5,8 @@ use fuzzysearch::FuzzySearch;
 use intl_memoizer::concurrent::IntlLangMemoizer;
 use lazy_static::lazy_static;
 use prometheus::{
-    register_counter, register_counter_vec, register_histogram, register_histogram_vec, Counter,
-    CounterVec, Histogram, HistogramVec,
+    register_counter_vec, register_histogram, register_histogram_vec, CounterVec, Histogram,
+    HistogramVec,
 };
 use rand::prelude::SliceRandom;
 use redis::AsyncCommands;
@@ -51,14 +51,16 @@ lazy_static! {
         &["handler"]
     )
     .unwrap();
-    static ref TELEGRAM_REQUESTS: Counter = register_counter!(
+    static ref TELEGRAM_REQUESTS: CounterVec = register_counter_vec!(
         "foxbot_telegram_requests_total",
-        "Number of requests made to Telegram"
+        "Number of requests made to Telegram",
+        &["endpoint"]
     )
     .unwrap();
-    static ref TELEGRAM_ERRORS: Counter = register_counter!(
+    static ref TELEGRAM_ERRORS: CounterVec = register_counter_vec!(
         "foxbot_telegram_errors_total",
-        "Number of errors returned on requests to Telegram"
+        "Number of errors returned on requests to Telegram",
+        &["endpoint"]
     )
     .unwrap();
 }
@@ -340,10 +342,18 @@ impl Context {
         let mut attempts = 0;
 
         loop {
+            TELEGRAM_REQUESTS
+                .with_label_values(&[request.endpoint()])
+                .inc();
+
             let err = match self.bot.make_request(request).await {
                 Ok(resp) => return Ok(resp),
                 Err(err) => err,
             };
+
+            TELEGRAM_ERRORS
+                .with_label_values(&[request.endpoint()])
+                .inc();
 
             if attempts > 2 {
                 return Err(err);
