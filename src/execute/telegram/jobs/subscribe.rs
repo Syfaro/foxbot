@@ -7,13 +7,15 @@ use crate::{
     models, utils, Error,
 };
 
+use super::NewHashJob;
+
 #[tracing::instrument(skip(cx, job), fields(job_id = job.id()))]
 pub async fn process_hash_new(
     cx: Arc<Context>,
     job: faktory::Job,
-    hash: [u8; 8],
+    hash_job: NewHashJob,
 ) -> Result<(), Error> {
-    let hash = i64::from_be_bytes(hash);
+    let hash = i64::from_be_bytes(hash_job.hash);
 
     let subscriptions = models::Subscription::search(&cx.pool, hash).await?;
     if subscriptions.is_empty() {

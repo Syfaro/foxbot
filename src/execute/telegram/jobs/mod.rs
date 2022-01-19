@@ -205,7 +205,7 @@ pub struct NewHashJob {
 impl BotJob<TelegramJobQueue> for NewHashJob {
     const NAME: &'static str = "hash_new";
 
-    type JobData = [u8; 8];
+    type JobData = Self;
 
     fn queue(&self) -> TelegramJobQueue {
         TelegramJobQueue::Default
