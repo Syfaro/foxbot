@@ -1,4 +1,4 @@
-# foxbot
+# FoxBot
 
 Telegram bot for easily collecting furry images from multiple sites.
 

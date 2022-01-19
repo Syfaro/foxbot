@@ -4,5 +4,5 @@ EXPOSE 8080
 WORKDIR /app
 RUN apt-get update && apt-get install -y openssl ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY ./langs ./langs
-COPY ./foxbot/foxbot /bin/foxbot
+COPY ./foxbot /bin/foxbot
 CMD ["/bin/foxbot"]

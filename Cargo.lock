@@ -93,9 +93,9 @@ dependencies = [
 
 [[package]]
 name = "actix-server"
-version = "2.0.0-rc.4"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fbdbff45cad841b3b20d9fa8ba0df99d1a80f69f397f5b6fad827e5032458bce"
+checksum = "d9e7472ac180abb0a8e592b653744345983a7a14f44691c8394a799d0df4dbbf"
 dependencies = [
  "actix-rt",
  "actix-service",
@@ -1307,7 +1307,7 @@ checksum = "418d37c8b1d42553c93648be529cb70f920d3baf8ef469b74b9638df426e0b4c"
 dependencies = [
  "cfg-if",
  "libc",
- "wasi 0.10.3+wasi-snapshot-preview1",
+ "wasi 0.10.2+wasi-snapshot-preview1",
 ]
 
 [[package]]
@@ -2943,7 +2943,7 @@ checksum = "568a8e6258aa33c13358f81fd834adb854c6f7c9468520910a9b1e8fac068012"
 [[package]]
 name = "sentry"
 version = "0.23.0"
-source = "git+https://github.com/getsentry/sentry-rust.git#33bb5e9dc7fa0818cb2be3a22737f2b4c84902a5"
+source = "git+https://github.com/getsentry/sentry-rust.git#fccf47f851be694efac2d25add489126675214fc"
 dependencies = [
  "httpdate",
  "reqwest",
@@ -2957,7 +2957,7 @@ dependencies = [
 [[package]]
 name = "sentry-backtrace"
 version = "0.23.0"
-source = "git+https://github.com/getsentry/sentry-rust.git#33bb5e9dc7fa0818cb2be3a22737f2b4c84902a5"
+source = "git+https://github.com/getsentry/sentry-rust.git#fccf47f851be694efac2d25add489126675214fc"
 dependencies = [
  "backtrace",
  "lazy_static",
@@ -2968,7 +2968,7 @@ dependencies = [
 [[package]]
 name = "sentry-contexts"
 version = "0.23.0"
-source = "git+https://github.com/getsentry/sentry-rust.git#33bb5e9dc7fa0818cb2be3a22737f2b4c84902a5"
+source = "git+https://github.com/getsentry/sentry-rust.git#fccf47f851be694efac2d25add489126675214fc"
 dependencies = [
  "hostname",
  "libc",
@@ -2980,7 +2980,7 @@ dependencies = [
 [[package]]
 name = "sentry-core"
 version = "0.23.0"
-source = "git+https://github.com/getsentry/sentry-rust.git#33bb5e9dc7fa0818cb2be3a22737f2b4c84902a5"
+source = "git+https://github.com/getsentry/sentry-rust.git#fccf47f851be694efac2d25add489126675214fc"
 dependencies = [
  "chrono",
  "lazy_static",
@@ -2993,7 +2993,7 @@ dependencies = [
 [[package]]
 name = "sentry-panic"
 version = "0.23.0"
-source = "git+https://github.com/getsentry/sentry-rust.git#33bb5e9dc7fa0818cb2be3a22737f2b4c84902a5"
+source = "git+https://github.com/getsentry/sentry-rust.git#fccf47f851be694efac2d25add489126675214fc"
 dependencies = [
  "sentry-backtrace",
  "sentry-core",
@@ -3002,7 +3002,7 @@ dependencies = [
 [[package]]
 name = "sentry-tracing"
 version = "0.23.0"
-source = "git+https://github.com/getsentry/sentry-rust.git#33bb5e9dc7fa0818cb2be3a22737f2b4c84902a5"
+source = "git+https://github.com/getsentry/sentry-rust.git#fccf47f851be694efac2d25add489126675214fc"
 dependencies = [
  "sentry-core",
  "tracing-core",
@@ -3012,7 +3012,7 @@ dependencies = [
 [[package]]
 name = "sentry-types"
 version = "0.23.0"
-source = "git+https://github.com/getsentry/sentry-rust.git#33bb5e9dc7fa0818cb2be3a22737f2b4c84902a5"
+source = "git+https://github.com/getsentry/sentry-rust.git#fccf47f851be694efac2d25add489126675214fc"
 dependencies = [
  "chrono",
  "debugid",
@@ -4091,9 +4091,9 @@ checksum = "cccddf32554fecc6acb585f82a32a72e28b48f8c4c1883ddfeeeaa96f7d8e519"
 
 [[package]]
 name = "wasi"
-version = "0.10.3+wasi-snapshot-preview1"
+version = "0.10.2+wasi-snapshot-preview1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46a2e384a3f170b0c7543787a91411175b71afd56ba4d3a0ae5678d4e2243c0e"
+checksum = "fd6fbd9a79829dd1ad0cc20627bf1ed606756a7f77edff7b66b7064f9cb327c6"
 
 [[package]]
 name = "wasm-bindgen"
