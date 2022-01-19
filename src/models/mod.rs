@@ -1,4 +1,6 @@
 use bigdecimal::BigDecimal;
+use lazy_static::lazy_static;
+use prometheus::{register_counter_vec, CounterVec};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sqlx::{
@@ -8,6 +10,15 @@ use sqlx::{
 use tgbotapi::Message;
 
 use crate::Error;
+
+lazy_static! {
+    static ref CACHE_REQUESTS: CounterVec = register_counter_vec!(
+        "foxbot_cache_requests_total",
+        "Number of file cache hits and misses",
+        &["result"]
+    )
+    .unwrap();
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum User {
@@ -927,6 +938,9 @@ impl FileCache {
         let mut redis = redis.clone();
 
         let result = redis.get::<_, Option<i64>>(file_id).await?;
+
+        let status = if result.is_some() { "hit" } else { "miss" };
+        CACHE_REQUESTS.with_label_values(&[status]).inc();
 
         Ok(result)
     }
