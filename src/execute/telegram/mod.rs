@@ -591,6 +591,14 @@ async fn process_update(cx: &Context, update: tgbotapi::Update) -> Result<(), Er
 
     if let Some(user) = user {
         tracing::Span::current().record("user_id", &user.id);
+
+        sentry::configure_scope(|scope| {
+            scope.set_user(Some(sentry::User {
+                id: Some(user.id.to_string()),
+                username: user.username.clone(),
+                ..Default::default()
+            }));
+        });
     }
 
     if let Some(chat) = chat {
