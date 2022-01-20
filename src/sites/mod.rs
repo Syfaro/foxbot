@@ -79,13 +79,13 @@ pub async fn get_all_sites(
     vec![
         Box::new(E621::new(
             E621Host::E621,
-            config.e621_api_token.clone(),
             config.e621_login.clone(),
+            config.e621_api_token.clone(),
         )),
         Box::new(E621::new(
             E621Host::E926,
-            config.e621_api_token.clone(),
             config.e621_login.clone(),
+            config.e621_api_token.clone(),
         )),
         Box::new(FurAffinity::new(
             (
