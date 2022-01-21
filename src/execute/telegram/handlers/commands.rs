@@ -67,6 +67,7 @@ impl Handler for CommandHandler {
             "/groupsource" => self.enable_group_source(cx, message).await,
             "/grouppreviews" => self.group_nopreviews(cx, message).await,
             "/groupalbums" => self.group_noalbums(cx, message).await,
+            "/manage" => self.manage(cx, message).await,
             _ => {
                 tracing::info!(command = ?command.name, "unknown command");
                 return Ok(Ignored);
@@ -669,6 +670,32 @@ impl CommandHandler {
         };
 
         cx.send_generic_reply(message, name).await?;
+
+        Ok(())
+    }
+
+    async fn manage(&self, cx: &Context, message: &tgbotapi::Message) -> Result<(), Error> {
+        let markup =
+            tgbotapi::requests::ReplyMarkup::InlineKeyboardMarkup(tgbotapi::InlineKeyboardMarkup {
+                inline_keyboard: vec![vec![tgbotapi::InlineKeyboardButton {
+                    text: "Manage".to_string(),
+                    login_url: Some(tgbotapi::LoginUrl {
+                        url: format!("{}/manage/login", cx.config.public_endpoint),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }]],
+            });
+
+        let message = tgbotapi::requests::SendMessage {
+            chat_id: message.chat_id(),
+            text: "Visit the website to manage your settings and groups.".to_string(),
+            reply_to_message_id: Some(message.message_id),
+            reply_markup: Some(markup),
+            ..Default::default()
+        };
+
+        cx.bot.make_request(&message).await?;
 
         Ok(())
     }

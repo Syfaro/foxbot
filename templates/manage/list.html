@@ -1,0 +1,38 @@
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>FoxBot Manage</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/@picocss/pico@latest/css/pico.min.css">
+</head>
+
+<body>
+  <main class="container">
+    <section>
+      <h1>FoxBot Management</h1>
+
+      <p>Hi {{ user_name }}, here's your FoxBot control panel.</p>
+    </section>
+
+    <section>
+      <h2>Your Chats</h2>
+
+      {% if chats.is_empty() %}
+      <p>
+        I'm not aware of any chats where you're an admin, sorry!
+      </p>
+      {% else %}
+      <ul>
+        {% for chat in chats %}
+        <li><a href="/manage/telegram/chat/{{ chat.0 }}">{{ chat.1 }}</a> ({{ chat.0 }})</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </section>
+  </main>
+</body>
+
+</html>

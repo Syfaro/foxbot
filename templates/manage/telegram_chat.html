@@ -1,0 +1,38 @@
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>FoxBot Manage</title>
+
+    <link rel="stylesheet" href="https://unpkg.com/@picocss/pico@latest/css/pico.min.css">
+</head>
+
+<body>
+    <main class="container">
+        <section>
+            <h1>{{ chat_name }} ({{ chat_id }})</h1>
+        </section>
+
+        <section>
+            <h2>Config Options</h2>
+
+            <form method="POST">
+                {% for option in options %}
+                <label for="{{ option.key }}">
+                    <input type="checkbox" id="{{ option.key }}" name="{{ option.key }}"
+                        {% if option.value.bool().unwrap_or(false) %} checked {% endif %}>
+                    {{ option.name }}
+                </label>
+
+                <p>{{ option.help }}</p>
+                {% endfor %}
+
+                <button type="submit">Update</button>
+            </form>
+        </section>
+    </main>
+</body>
+
+</html>

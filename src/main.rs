@@ -85,6 +85,9 @@ pub struct WebConfig {
     /// PostgreSQL DSN.
     #[clap(long, env)]
     pub database_url: String,
+    /// URL for Redis.
+    #[clap(long, env)]
+    pub redis_url: String,
 
     /// Twitter consumer key.
     #[clap(long, env)]
@@ -93,6 +96,14 @@ pub struct WebConfig {
     /// Twitter consumer secret.
     #[clap(long, env)]
     pub twitter_consumer_secret: String,
+
+    /// JWT secret for management web UI, encoded as hex.
+    #[clap(long, env)]
+    pub manage_jwt_secret: String,
+
+    /// Cookie secret for management web UI, encoded as hex.
+    #[clap(long, env)]
+    pub session_secret: String,
 }
 
 #[derive(Clone, Debug, Parser)]

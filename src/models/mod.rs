@@ -838,9 +838,8 @@ impl ChatAdmin {
         Ok(is_admin)
     }
 
-    pub async fn is_admin<'a, E, C, U>(executor: E, chat: C, user: U) -> Result<Option<bool>, Error>
+    pub async fn is_admin<C, U>(pool: &PgPool, chat: C, user: U) -> Result<Option<bool>, Error>
     where
-        E: PgExecutor<'a>,
         C: Into<Chat>,
         U: Into<User>,
     {
@@ -853,7 +852,7 @@ impl ChatAdmin {
             user.discord_id(),
             chat.telegram_id()
         )
-        .fetch_optional(executor)
+        .fetch_optional(pool)
         .await?;
 
         Ok(is_admin)
@@ -955,5 +954,42 @@ impl FileCache {
         redis.set_ex(file_id, hash, 60 * 60 * 24 * 7).await?;
 
         Ok(())
+    }
+}
+
+pub struct Manage;
+
+impl Manage {
+    pub async fn get_user_groups<U: Into<User>>(pool: &PgPool, user: U) -> Result<Vec<i64>, Error> {
+        let user = user.into();
+
+        let chat_ids = sqlx::query_file!(
+            "queries/manage/get_user_groups.sql",
+            user.telegram_id(),
+            user.discord_id()
+        )
+        .map(|row| row.telegram_id)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(chat_ids)
+    }
+
+    pub async fn get_chat_config<C: Into<Chat>>(
+        pool: &PgPool,
+        chat: C,
+    ) -> Result<Vec<(String, serde_json::Value)>, Error> {
+        let chat = chat.into();
+
+        let config = sqlx::query_file!(
+            "queries/manage/get_chat_config.sql",
+            chat.telegram_id(),
+            chat.discord_id()
+        )
+        .map(|row| (row.name, row.value))
+        .fetch_all(pool)
+        .await?;
+
+        Ok(config)
     }
 }
