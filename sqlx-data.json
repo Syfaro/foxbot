@@ -820,6 +820,39 @@
       "nullable": []
     }
   },
+  "c4ef657154973b544403ad8e6b32e7779da6451861b9d56f5f7a45c427fb3c55": {
+    "query": "SELECT\n    DISTINCT ON (chat_administrator.chat_id) chat_administrator.chat_id,\n    telegram_id \"telegram_id!\",\n    is_admin\nFROM\n    chat_administrator\n    JOIN chat_telegram ON chat_telegram.chat_id = chat_administrator.chat_id\nWHERE\n    account_id = lookup_account($1, $2)\n    AND is_admin = true\n    AND telegram_id IS NOT NULL\nORDER BY\n    chat_administrator.chat_id,\n    updated_at DESC;\n",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "chat_id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 1,
+          "name": "telegram_id!",
+          "type_info": "Int8"
+        },
+        {
+          "ordinal": 2,
+          "name": "is_admin",
+          "type_info": "Bool"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Numeric"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        false
+      ]
+    }
+  },
   "c5c45d309e427da06209ceb93b7ede2c29bc283a33178f3ac354bd87b8f8e3ee": {
     "query": "SELECT\n    *\nFROM\n    videos\nWHERE\n    source = $1;\n",
     "describe": {
@@ -1049,6 +1082,33 @@
         ]
       },
       "nullable": []
+    }
+  },
+  "f67ca9e5b0a3d0fa04ff5849a9dc4cf57bcbae1bf54bf66571ea6f7a67109b67": {
+    "query": "SELECT\n    DISTINCT ON (name) name,\n    value\nFROM\n    group_config\nWHERE\n    chat_id = lookup_chat($1, $2)\nORDER BY\n    name,\n    updated_at DESC;\n",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "name",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 1,
+          "name": "value",
+          "type_info": "Jsonb"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Numeric"
+        ]
+      },
+      "nullable": [
+        false,
+        false
+      ]
     }
   }
 }
