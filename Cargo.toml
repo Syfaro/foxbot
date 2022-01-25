@@ -59,12 +59,12 @@ tracing = "0.1"
 tracing-actix-web = {version = "0.5.0-beta.10", features = ["opentelemetry_0_16"]}
 tracing-opentelemetry = "0.16"
 tracing-subscriber = {version = "0.3", features = ["env-filter"]}
-twilight-cache-inmemory = "0.8"
-twilight-embed-builder = "0.8"
-twilight-gateway = {version = "0.8", features = ["tracing"]}
-twilight-http = {version = "0.8", features = ["tracing"]}
-twilight-model = "0.8"
-twilight-util = {version = "0.8", features = ["builder"]}
+twilight-cache-inmemory = "0.9"
+twilight-embed-builder = "0.9"
+twilight-gateway = {version = "0.9", features = ["tracing"]}
+twilight-http = {version = "0.9", features = ["tracing"]}
+twilight-model = "0.9"
+twilight-util = {version = "0.9", features = ["builder"]}
 unic-langid = "0.9"
 url = "2"
 uuid = "0.8"

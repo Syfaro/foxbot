@@ -16,7 +16,10 @@ use twilight_model::{
     },
     gateway::Intents,
     guild::Permissions,
-    id::{ChannelId, GuildId, MessageId, UserId},
+    id::{
+        marker::{ApplicationMarker, ChannelMarker, GuildMarker, MessageMarker, UserMarker},
+        Id,
+    },
 };
 use twilight_util::builder::CallbackDataBuilder;
 
@@ -48,7 +51,7 @@ pub async fn discord(config: RunConfig, discord_config: DiscordConfig) {
     let scheme = ShardScheme::Auto;
 
     let cluster = Cluster::builder(
-        &discord_config.discord_token,
+        discord_config.discord_token.clone(),
         Intents::GUILDS | Intents::GUILD_MESSAGES | Intents::DIRECT_MESSAGES,
     )
     .shard_scheme(scheme);
@@ -58,7 +61,16 @@ pub async fn discord(config: RunConfig, discord_config: DiscordConfig) {
     cluster.up().await;
 
     let http = Arc::new(HttpClient::new(discord_config.discord_token.clone()));
-    http.set_application_id(discord_config.discord_application_id.into());
+
+    let application_id = http
+        .current_user_application()
+        .exec()
+        .await
+        .expect("could not get current user application")
+        .model()
+        .await
+        .expect("could not get model")
+        .id;
 
     let cache = Arc::new(
         InMemoryCache::builder()
@@ -84,6 +96,7 @@ pub async fn discord(config: RunConfig, discord_config: DiscordConfig) {
 
             let context = Context {
                 http: http.clone(),
+                application_id,
                 cache,
                 redis,
                 config: discord_config,
@@ -122,6 +135,7 @@ pub async fn discord(config: RunConfig, discord_config: DiscordConfig) {
 
 struct Context {
     http: Arc<HttpClient>,
+    application_id: Id<ApplicationMarker>,
     cache: Arc<InMemoryCache>,
     redis: redis::aio::ConnectionManager,
     config: DiscordConfig,
@@ -190,7 +204,9 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
         }
         Event::InteractionCreate(interaction) => match &interaction.0 {
             Interaction::ApplicationCommand(command) => {
-                if command.data.id == ctx.config.find_source_command.into() {
+                let interaction_client = ctx.http.interaction(ctx.application_id);
+
+                if command.data.id == Id::from(ctx.config.find_source_command) {
                     let messages = command
                         .data
                         .resolved
@@ -200,7 +216,7 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
 
                     tracing::debug!("Got command with {} messages", messages.len());
 
-                    ctx.http
+                    interaction_client
                         .interaction_callback(
                             command.id,
                             &command.token,
@@ -254,14 +270,14 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
                     }
 
                     if embeds.is_empty() {
-                        ctx.http
-                            .update_interaction_original(&command.token)?
+                        interaction_client
+                            .update_interaction_original(&command.token)
                             .content(Some("No sources were found."))?
                             .exec()
                             .await?;
                     } else {
-                        ctx.http
-                            .update_interaction_original(&command.token)?
+                        interaction_client
+                            .update_interaction_original(&command.token)
                             .embeds(Some(&embeds))?
                             .exec()
                             .await?;
@@ -279,11 +295,19 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
 }
 
 trait CreateErrorMessage<'a> {
-    fn create_message(&'a self, http: &'a HttpClient, channel_id: ChannelId) -> CreateMessage<'a>;
+    fn create_message(
+        &'a self,
+        http: &'a HttpClient,
+        channel_id: Id<ChannelMarker>,
+    ) -> CreateMessage<'a>;
 }
 
 impl<'a> CreateErrorMessage<'a> for anyhow::Error {
-    fn create_message(&self, http: &'a HttpClient, channel_id: ChannelId) -> CreateMessage<'a> {
+    fn create_message(
+        &self,
+        http: &'a HttpClient,
+        channel_id: Id<ChannelMarker>,
+    ) -> CreateMessage<'a> {
         http.create_message(channel_id)
             .content("An error occured.")
             .unwrap()
@@ -312,7 +336,11 @@ impl<'a> UserErrorMessage<'a> {
 }
 
 impl<'a> CreateErrorMessage<'a> for UserErrorMessage<'_> {
-    fn create_message(&'a self, http: &'a HttpClient, channel_id: ChannelId) -> CreateMessage<'a> {
+    fn create_message(
+        &'a self,
+        http: &'a HttpClient,
+        channel_id: Id<ChannelMarker>,
+    ) -> CreateMessage<'a> {
         http.create_message(channel_id).content(&self.msg).unwrap()
     }
 }
@@ -353,7 +381,7 @@ fn lookup_hash(
 
 /// Check the channel and possibily message ID from an event where it would make
 /// sense to reply to the message.
-fn get_event_channel(event: &Event) -> Option<(ChannelId, Option<MessageId>)> {
+fn get_event_channel(event: &Event) -> Option<(Id<ChannelMarker>, Option<Id<MessageMarker>>)> {
     match event {
         Event::MessageCreate(msg) => Some((msg.channel_id, Some(msg.id))),
         Event::MessageDelete(msg) => Some((msg.channel_id, Some(msg.id))),
@@ -363,7 +391,10 @@ fn get_event_channel(event: &Event) -> Option<(ChannelId, Option<MessageId>)> {
 }
 
 /// Check if a channel is a private message, using the cache if possible.
-async fn is_pm(ctx: &Context, channel_id: ChannelId) -> Result<bool, UserErrorMessage<'static>> {
+async fn is_pm(
+    ctx: &Context,
+    channel_id: Id<ChannelMarker>,
+) -> Result<bool, UserErrorMessage<'static>> {
     if let Some(channel) = ctx.cache.guild_channel(channel_id) {
         return Ok(channel.kind() == ChannelType::Private);
     }
@@ -442,7 +473,7 @@ fn link_embed(post: &PostInfo) -> anyhow::Result<Embed> {
     Ok(embed)
 }
 
-async fn allow_nsfw(ctx: &Context, channel_id: ChannelId) -> Option<bool> {
+async fn allow_nsfw(ctx: &Context, channel_id: Id<ChannelMarker>) -> Option<bool> {
     if is_pm(ctx, channel_id).await.ok()? {
         return Some(true);
     }
@@ -453,10 +484,10 @@ async fn allow_nsfw(ctx: &Context, channel_id: ChannelId) -> Option<bool> {
 
 async fn source_attachments(
     ctx: &Context,
-    guild_id: Option<GuildId>,
-    channel_id: ChannelId,
-    summoning_id: MessageId,
-    content_id: MessageId,
+    guild_id: Option<Id<GuildMarker>>,
+    channel_id: Id<ChannelMarker>,
+    summoning_id: Id<MessageMarker>,
+    content_id: Id<MessageMarker>,
     attachments: &[Attachment],
 ) -> anyhow::Result<()> {
     let allow_nsfw = allow_nsfw(ctx, channel_id).await.unwrap_or(false);
@@ -543,7 +574,7 @@ fn extract_links(content: &str) -> Option<Vec<&str>> {
 /// Collect all images from many links.
 async fn get_images<'a, C>(
     ctx: &Context,
-    user_id: UserId,
+    user_id: Id<UserMarker>,
     links: &'a [&str],
     callback: &mut C,
 ) -> anyhow::Result<Vec<&'a str>>
@@ -584,7 +615,7 @@ where
     Ok(missing)
 }
 
-fn can_manage_messages(ctx: &Context, guild_id: GuildId) -> Option<bool> {
+fn can_manage_messages(ctx: &Context, guild_id: Id<GuildMarker>) -> Option<bool> {
     let current_user = ctx.cache.current_user()?;
     let member = ctx.cache.member(guild_id, current_user.id)?;
 
@@ -602,11 +633,11 @@ fn can_manage_messages(ctx: &Context, guild_id: GuildId) -> Option<bool> {
 /// Send an embed as a reply for each link contained in a message.
 async fn mirror_links(
     ctx: &Context,
-    guild_id: Option<GuildId>,
-    channel_id: ChannelId,
-    user_id: UserId,
-    summoning_id: MessageId,
-    content_id: MessageId,
+    guild_id: Option<Id<GuildMarker>>,
+    channel_id: Id<ChannelMarker>,
+    user_id: Id<UserMarker>,
+    summoning_id: Id<MessageMarker>,
+    content_id: Id<MessageMarker>,
     links: &[&str],
 ) -> anyhow::Result<()> {
     let mut results: Vec<PostInfo> = Vec::with_capacity(links.len());

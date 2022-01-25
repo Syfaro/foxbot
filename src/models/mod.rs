@@ -73,9 +73,9 @@ impl From<&tgbotapi::User> for User {
     }
 }
 
-impl From<twilight_model::id::UserId> for User {
-    fn from(user_id: twilight_model::id::UserId) -> Self {
-        let id: u64 = user_id.0.into();
+impl From<twilight_model::id::Id<twilight_model::id::marker::UserMarker>> for User {
+    fn from(user_id: twilight_model::id::Id<twilight_model::id::marker::UserMarker>) -> Self {
+        let id: u64 = user_id.get();
         Self::Discord(id.into())
     }
 }
