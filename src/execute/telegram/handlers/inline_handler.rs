@@ -64,16 +64,20 @@ impl InlineHandler {
             .await?
             .ok_or_else(|| Error::missing("video missing for processing"))?;
 
+        let bundle = cx.get_fluent_bundle(message).await;
+
         if video.processed {
             if let Some(video_url) = video.mp4_url {
                 tracing::debug!("already had video url, assuming large and sending");
+
+                let text = utils::get_message(&bundle, "inline-source", None);
 
                 let send_video = SendVideo {
                     chat_id: message.chat_id(),
                     video: FileType::Url(video_url.to_owned()),
                     reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
                         inline_keyboard: vec![vec![InlineKeyboardButton {
-                            text: "Source".to_owned(),
+                            text,
                             url: Some(video.display_url.to_owned()),
                             ..Default::default()
                         }]],
@@ -98,13 +102,6 @@ impl InlineHandler {
 
             models::Video::set_job_id(&cx.pool, video.id, &job_id).await?;
         }
-
-        let lang = message
-            .from
-            .as_ref()
-            .and_then(|from| from.language_code.as_deref());
-
-        let bundle = cx.get_fluent_bundle(lang).await;
 
         let video_starting = utils::get_message(&bundle, "video-starting", None);
 
@@ -355,7 +352,9 @@ impl Handler for InlineHandler {
                 ResultType::VideoToBeProcessed => {
                     utils::get_message(&bundle, "inline-process", None)
                 }
-                ResultType::VideoTooLarge => "Get Large Video".to_string(),
+                ResultType::VideoTooLarge => {
+                    utils::get_message(&bundle, "inline-large-video", None)
+                }
                 _ => unreachable!("only video results should be found"),
             };
 
@@ -399,7 +398,7 @@ async fn video_progress(cx: &Context, display_name: &str, progress: &str) -> Res
 
     let video = models::Video::lookup_by_display_name(&cx.pool, display_name)
         .await?
-        .ok_or(Error::missing("video for progress"))?;
+        .ok_or_else(|| Error::missing("video for progress"))?;
 
     tracing::Span::current().record("video_id", &video.id);
     let messages = models::Video::associated_messages(&cx.pool, video.id).await?;
@@ -440,7 +439,7 @@ async fn video_complete(
 
     let video = models::Video::lookup_by_display_name(&cx.pool, display_name)
         .await?
-        .ok_or(Error::missing("video for complete"))?;
+        .ok_or_else(|| Error::missing("video for complete"))?;
     tracing::Span::current().record("video_id", &video.id);
 
     models::Video::set_processed_url(&cx.pool, video.id, video_url, thumb_url, video_size).await?;
@@ -456,6 +455,7 @@ async fn video_complete(
 
     let bundle = cx.get_fluent_bundle(None).await;
 
+    let video_source_button = utils::get_message(&bundle, "inline-source", None);
     let video_return_button = utils::get_message(&bundle, "video-return-button", None);
 
     // First, we should handle one message to upload the file. This is a
@@ -465,7 +465,7 @@ async fn video_complete(
     let video_is_large = video_size > MAX_VIDEO_SIZE;
 
     if video_is_large {
-        let text = "Sorry, but this video is too large to send inline. I'll send you the video to forward instead.".to_owned();
+        let text = utils::get_message(&bundle, "video-too-large", None);
 
         let send_message = tgbotapi::requests::SendMessage {
             chat_id: first.0.into(),
@@ -486,7 +486,7 @@ async fn video_complete(
             video: FileType::Url(video_url.to_owned()),
             reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
                 inline_keyboard: vec![vec![InlineKeyboardButton {
-                    text: "Source".to_owned(),
+                    text: video_source_button,
                     url: Some(video.display_url.to_owned()),
                     ..Default::default()
                 }]],
@@ -636,7 +636,7 @@ async fn process_result(
                 sites
                     .iter()
                     .find_map(|site| site.url_id(&source))
-                    .ok_or(Error::missing("site url_id"))?
+                    .ok_or_else(|| Error::missing("site url_id"))?
             };
 
             let results =

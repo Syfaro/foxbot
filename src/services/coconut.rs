@@ -59,13 +59,14 @@ impl Coconut {
 
         let id = json
             .get("id")
-            .ok_or(Error::missing("job id"))?
+            .ok_or_else(|| Error::missing("job id"))?
             .as_str()
-            .ok_or(Error::missing("job id as str"))?;
+            .ok_or_else(|| Error::missing("job id as str"))?;
 
         Ok(id.to_owned())
     }
 
+    /// Create a Coconut request where the encoded video can be at most 50MB.
     fn build_config(&self, source: &str, name: &str) -> serde_json::Value {
         serde_json::json!({
             "input": {
@@ -94,19 +95,20 @@ impl Coconut {
                 },
                 "mp4:1080p": {
                     "path": format!("/video/{}.mp4", name),
-                    "if": "{{ input.duration }} <= 60",
+                    "if": "{{ input.duration }} <= 100",
                 },
                 "mp4:720p": {
                     "path": format!("/video/{}.mp4", name),
-                    "if": "{{ input.duration }} <= 120 and {{ input.duration }} > 60",
+                    "if": "{{ input.duration }} <= 200 and {{ input.duration }} > 100",
                 },
                 "mp4:480p": {
                     "path": format!("/video/{}.mp4", name),
-                    "if": "{{ input.duration }} <= 180 and {{ input.duration }} > 120",
+                    "if": "{{ input.duration }} <= 400 and {{ input.duration }} > 200",
                 },
                 "mp4:360p": {
                     "path": format!("/video/{}.mp4", name),
-                    "if": "{{ input.duration }} > 180"
+                    "if": "{{ input.duration }} > 400",
+                    "duration": 500,
                 }
             }
         })

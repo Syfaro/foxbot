@@ -541,7 +541,7 @@ impl MediaGroup {
         let media_group_id = message
             .media_group_id
             .as_ref()
-            .ok_or(Error::missing("media group id"))?;
+            .ok_or_else(|| Error::missing("media group id"))?;
 
         let id = sqlx::query_file_scalar!(
             "queries/media_group/add_message.sql",

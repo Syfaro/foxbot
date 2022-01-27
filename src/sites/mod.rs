@@ -153,7 +153,7 @@ impl Direct {
 
         let results = self
             .fautil
-            .image_search(&body, MatchType::Exact, Some(1))
+            .image_search(body, MatchType::Exact, Some(1))
             .await;
 
         match results {

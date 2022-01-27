@@ -79,7 +79,10 @@ impl Handler for CommandHandler {
 
 impl CommandHandler {
     async fn handle_mirror(&self, cx: &Context, message: &tgbotapi::Message) -> Result<(), Error> {
-        let from = message.from.as_ref().unwrap();
+        let from = message
+            .from
+            .as_ref()
+            .ok_or_else(|| Error::missing("user"))?;
 
         let action = utils::continuous_action(
             cx.bot.clone(),
@@ -347,7 +350,10 @@ impl CommandHandler {
 
             utils::match_image(&cx.bot, &cx.redis, &cx.fuzzysearch, best_photo, Some(10)).await?
         } else {
-            let from = message.from.as_ref().ok_or(Error::missing("user"))?;
+            let from = message
+                .from
+                .as_ref()
+                .ok_or_else(|| Error::missing("user"))?;
 
             let links = utils::extract_links(message);
 

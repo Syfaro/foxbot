@@ -217,7 +217,7 @@ async fn verify_twitter_account(
     };
 
     let user = models::User::from_one(auth.telegram_id, auth.discord_id)
-        .ok_or(Error::missing("user for twitter"))?;
+        .ok_or_else(|| Error::missing("user for twitter"))?;
 
     let con_token = KeyPair::new(
         config.twitter_consumer_key.clone(),
