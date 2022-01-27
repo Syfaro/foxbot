@@ -5,7 +5,7 @@ use std::{borrow::Cow, collections::HashMap};
 
 use crate::{
     models::{self, User},
-    Error,
+    utils, Error,
 };
 
 /// User agent used with all HTTP requests to sites.
@@ -126,11 +126,6 @@ pub struct Direct {
 }
 
 impl Direct {
-    /// URL extensions we should load to test content.
-    const EXTENSIONS: &'static [&'static str] = &["png", "jpg", "jpeg", "gif"];
-    /// Mime types we should consider valid images.
-    const TYPES: &'static [&'static str] = &["image/png", "image/jpeg", "image/gif"];
-
     pub fn new(fuzzysearch_apitoken: String) -> Self {
         let fautil = std::sync::Arc::new(fuzzysearch::FuzzySearch::new(fuzzysearch_apitoken));
 
@@ -148,14 +143,10 @@ impl Direct {
     /// source and keep the request fast, but a timeout should be applied for
     /// use in inline queries in case FuzzySearch is running behind.
     async fn reverse_search(&self, url: &str) -> Option<fuzzysearch::File> {
-        let image = self.client.get(url).send().await;
+        let mut checked_download = utils::CheckFileSize::new(url, 20_000_000);
+        let bytes = checked_download.get_bytes().await;
 
-        let image = match image {
-            Ok(res) => res.bytes().await,
-            Err(_) => return None,
-        };
-
-        let body = match image {
+        let body = match bytes {
             Ok(body) => body,
             Err(_) => return None,
         };
@@ -179,36 +170,33 @@ impl Site for Direct {
     }
 
     fn url_id(&self, url: &str) -> Option<String> {
-        if !Direct::EXTENSIONS.iter().any(|ext| url.ends_with(ext)) {
-            return None;
-        }
-
         Some(url.to_owned())
     }
 
     async fn url_supported(&mut self, url: &str) -> bool {
-        // If the URL extension isn't one in our list, ignore.
-        if !Self::EXTENSIONS.iter().any(|ext| url.ends_with(ext)) {
-            return false;
-        }
+        tracing::trace!("checking if url is supported");
 
-        // Make a HTTP HEAD request to determine the Content-Type.
-        let resp = match self.client.head(url).send().await {
-            Ok(resp) => resp,
-            Err(_) => return false,
+        let mut data = match self.client.get(url).send().await {
+            Ok(data) => data,
+            Err(_err) => return false,
         };
 
-        if !resp.status().is_success() {
-            return false;
+        let mut buf = bytes::BytesMut::new();
+
+        while let Ok(Some(chunk)) = data.chunk().await {
+            if buf.len() + chunk.len() > 20_000_000 {
+                tracing::warn!("buf wanted to be larger than max download size");
+                return false;
+            }
+
+            buf.extend(chunk);
+
+            if buf.len() > 8_192 {
+                break;
+            }
         }
 
-        let content_type = match resp.headers().get(reqwest::header::CONTENT_TYPE) {
-            Some(content_type) => content_type,
-            None => return false,
-        };
-
-        // Return if the Content-Type is in our list.
-        Self::TYPES.iter().any(|t| content_type == t)
+        infer::is_image(&buf) || infer::is_video(&buf)
     }
 
     async fn get_images(
