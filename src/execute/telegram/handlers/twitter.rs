@@ -27,7 +27,7 @@ impl Handler for TwitterHandler {
                     twitter_username,
                 } = account;
 
-                let telegram_id = telegram_id.ok_or(Error::Missing)?;
+                let telegram_id = telegram_id.ok_or(Error::missing("telegram id"))?;
 
                 let mut args = FluentArgs::new();
                 args.set("userName", twitter_username);

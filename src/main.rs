@@ -249,8 +249,8 @@ pub enum Error {
     Bot(Cow<'static, str>),
     #[error("limit exceeded: {0}")]
     Limit(Cow<'static, str>),
-    #[error("essential data was missing")]
-    Missing,
+    #[error("essential data was missing: {0}")]
+    Missing(Cow<'static, str>),
 
     #[error("{message}")]
     UserMessage {
@@ -272,6 +272,13 @@ impl Error {
         M: Into<Cow<'static, str>>,
     {
         Self::Limit(name.into())
+    }
+
+    pub fn missing<M>(data: M) -> Self
+    where
+        M: Into<Cow<'static, str>>,
+    {
+        Self::Missing(data.into())
     }
 
     pub fn user_message<M>(message: M) -> Self
@@ -309,7 +316,7 @@ pub trait ErrorMetadata {
 
 impl ErrorMetadata for Error {
     fn is_retryable(&self) -> bool {
-        matches!(self, Error::Missing)
+        matches!(self, Error::Missing(_))
     }
 
     fn user_message(&self) -> Option<&str> {

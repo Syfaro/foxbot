@@ -20,15 +20,29 @@ use super::{
     Status::{self, *},
 };
 
-/// Telegram allows inline results up to 5MB.
+/// Maximum size of inline image before resizing.
 static MAX_IMAGE_SIZE: usize = 5_000_000;
+
+/// Maximum size of video allowed to be returned in inline result.
+static MAX_VIDEO_SIZE: i32 = 10_000_000;
 
 pub struct InlineHandler;
 
-#[derive(PartialEq)]
+#[derive(Clone)]
 pub enum ResultType {
     Ready,
     VideoToBeProcessed,
+    VideoTooLarge,
+}
+
+impl ResultType {
+    fn is_video(&self) -> bool {
+        matches!(self, Self::VideoToBeProcessed | Self::VideoTooLarge)
+    }
+
+    fn is_ready(&self) -> bool {
+        matches!(self, Self::Ready)
+    }
 }
 
 #[derive(Debug)]
@@ -48,7 +62,33 @@ impl InlineHandler {
 
         let video = models::Video::lookup_by_display_name(&cx.pool, display_name)
             .await?
-            .expect("missing video");
+            .ok_or_else(|| Error::missing("video missing for processing"))?;
+
+        if video.processed {
+            if let Some(video_url) = video.mp4_url {
+                tracing::debug!("already had video url, assuming large and sending");
+
+                let send_video = SendVideo {
+                    chat_id: message.chat_id(),
+                    video: FileType::Url(video_url.to_owned()),
+                    reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
+                        inline_keyboard: vec![vec![InlineKeyboardButton {
+                            text: "Source".to_owned(),
+                            url: Some(video.display_url.to_owned()),
+                            ..Default::default()
+                        }]],
+                    })),
+                    supports_streaming: Some(true),
+                    ..Default::default()
+                };
+
+                cx.make_request(&send_video).await?;
+
+                return Ok(());
+            } else {
+                tracing::warn!("video processed but no url");
+            }
+        }
 
         if video.job_id.is_none() {
             let job_id = cx
@@ -56,7 +96,7 @@ impl InlineHandler {
                 .start_video(&video.url, &video.display_name)
                 .await?;
 
-            models::Video::set_job_id(&cx.pool, video.id, job_id).await?;
+            models::Video::set_job_id(&cx.pool, video.id, &job_id).await?;
         }
 
         let lang = message
@@ -274,16 +314,16 @@ impl Handler for InlineHandler {
 
         // Check if we need to process any videos contained within the results.
         // These don't get returned as regular inline results.
-        let has_video: Option<InlineQueryResult> = responses
+        let has_video: Option<(ResultType, InlineQueryResult)> = responses
             .iter()
-            .find(|item| item.0 == ResultType::VideoToBeProcessed)
-            .map(|item| item.1.clone());
+            .find(|(result_type, _result)| result_type.is_video())
+            .map(|(result_type, result)| (result_type.clone(), result.clone()));
 
         // Get the rest of the ready results which should still be displayed.
         let cleaned_responses = responses
             .into_iter()
-            .filter(|item| item.0 == ResultType::Ready)
-            .map(|item| item.1)
+            .filter(|(result_type, _result)| result_type.is_ready())
+            .map(|(_result_type, result)| result)
             .collect();
 
         let mut answer_inline = AnswerInlineQuery {
@@ -310,11 +350,17 @@ impl Handler for InlineHandler {
 
         // If we had a video that needed to be processed, replace the switch pm
         // parameters to go and process that video.
-        if let Some(video) = has_video {
-            let process_text = utils::get_message(&bundle, "inline-process", None);
+        if let Some((result_type, result)) = has_video {
+            let text = match result_type {
+                ResultType::VideoToBeProcessed => {
+                    utils::get_message(&bundle, "inline-process", None)
+                }
+                ResultType::VideoTooLarge => "Get Large Video".to_string(),
+                _ => unreachable!("only video results should be found"),
+            };
 
-            answer_inline.switch_pm_text = Some(process_text);
-            answer_inline.switch_pm_parameter = Some(video.id);
+            answer_inline.switch_pm_text = Some(text);
+            answer_inline.switch_pm_parameter = Some(result.id);
         }
 
         cx.make_request(&answer_inline).await?;
@@ -337,7 +383,11 @@ async fn dispatch_event(
             display_name,
             video_url,
             thumb_url,
-        } => video_complete(&cx, &display_name, &video_url, &thumb_url).await?,
+            video_size,
+        } => video_complete(&cx, &display_name, &video_url, &thumb_url, video_size).await?,
+        CoconutEventJob::Failed { display_name } => {
+            tracing::warn!("got failed coconut job for {}", display_name);
+        }
     }
 
     Ok(())
@@ -349,7 +399,8 @@ async fn video_progress(cx: &Context, display_name: &str, progress: &str) -> Res
 
     let video = models::Video::lookup_by_display_name(&cx.pool, display_name)
         .await?
-        .ok_or(Error::Missing)?;
+        .ok_or(Error::missing("video for progress"))?;
+
     tracing::Span::current().record("video_id", &video.id);
     let messages = models::Video::associated_messages(&cx.pool, video.id).await?;
 
@@ -380,18 +431,23 @@ async fn video_complete(
     display_name: &str,
     video_url: &str,
     thumb_url: &str,
+    video_size: i32,
 ) -> Result<(), Error> {
     tracing::info!("video completed");
 
+    // Coconut only sends 100% progress as part of video.completed
+    video_progress(cx, display_name, "100%").await?;
+
     let video = models::Video::lookup_by_display_name(&cx.pool, display_name)
         .await?
-        .ok_or(Error::Missing)?;
+        .ok_or(Error::missing("video for complete"))?;
     tracing::Span::current().record("video_id", &video.id);
-    models::Video::set_processed_url(&cx.pool, video.id, video_url, thumb_url).await?;
+
+    models::Video::set_processed_url(&cx.pool, video.id, video_url, thumb_url, video_size).await?;
 
     let mut messages = models::Video::associated_messages(&cx.pool, video.id).await?;
 
-    tracing::debug!(count = messages.len(), "Found messages associated with job");
+    tracing::debug!(count = messages.len(), "found messages associated with job");
 
     let first = match messages.pop() {
         Some(msg) => msg,
@@ -406,21 +462,52 @@ async fn video_complete(
     // special case because afterwards all additional messages can be sent
     // the existing file ID instead of a new upload.
 
+    let video_is_large = video_size > MAX_VIDEO_SIZE;
+
+    if video_is_large {
+        let text = "Sorry, but this video is too large to send inline. I'll send you the video to forward instead.".to_owned();
+
+        let send_message = tgbotapi::requests::SendMessage {
+            chat_id: first.0.into(),
+            text,
+            disable_notification: Some(true),
+            ..Default::default()
+        };
+
+        cx.make_request(&send_message).await?;
+    }
+
     let action =
         utils::continuous_action(cx.bot.clone(), 6, first.0.into(), ChatAction::UploadVideo);
 
-    let send_video = SendVideo {
-        chat_id: first.0.into(),
-        video: FileType::Url(video_url.to_owned()),
-        reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
-            inline_keyboard: vec![vec![InlineKeyboardButton {
-                text: video_return_button.clone(),
-                switch_inline_query: Some(video.display_url.to_owned()),
-                ..Default::default()
-            }]],
-        })),
-        supports_streaming: Some(true),
-        ..Default::default()
+    let send_video = if video_is_large {
+        SendVideo {
+            chat_id: first.0.into(),
+            video: FileType::Url(video_url.to_owned()),
+            reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
+                inline_keyboard: vec![vec![InlineKeyboardButton {
+                    text: "Source".to_owned(),
+                    url: Some(video.display_url.to_owned()),
+                    ..Default::default()
+                }]],
+            })),
+            supports_streaming: Some(true),
+            ..Default::default()
+        }
+    } else {
+        SendVideo {
+            chat_id: first.0.into(),
+            video: FileType::Url(video_url.to_owned()),
+            reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
+                inline_keyboard: vec![vec![InlineKeyboardButton {
+                    text: video_return_button.clone(),
+                    switch_inline_query: Some(video.display_url.to_owned()),
+                    ..Default::default()
+                }]],
+            })),
+            supports_streaming: Some(true),
+            ..Default::default()
+        }
     };
 
     drop(action);
@@ -486,11 +573,11 @@ async fn video_complete(
         };
 
         if let Some(err) = request {
-            tracing::error!("Unable to send video: {:?}", err);
+            tracing::error!("unable to send video: {:?}", err);
         }
     }
 
-    tracing::debug!("Finished handling video");
+    tracing::debug!("finished handling video");
 
     Ok(())
 }
@@ -549,7 +636,7 @@ async fn process_result(
                 sites
                     .iter()
                     .find_map(|site| site.url_id(&source))
-                    .ok_or(Error::Missing)?
+                    .ok_or(Error::missing("site url_id"))?
             };
 
             let results =
@@ -826,6 +913,20 @@ async fn build_webm_result(
                 ResultType::VideoToBeProcessed,
                 InlineQueryResult::article(
                     format!("process-{}", video.display_name),
+                    "".into(),
+                    "".into(),
+                ),
+            )]);
+        }
+        Some(models::Video {
+            display_name,
+            file_size: Some(file_size),
+            ..
+        }) if file_size > MAX_VIDEO_SIZE => {
+            return Ok(vec![(
+                ResultType::VideoTooLarge,
+                InlineQueryResult::article(
+                    format!("process-{}", display_name),
                     "".into(),
                     "".into(),
                 ),

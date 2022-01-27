@@ -347,7 +347,7 @@ impl CommandHandler {
 
             utils::match_image(&cx.bot, &cx.redis, &cx.fuzzysearch, best_photo, Some(10)).await?
         } else {
-            let from = message.from.as_ref().ok_or(Error::Missing)?;
+            let from = message.from.as_ref().ok_or(Error::missing("user"))?;
 
             let links = utils::extract_links(message);
 

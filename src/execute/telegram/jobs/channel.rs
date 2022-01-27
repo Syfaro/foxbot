@@ -36,7 +36,7 @@ pub async fn process_channel_update(
         );
     }
 
-    let file = utils::find_best_photo(sizes).ok_or(Error::Missing)?;
+    let file = utils::find_best_photo(sizes).ok_or(Error::missing("channel update photo"))?;
     let (searched_hash, mut matches) =
         utils::match_image(&cx.bot, &cx.redis, &cx.fuzzysearch, file, Some(3)).await?;
 
