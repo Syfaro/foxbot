@@ -316,11 +316,12 @@ struct CoconutWebHookRequestQuery {
     name: String,
 }
 
+#[allow(dead_code)]
 #[derive(Deserialize)]
 #[serde(tag = "event", content = "data")]
 enum CoconutWebHook {
     #[serde(rename = "input.transferred")]
-    InputTransferred,
+    InputTransferred { progress: String },
     #[serde(rename = "output.completed")]
     OutputCompleted { progress: String },
     #[serde(rename = "job.completed")]
@@ -365,12 +366,25 @@ enum CoconutOutputFile {
 
 #[derive(Deserialize)]
 struct CoconutMetadata {
+    streams: Vec<CoconutMetadataStream>,
     format: CoconutMetadataFormat,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "codec_name")]
+enum CoconutMetadataStream {
+    #[serde(rename = "h264")]
+    H264 { height: i32, width: i32 },
+    #[serde(rename = "vp9")]
+    Vp9,
+    #[serde(rename = "aac")]
+    Aac,
 }
 
 #[derive(Deserialize)]
 struct CoconutMetadataFormat {
     size: String,
+    duration: String,
 }
 
 const COCONUT_FORMATS: &[&str] = &["mp4:1080p", "mp4:720p", "mp4:480p", "mp4:360p"];
@@ -416,38 +430,62 @@ async fn coconut_webhook(
                 .ok_or_else(|| actix_web::error::ErrorBadRequest("missing thumbnail"))?
                 .to_owned();
 
-            let mut video_formats: HashMap<String, (String, String)> = outputs
+            let mut video_formats: HashMap<
+                String,
+                (String, String, String, Vec<CoconutMetadataStream>),
+            > = outputs
                 .into_iter()
                 .filter_map(|output| match output.status {
                     CoconutOutputStatus::VideoEncoded {
                         file: CoconutOutputFile::Video { url, metadata },
-                    } => Some((output.key, (url, metadata.format.size))),
+                    } => Some((
+                        output.key,
+                        (
+                            url,
+                            metadata.format.size,
+                            metadata.format.duration,
+                            metadata.streams,
+                        ),
+                    )),
                     _ => None,
                 })
                 .collect();
 
-            let mut url = None;
+            let mut video_data = None;
 
             for format in COCONUT_FORMATS {
                 if let Some(data) = video_formats.remove(*format) {
-                    url = Some(data);
+                    video_data = Some(data);
                     break;
                 }
             }
 
-            let (video_url, video_size) =
-                url.ok_or_else(|| actix_web::error::ErrorBadRequest("no known video formats"))?;
+            let (video_url, video_size, video_duration, streams) = video_data
+                .ok_or_else(|| actix_web::error::ErrorBadRequest("no known video formats"))?;
 
             let video_size = video_size.parse().unwrap_or(i32::MAX);
+
+            let duration = video_duration.parse::<f32>().unwrap_or_default().ceil() as i32;
+
+            let dimensions = streams
+                .into_iter()
+                .find_map(|stream| match stream {
+                    CoconutMetadataStream::H264 { height, width } => Some((height, width)),
+                    _ => None,
+                })
+                .ok_or_else(|| actix_web::error::ErrorBadRequest("no known streams"))?;
 
             Some(CoconutEventJob::Completed {
                 display_name,
                 thumb_url,
                 video_url,
                 video_size,
+                duration,
+                height: dimensions.0,
+                width: dimensions.1,
             })
         }
-        CoconutWebHook::InputTransferred => None,
+        CoconutWebHook::InputTransferred { .. } => None,
     };
 
     tracing::info!("computed event: {:?}", job);

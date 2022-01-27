@@ -663,6 +663,9 @@ pub struct Video {
     pub display_url: String,
     pub created_at: chrono::NaiveDateTime,
     pub file_size: Option<i32>,
+    pub height: Option<i32>,
+    pub width: Option<i32>,
+    pub duration: Option<i32>,
 }
 
 impl Video {
@@ -730,13 +733,17 @@ impl Video {
         mp4_url: &str,
         thumb_url: &str,
         file_size: i32,
+        height: i32,
+        width: i32,
     ) -> Result<(), Error> {
         sqlx::query_file!(
             "queries/video/set_processed_url.sql",
             id,
             mp4_url,
             thumb_url,
-            file_size
+            file_size,
+            height,
+            width
         )
         .execute(executor)
         .await?;
