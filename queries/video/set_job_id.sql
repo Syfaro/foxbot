@@ -1,5 +1,5 @@
 UPDATE
-    videos
+    video
 SET
     job_id = $2
 WHERE

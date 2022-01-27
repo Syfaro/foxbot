@@ -144,6 +144,7 @@ struct Context {
     fuzzysearch: std::sync::Arc<fuzzysearch::FuzzySearch>,
 }
 
+#[allow(clippy::single_match)]
 #[tracing::instrument(err, skip(event, ctx))]
 async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
     tracing::trace!("Got event: {:?}", event);

@@ -512,7 +512,7 @@ pub fn chat_from_update(update: &tgbotapi::Update) -> Option<&tgbotapi::Chat> {
 pub fn get_message(bundle: &Bundle, id: &str, args: Option<FluentArgs>) -> String {
     let msg = bundle
         .get_message(id)
-        .ok_or(Error::Missing)
+        .ok_or_else(|| Error::missing("message"))
         .expect("message doesn't exist");
 
     let pattern = msg.value().expect("message has no value");

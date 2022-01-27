@@ -1,6 +1,6 @@
 SELECT
     *
 FROM
-    videos
+    video
 WHERE
     display_name = $1;

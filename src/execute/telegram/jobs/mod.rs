@@ -264,6 +264,13 @@ pub enum CoconutEventJob {
         display_name: String,
         video_url: String,
         thumb_url: String,
+        video_size: i32,
+        duration: i32,
+        height: i32,
+        width: i32,
+    },
+    Failed {
+        display_name: String,
     },
 }
 

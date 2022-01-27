@@ -20,18 +20,33 @@ use super::{
     Status::{self, *},
 };
 
-/// Telegram allows inline results up to 5MB.
+/// Maximum size of inline image before resizing.
 static MAX_IMAGE_SIZE: usize = 5_000_000;
+
+/// Maximum size of video allowed to be returned in inline result.
+static MAX_VIDEO_SIZE: i32 = 10_000_000;
 
 pub struct InlineHandler;
 
-#[derive(PartialEq)]
+#[derive(Clone)]
 pub enum ResultType {
     Ready,
     VideoToBeProcessed,
+    VideoTooLarge,
 }
 
-#[derive(Debug)]
+impl ResultType {
+    fn is_video(&self) -> bool {
+        matches!(self, Self::VideoToBeProcessed | Self::VideoTooLarge)
+    }
+
+    fn is_ready(&self) -> bool {
+        matches!(self, Self::Ready)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 enum SentAs {
     Video(String),
     Animation(String),
@@ -48,7 +63,73 @@ impl InlineHandler {
 
         let video = models::Video::lookup_by_display_name(&cx.pool, display_name)
             .await?
-            .expect("missing video");
+            .ok_or_else(|| Error::missing("video missing for processing"))?;
+
+        let bundle = cx.get_fluent_bundle(message).await;
+
+        if video.processed {
+            if let Some(video_url) = video.mp4_url {
+                tracing::debug!("already had video url, assuming large and sending");
+
+                let text = utils::get_message(&bundle, "inline-source", None);
+
+                let reply_markup = ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
+                    inline_keyboard: vec![vec![InlineKeyboardButton {
+                        text,
+                        url: Some(video.display_url.to_owned()),
+                        ..Default::default()
+                    }]],
+                });
+
+                if let Ok(Some(sent_as)) = get_cached_video(&cx.redis, display_name).await {
+                    if send_previous_video(
+                        cx,
+                        &sent_as,
+                        message.chat_id(),
+                        reply_markup.clone(),
+                        video.height.unwrap_or_default(),
+                        video.width.unwrap_or_default(),
+                        video.duration.unwrap_or_default(),
+                    )
+                    .await
+                    .is_ok()
+                    {
+                        return Ok(());
+                    }
+                }
+
+                let action = utils::continuous_action(
+                    cx.bot.clone(),
+                    10,
+                    message.chat_id(),
+                    ChatAction::UploadVideo,
+                );
+
+                let data = reqwest::get(video_url).await?.bytes().await?;
+
+                let send_video = SendVideo {
+                    chat_id: message.chat_id(),
+                    video: FileType::Bytes(format!("{}.mp4", video.display_name), data.to_vec()),
+                    reply_markup: Some(reply_markup),
+                    height: video.height,
+                    width: video.width,
+                    duration: video.duration,
+                    supports_streaming: Some(true),
+                    ..Default::default()
+                };
+
+                let message = cx.make_request(&send_video).await?;
+                if let Some(sent_as) = find_sent_as(&message) {
+                    cache_video(&cx.redis, display_name, &sent_as).await?;
+                }
+
+                drop(action);
+
+                return Ok(());
+            } else {
+                tracing::warn!("video processed but no url");
+            }
+        }
 
         if video.job_id.is_none() {
             let job_id = cx
@@ -56,15 +137,8 @@ impl InlineHandler {
                 .start_video(&video.url, &video.display_name)
                 .await?;
 
-            models::Video::set_job_id(&cx.pool, video.id, job_id).await?;
+            models::Video::set_job_id(&cx.pool, video.id, &job_id).await?;
         }
-
-        let lang = message
-            .from
-            .as_ref()
-            .and_then(|from| from.language_code.as_deref());
-
-        let bundle = cx.get_fluent_bundle(lang).await;
 
         let video_starting = utils::get_message(&bundle, "video-starting", None);
 
@@ -274,16 +348,16 @@ impl Handler for InlineHandler {
 
         // Check if we need to process any videos contained within the results.
         // These don't get returned as regular inline results.
-        let has_video: Option<InlineQueryResult> = responses
+        let has_video: Option<(ResultType, InlineQueryResult)> = responses
             .iter()
-            .find(|item| item.0 == ResultType::VideoToBeProcessed)
-            .map(|item| item.1.clone());
+            .find(|(result_type, _result)| result_type.is_video())
+            .map(|(result_type, result)| (result_type.clone(), result.clone()));
 
         // Get the rest of the ready results which should still be displayed.
         let cleaned_responses = responses
             .into_iter()
-            .filter(|item| item.0 == ResultType::Ready)
-            .map(|item| item.1)
+            .filter(|(result_type, _result)| result_type.is_ready())
+            .map(|(_result_type, result)| result)
             .collect();
 
         let mut answer_inline = AnswerInlineQuery {
@@ -310,11 +384,19 @@ impl Handler for InlineHandler {
 
         // If we had a video that needed to be processed, replace the switch pm
         // parameters to go and process that video.
-        if let Some(video) = has_video {
-            let process_text = utils::get_message(&bundle, "inline-process", None);
+        if let Some((result_type, result)) = has_video {
+            let text = match result_type {
+                ResultType::VideoToBeProcessed => {
+                    utils::get_message(&bundle, "inline-process", None)
+                }
+                ResultType::VideoTooLarge => {
+                    utils::get_message(&bundle, "inline-large-video", None)
+                }
+                _ => unreachable!("only video results should be found"),
+            };
 
-            answer_inline.switch_pm_text = Some(process_text);
-            answer_inline.switch_pm_parameter = Some(video.id);
+            answer_inline.switch_pm_text = Some(text);
+            answer_inline.switch_pm_parameter = Some(result.id);
         }
 
         cx.make_request(&answer_inline).await?;
@@ -337,39 +419,67 @@ async fn dispatch_event(
             display_name,
             video_url,
             thumb_url,
-        } => video_complete(&cx, &display_name, &video_url, &thumb_url).await?,
+            video_size,
+            height,
+            width,
+            duration,
+        } => {
+            video_complete(
+                &cx,
+                &display_name,
+                &video_url,
+                &thumb_url,
+                video_size,
+                height,
+                width,
+                duration,
+            )
+            .await?
+        }
+        CoconutEventJob::Failed { display_name } => {
+            tracing::warn!("got failed coconut job for {}", display_name);
+        }
     }
 
     Ok(())
 }
 
-#[tracing::instrument(skip(cx), fields(video_id))]
-async fn video_progress(cx: &Context, display_name: &str, progress: &str) -> Result<(), Error> {
-    tracing::info!("got video progress");
+async fn send_video_progress(cx: &Context, display_name: &str, message: &str) -> Result<(), Error> {
+    tracing::info!("sending video progress");
 
     let video = models::Video::lookup_by_display_name(&cx.pool, display_name)
         .await?
-        .ok_or(Error::Missing)?;
-    tracing::Span::current().record("video_id", &video.id);
+        .ok_or_else(|| Error::missing("video for progress"))?;
+
     let messages = models::Video::associated_messages(&cx.pool, video.id).await?;
+
+    for (chat_id, message_id) in messages {
+        let edit_message = EditMessageText {
+            chat_id: chat_id.into(),
+            message_id: Some(message_id),
+            text: message.to_owned(),
+            ..Default::default()
+        };
+
+        if let Err(err) = cx.make_request(&edit_message).await {
+            tracing::error!("could not send video progress message: {}", err);
+        }
+    }
+
+    Ok(())
+}
+
+async fn video_progress(cx: &Context, display_name: &str, progress: &str) -> Result<(), Error> {
+    tracing::info!("got video progress");
 
     let bundle = cx.get_fluent_bundle(None).await;
 
     let mut args = FluentArgs::new();
     args.set("percent", progress.to_string());
 
-    let msg = utils::get_message(&bundle, "video-progress", Some(args));
+    let message = utils::get_message(&bundle, "video-progress", Some(args));
 
-    for message in messages {
-        let edit_message = EditMessageText {
-            chat_id: message.0.into(),
-            message_id: Some(message.1),
-            text: msg.clone(),
-            ..Default::default()
-        };
-
-        cx.make_request(&edit_message).await?;
-    }
+    send_video_progress(cx, display_name, &message).await?;
 
     Ok(())
 }
@@ -380,18 +490,29 @@ async fn video_complete(
     display_name: &str,
     video_url: &str,
     thumb_url: &str,
+    video_size: i32,
+    height: i32,
+    width: i32,
+    duration: i32,
 ) -> Result<(), Error> {
     tracing::info!("video completed");
 
+    // Coconut only sends 100% progress as part of video.completed
+    video_progress(cx, display_name, "100%").await?;
+
     let video = models::Video::lookup_by_display_name(&cx.pool, display_name)
         .await?
-        .ok_or(Error::Missing)?;
+        .ok_or_else(|| Error::missing("video for complete"))?;
     tracing::Span::current().record("video_id", &video.id);
-    models::Video::set_processed_url(&cx.pool, video.id, video_url, thumb_url).await?;
+
+    models::Video::set_processed_url(
+        &cx.pool, video.id, video_url, thumb_url, video_size, height, width,
+    )
+    .await?;
 
     let mut messages = models::Video::associated_messages(&cx.pool, video.id).await?;
 
-    tracing::debug!(count = messages.len(), "Found messages associated with job");
+    tracing::debug!(count = messages.len(), "found messages associated with job");
 
     let first = match messages.pop() {
         Some(msg) => msg,
@@ -400,31 +521,70 @@ async fn video_complete(
 
     let bundle = cx.get_fluent_bundle(None).await;
 
+    let video_too_large = utils::get_message(&bundle, "video-too-large", None);
+    let video_source_button = utils::get_message(&bundle, "inline-source", None);
     let video_return_button = utils::get_message(&bundle, "video-return-button", None);
 
     // First, we should handle one message to upload the file. This is a
     // special case because afterwards all additional messages can be sent
     // the existing file ID instead of a new upload.
 
+    let video_is_large = video_size > MAX_VIDEO_SIZE;
+
+    if video_is_large {
+        let send_message = tgbotapi::requests::SendMessage {
+            chat_id: first.0.into(),
+            text: video_too_large.clone(),
+            disable_notification: Some(true),
+            ..Default::default()
+        };
+
+        cx.make_request(&send_message).await?;
+    }
+
     let action =
         utils::continuous_action(cx.bot.clone(), 6, first.0.into(), ChatAction::UploadVideo);
 
-    let send_video = SendVideo {
-        chat_id: first.0.into(),
-        video: FileType::Url(video_url.to_owned()),
-        reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
-            inline_keyboard: vec![vec![InlineKeyboardButton {
-                text: video_return_button.clone(),
-                switch_inline_query: Some(video.display_url.to_owned()),
-                ..Default::default()
-            }]],
-        })),
-        supports_streaming: Some(true),
-        ..Default::default()
+    let data = reqwest::get(video_url).await?.bytes().await?;
+
+    let send_video = if video_is_large {
+        SendVideo {
+            chat_id: first.0.into(),
+            video: FileType::Bytes(format!("{}.mp4", display_name), data.to_vec()),
+            reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
+                inline_keyboard: vec![vec![InlineKeyboardButton {
+                    text: video_source_button.clone(),
+                    url: Some(video.display_url.to_owned()),
+                    ..Default::default()
+                }]],
+            })),
+            supports_streaming: Some(true),
+            height: Some(height),
+            width: Some(width),
+            duration: Some(duration),
+            ..Default::default()
+        }
+    } else {
+        SendVideo {
+            chat_id: first.0.into(),
+            video: FileType::Bytes(format!("{}.mp4", display_name), data.to_vec()),
+            reply_markup: Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
+                inline_keyboard: vec![vec![InlineKeyboardButton {
+                    text: video_return_button.clone(),
+                    switch_inline_query: Some(video.display_url.to_owned()),
+                    ..Default::default()
+                }]],
+            })),
+            supports_streaming: Some(true),
+            height: Some(height),
+            width: Some(width),
+            duration: Some(duration),
+            ..Default::default()
+        }
     };
 
-    drop(action);
     let message = cx.make_request(&send_video).await?;
+    drop(action);
 
     if messages.is_empty() {
         return Ok(());
@@ -433,64 +593,61 @@ async fn video_complete(
     // Now that we've sent the first message, send each additional message
     // with the returned video ID.
 
-    let file = if let Some(video) = message.video {
-        SentAs::Video(video.file_id)
-    } else if let Some(animation) = message.animation {
-        SentAs::Animation(animation.file_id)
-    } else if let Some(document) = message.document {
-        SentAs::Document(document.file_id)
+    let sent_as = find_sent_as(&message)
+        .ok_or_else(|| Error::bot("sent video was missing all known file id types"))?;
+
+    cache_video(&cx.redis, display_name, &sent_as).await?;
+
+    tracing::debug!(?sent_as, "sent video, reusing for additional messages");
+
+    let button = if video_is_large {
+        InlineKeyboardButton {
+            text: video_source_button.clone(),
+            url: Some(video.display_url.clone()),
+            ..Default::default()
+        }
     } else {
-        return Err(Error::bot("sent video was missing all known file ids"));
-    };
-
-    tracing::debug!(?file, "sent video, reusing for additional messages");
-
-    let reply_markup = Some(ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
-        inline_keyboard: vec![vec![InlineKeyboardButton {
+        InlineKeyboardButton {
             text: video_return_button.clone(),
             switch_inline_query: Some(video.display_url.to_owned()),
             ..Default::default()
-        }]],
-    }));
+        }
+    };
+
+    let reply_markup = ReplyMarkup::InlineKeyboardMarkup(InlineKeyboardMarkup {
+        inline_keyboard: vec![vec![button]],
+    });
 
     for message in messages {
-        let request: Option<tgbotapi::Error> = match file {
-            SentAs::Video(ref file_id) => {
-                let send_video = SendVideo {
-                    chat_id: message.0.into(),
-                    video: FileType::FileID(file_id.clone()),
-                    reply_markup: reply_markup.clone(),
-                    supports_streaming: Some(true),
-                    ..Default::default()
-                };
-                cx.make_request(&send_video).await.err()
-            }
-            SentAs::Animation(ref file_id) => {
-                let send_animation = SendAnimation {
-                    chat_id: message.0.into(),
-                    animation: FileType::FileID(file_id.clone()),
-                    reply_markup: reply_markup.clone(),
-                    ..Default::default()
-                };
-                cx.make_request(&send_animation).await.err()
-            }
-            SentAs::Document(ref file_id) => {
-                let send_document = SendDocument {
-                    chat_id: message.0.into(),
-                    document: FileType::FileID(file_id.clone()),
-                    reply_markup: reply_markup.clone(),
-                    ..Default::default()
-                };
-                cx.make_request(&send_document).await.err()
-            }
-        };
+        if video_is_large {
+            let send_message = SendMessage {
+                chat_id: message.0.into(),
+                text: video_too_large.clone(),
+                disable_notification: Some(true),
+                ..Default::default()
+            };
 
-        if let Some(err) = request {
-            tracing::error!("Unable to send video: {:?}", err);
+            if let Err(err) = cx.make_request(&send_message).await {
+                tracing::error!("could not send too large message: {}", err);
+            }
+        }
+
+        if let Err(err) = send_previous_video(
+            cx,
+            &sent_as,
+            message.0.into(),
+            reply_markup.clone(),
+            height,
+            width,
+            duration,
+        )
+        .await
+        {
+            tracing::error!("unable to send video: {:?}", err);
         }
     }
 
-    tracing::debug!("Finished handling video");
+    tracing::debug!("finished handling video");
 
     Ok(())
 }
@@ -549,7 +706,7 @@ async fn process_result(
                 sites
                     .iter()
                     .find_map(|site| site.url_id(&source))
-                    .ok_or(Error::Missing)?
+                    .ok_or_else(|| Error::missing("site url_id"))?
             };
 
             let results =
@@ -831,37 +988,51 @@ async fn build_webm_result(
                 ),
             )]);
         }
+        Some(models::Video {
+            display_name,
+            file_size: Some(file_size),
+            ..
+        }) if file_size > MAX_VIDEO_SIZE => {
+            return Ok(vec![(
+                ResultType::VideoTooLarge,
+                InlineQueryResult::article(
+                    format!("process-{}", display_name),
+                    "".into(),
+                    "".into(),
+                ),
+            )]);
+        }
         Some(video) => video,
     };
 
     let full_url = video.mp4_url.unwrap();
 
-    let mut video = InlineQueryResult::video(
-        utils::generate_id(),
+    let mut video_result = InlineQueryResult::video(
+        video.display_name.clone(),
         full_url.to_owned(),
         "video/mp4".to_owned(),
         thumb_url.to_owned(),
         result.url.clone(),
     );
-    video.reply_markup = Some(keyboard.clone());
+    video_result.reply_markup = Some(keyboard.clone());
 
-    let mut results = vec![(ResultType::Ready, video)];
+    let mut results = vec![(ResultType::Ready, video_result)];
 
     if let Some(message) = &result.extra_caption {
-        let mut video = InlineQueryResult::video(
-            utils::generate_id(),
+        let mut video_result = InlineQueryResult::video(
+            video.display_name,
             full_url,
             "video/mp4".to_owned(),
             thumb_url,
             result.url.clone(),
         );
-        video.reply_markup = Some(keyboard.clone());
+        video_result.reply_markup = Some(keyboard.clone());
 
-        if let InlineQueryType::Video(ref mut result) = video.content {
+        if let InlineQueryType::Video(ref mut result) = video_result.content {
             result.caption = Some(message.to_string());
         }
 
-        results.push((ResultType::Ready, video));
+        results.push((ResultType::Ready, video_result));
     };
 
     Ok(results)
@@ -923,4 +1094,95 @@ fn build_gif_result(
     };
 
     results
+}
+
+#[allow(clippy::manual_map)]
+fn find_sent_as(message: &tgbotapi::Message) -> Option<SentAs> {
+    if let Some(video) = &message.video {
+        Some(SentAs::Video(video.file_id.clone()))
+    } else if let Some(animation) = &message.animation {
+        Some(SentAs::Animation(animation.file_id.clone()))
+    } else if let Some(document) = &message.document {
+        Some(SentAs::Document(document.file_id.clone()))
+    } else {
+        None
+    }
+}
+
+async fn cache_video(
+    redis: &redis::aio::ConnectionManager,
+    display_name: &str,
+    sent_as: &SentAs,
+) -> Result<(), Error> {
+    let mut redis = redis.clone();
+
+    let data = serde_json::to_vec(sent_as)?;
+    redis
+        .set_ex(format!("video:{}", display_name), data, 60 * 60 * 24)
+        .await?;
+
+    Ok(())
+}
+
+async fn send_previous_video(
+    cx: &Context,
+    sent_as: &SentAs,
+    chat_id: ChatID,
+    reply_markup: tgbotapi::requests::ReplyMarkup,
+    height: i32,
+    width: i32,
+    duration: i32,
+) -> Result<(), tgbotapi::Error> {
+    let resp = match sent_as {
+        SentAs::Video(ref file_id) => {
+            let send_video = SendVideo {
+                chat_id,
+                video: FileType::FileID(file_id.clone()),
+                reply_markup: Some(reply_markup.clone()),
+                supports_streaming: Some(true),
+                height: Some(height),
+                width: Some(width),
+                duration: Some(duration),
+                ..Default::default()
+            };
+
+            cx.make_request(&send_video).await
+        }
+        SentAs::Animation(ref file_id) => {
+            let send_animation = SendAnimation {
+                chat_id,
+                animation: FileType::FileID(file_id.clone()),
+                reply_markup: Some(reply_markup.clone()),
+                height: Some(height),
+                width: Some(width),
+                duration: Some(duration),
+                ..Default::default()
+            };
+
+            cx.make_request(&send_animation).await
+        }
+        SentAs::Document(ref file_id) => {
+            let send_document = SendDocument {
+                chat_id,
+                document: FileType::FileID(file_id.clone()),
+                reply_markup: Some(reply_markup.clone()),
+                ..Default::default()
+            };
+
+            cx.make_request(&send_document).await
+        }
+    };
+
+    resp.map(|_message| ())
+}
+
+async fn get_cached_video(
+    redis: &redis::aio::ConnectionManager,
+    display_name: &str,
+) -> Result<Option<SentAs>, Error> {
+    let mut redis = redis.clone();
+
+    let data: Option<Vec<u8>> = redis.get(format!("video:{}", display_name)).await?;
+
+    Ok(data.and_then(|data| serde_json::from_slice(&data).ok()))
 }
