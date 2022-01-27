@@ -5,6 +5,9 @@ name = "foxbot"
 publish = false
 version = "0.7.0"
 
+[package.metadata.release]
+sign-tag = true
+
 [features]
 env = ["dotenv"]
 
