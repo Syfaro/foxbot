@@ -633,7 +633,7 @@ async fn video_complete(
         }
 
         if let Err(err) = send_previous_video(
-            &cx,
+            cx,
             &sent_as,
             message.0.into(),
             reply_markup.clone(),
@@ -1096,6 +1096,7 @@ fn build_gif_result(
     results
 }
 
+#[allow(clippy::manual_map)]
 fn find_sent_as(message: &tgbotapi::Message) -> Option<SentAs> {
     if let Some(video) = &message.video {
         Some(SentAs::Video(video.file_id.clone()))

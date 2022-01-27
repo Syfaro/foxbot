@@ -27,6 +27,7 @@ pub enum User {
 }
 
 impl User {
+    #[allow(clippy::manual_map)]
     pub fn from_one(telegram_id: Option<i64>, discord_id: Option<BigDecimal>) -> Option<Self> {
         if let Some(id) = telegram_id {
             Some(Self::Telegram(id))
