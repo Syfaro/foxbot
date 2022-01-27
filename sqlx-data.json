@@ -383,6 +383,23 @@
       ]
     }
   },
+  "5d1591229aaa5d421ccff6a9048c98a5daee62206f0de987d7cc9ab39a28d019": {
+    "query": "UPDATE\n    video\nSET\n    processed = true,\n    mp4_url = $2,\n    thumb_url = $3,\n    file_size = $4,\n    height = $5,\n    width = $6\nWHERE\n    id = $1;\n",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int4",
+          "Text",
+          "Text",
+          "Int4",
+          "Int4",
+          "Int4"
+        ]
+      },
+      "nullable": []
+    }
+  },
   "5e7c827d28f612561908b4bde50b77a5edfb4e421d024ca1f139c06e38c30f02": {
     "query": "DELETE FROM\n    chat_administrator\nWHERE\n    chat_id = lookup_chat_by_telegram_id($1)\n    AND account_id <> lookup_account_by_telegram_id($2);\n",
     "describe": {
@@ -485,21 +502,6 @@
       "parameters": {
         "Left": [
           "Int4",
-          "Int4"
-        ]
-      },
-      "nullable": []
-    }
-  },
-  "84819440cc07ba79645c12cc641981e6a545af5ff13213bfd374a668f0cd1555": {
-    "query": "UPDATE\n    video\nSET\n    processed = true,\n    mp4_url = $2,\n    thumb_url = $3,\n    file_size = $4\nWHERE\n    id = $1;\n",
-    "describe": {
-      "columns": [],
-      "parameters": {
-        "Left": [
-          "Int4",
-          "Text",
-          "Text",
           "Int4"
         ]
       },
@@ -622,6 +624,21 @@
           "ordinal": 10,
           "name": "file_size",
           "type_info": "Int4"
+        },
+        {
+          "ordinal": 11,
+          "name": "height",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 12,
+          "name": "width",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 13,
+          "name": "duration",
+          "type_info": "Int4"
         }
       ],
       "parameters": {
@@ -640,6 +657,9 @@
         true,
         false,
         false,
+        true,
+        true,
+        true,
         true
       ]
     }
@@ -803,6 +823,21 @@
           "ordinal": 10,
           "name": "file_size",
           "type_info": "Int4"
+        },
+        {
+          "ordinal": 11,
+          "name": "height",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 12,
+          "name": "width",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 13,
+          "name": "duration",
+          "type_info": "Int4"
         }
       ],
       "parameters": {
@@ -821,6 +856,9 @@
         true,
         false,
         false,
+        true,
+        true,
+        true,
         true
       ]
     }
