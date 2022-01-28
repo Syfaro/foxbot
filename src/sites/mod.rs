@@ -524,6 +524,35 @@ pub struct Twitter {
     conn: sqlx::Pool<sqlx::Postgres>,
 }
 
+impl Twitter {
+    fn update_error(err: egg_mode::error::Error) -> Error {
+        match &err {
+            egg_mode::error::Error::TwitterError(_headers, twitter_errors) => {
+                let codes: std::collections::HashSet<i32> = twitter_errors
+                    .errors
+                    .iter()
+                    .map(|error| error.code)
+                    .collect();
+
+                if codes.contains(&34)
+                    || codes.contains(&144)
+                    || codes.contains(&421)
+                    || codes.contains(&422)
+                {
+                    return Error::user_message_with_error("Tweet not found", err);
+                } else if codes.contains(&50) || codes.contains(&63) {
+                    return Error::user_message_with_error("Twitter user not found", err);
+                } else if codes.contains(&179) {
+                    return Error::user_message_with_error("Tweet is from locked account", err);
+                }
+            }
+            err => tracing::error!("got unknown twitter error: {:?}", err),
+        }
+
+        Error::user_message_with_error("Twitter returned unknown data", err)
+    }
+}
+
 struct TwitterData {
     user: Box<egg_mode::user::TwitterUser>,
     media: Vec<egg_mode::entities::MediaEntity>,
@@ -563,40 +592,7 @@ impl Twitter {
         if let Some(Ok(id)) = captures.name("id").map(|id| id.as_str().parse::<u64>()) {
             let tweet = egg_mode::tweet::show(id, token)
                 .await
-                .map_err(|err| {
-                    match &err {
-                        egg_mode::error::Error::TwitterError(_headers, twitter_errors) => {
-                            let codes: std::collections::HashSet<i32> = twitter_errors
-                                .errors
-                                .iter()
-                                .map(|error| error.code)
-                                .collect();
-
-                            tracing::warn!("got twitter error codes: {:?}", codes);
-
-                            if codes.contains(&34)
-                                || codes.contains(&144)
-                                || codes.contains(&421)
-                                || codes.contains(&422)
-                            {
-                                return Error::user_message_with_error("Tweet not found", err);
-                            } else if codes.contains(&50) || codes.contains(&63) {
-                                return Error::user_message_with_error(
-                                    "Twitter user not found",
-                                    err,
-                                );
-                            } else if codes.contains(&179) {
-                                return Error::user_message_with_error(
-                                    "Tweet is from locked account",
-                                    err,
-                                );
-                            }
-                        }
-                        err => tracing::warn!("got unknown twitter error: {:?}", err),
-                    }
-
-                    Error::user_message_with_error("Twitter returned unknown data", err)
-                })?
+                .map_err(Self::update_error)?
                 .response;
 
             let user = match tweet.user {
@@ -624,7 +620,7 @@ impl Twitter {
             let user = captures["screen_name"].to_owned();
             let timeline =
                 egg_mode::tweet::user_timeline(user, false, false, token).with_page_size(200);
-            let (_timeline, feed) = timeline.start().await?;
+            let (_timeline, feed) = timeline.start().await.map_err(Self::update_error)?;
 
             let first_tweet = match feed.iter().next() {
                 Some(tweet) => tweet,

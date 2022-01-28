@@ -369,7 +369,7 @@ pub async fn resize_photo(url: &str, max_size: u64) -> Result<tgbotapi::FileType
 /// After a site reports it supports a URL, no other sites are attempted for
 /// that URL. When complete, it returns the URLs that appeared to contain no
 /// content.
-#[tracing::instrument(err, skip(user, sites, redis, callback))]
+#[tracing::instrument(skip(user, sites, redis, callback))]
 pub async fn find_images<'a, C, U: Into<User>>(
     user: U,
     links: Vec<&'a str>,

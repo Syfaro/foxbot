@@ -638,7 +638,11 @@ async fn process_update(cx: &Context, update: tgbotapi::Update) -> Result<(), Er
                 handler_duration.stop_and_record();
                 HANDLER_ERRORS.with_label_values(&[handler.name()]).inc();
 
-                tracing::error!(handled_by = handler.name(), "handler error: {:?}", err);
+                if matches!(err, Error::UserMessage { .. }) {
+                    tracing::warn!(handled_by = handler.name(), "user error: {:?}", err);
+                } else {
+                    tracing::error!(handled_by = handler.name(), "handler error: {:?}", err);
+                }
 
                 let mut tags = vec![("handler", handler.name().to_string())];
                 if let Some(chat) = chat {

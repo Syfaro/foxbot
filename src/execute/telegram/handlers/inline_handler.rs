@@ -299,6 +299,8 @@ impl Handler for InlineHandler {
                     message.to_owned().to_string(),
                 )
             } else {
+                tracing::error!("got non-displayable error message: {:?}", err);
+
                 InlineQueryResult::article(
                     utils::generate_id(),
                     "Error".into(),
@@ -314,7 +316,7 @@ impl Handler for InlineHandler {
 
             cx.make_request(&answer_inline).await?;
 
-            return Err(err);
+            return Ok(Completed);
         }
 
         let is_personal = results.iter().any(|result| result.personal);
