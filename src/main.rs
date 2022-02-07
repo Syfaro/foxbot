@@ -205,6 +205,10 @@ pub struct TelegramConfig {
     /// Number of workers to process jobs.
     #[clap(long, env, default_value = "2")]
     pub worker_threads: usize,
+
+    /// If this worker instance should only run high priority updates.
+    #[clap(long, env)]
+    pub high_priority: bool,
 }
 
 #[derive(Clone, Debug, Parser)]
