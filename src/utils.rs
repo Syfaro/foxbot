@@ -369,7 +369,7 @@ pub async fn resize_photo(url: &str, max_size: u64) -> Result<tgbotapi::FileType
 /// After a site reports it supports a URL, no other sites are attempted for
 /// that URL. When complete, it returns the URLs that appeared to contain no
 /// content.
-#[tracing::instrument(err, skip(user, sites, redis, callback))]
+#[tracing::instrument(skip(user, sites, redis, callback))]
 pub async fn find_images<'a, C, U: Into<User>>(
     user: U,
     links: Vec<&'a str>,
@@ -512,7 +512,7 @@ pub fn chat_from_update(update: &tgbotapi::Update) -> Option<&tgbotapi::Chat> {
 pub fn get_message(bundle: &Bundle, id: &str, args: Option<FluentArgs>) -> String {
     let msg = bundle
         .get_message(id)
-        .ok_or(Error::Missing)
+        .ok_or_else(|| Error::missing("message"))
         .expect("message doesn't exist");
 
     let pattern = msg.value().expect("message has no value");
@@ -767,7 +767,7 @@ pub async fn match_image(
 pub async fn sort_results<U: Into<User>>(
     conn: &sqlx::Pool<sqlx::Postgres>,
     user: U,
-    results: &mut Vec<fuzzysearch::File>,
+    results: &mut [fuzzysearch::File],
 ) -> Result<(), Error> {
     // If we have 1 or fewer items, we don't need to do any sorting.
     if results.len() <= 1 {

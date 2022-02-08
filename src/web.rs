@@ -247,7 +247,8 @@ async fn verify_twitter_account(
         None => return Ok(None),
     };
 
-    let user = models::User::from_one(auth.telegram_id, auth.discord_id).ok_or(Error::Missing)?;
+    let user = models::User::from_one(auth.telegram_id, auth.discord_id)
+        .ok_or_else(|| Error::missing("user for twitter"))?;
 
     let con_token = KeyPair::new(
         config.twitter_consumer_key.clone(),
@@ -346,30 +347,85 @@ struct CoconutWebHookRequestQuery {
     name: String,
 }
 
+#[allow(dead_code)]
 #[derive(Deserialize)]
-struct CoconutWebHookRequestBody {
-    progress: Option<String>,
-    output_urls: Option<CoconutWebHookRequestBodyOutputUrls>,
+#[serde(tag = "event", content = "data")]
+enum CoconutWebHook {
+    #[serde(rename = "input.transferred")]
+    InputTransferred { progress: String },
+    #[serde(rename = "output.completed")]
+    OutputCompleted { progress: String },
+    #[serde(rename = "job.completed")]
+    JobCompleted { outputs: Vec<CoconutOutput> },
 }
 
 #[derive(Deserialize)]
-struct CoconutWebHookRequestBodyOutputUrls {
-    #[serde(rename = "jpg:250x0")]
-    thumbnail: Vec<String>,
-    #[serde(rename = "mp4:720p")]
-    video_720p: Option<String>,
-    #[serde(rename = "mp4:480p")]
-    video_480p: Option<String>,
-    #[serde(rename = "mp4:360p")]
-    video_360p: Option<String>,
+struct CoconutOutput {
+    key: String,
+    #[serde(flatten)]
+    status: CoconutOutputStatus,
 }
+
+#[derive(Deserialize)]
+#[serde(tag = "status")]
+enum CoconutOutputStatus {
+    #[serde(rename = "video.encoded")]
+    VideoEncoded {
+        #[serde(flatten)]
+        file: CoconutOutputFile,
+    },
+    #[serde(rename = "video.skipped")]
+    VideoSkipped,
+    #[serde(rename = "image.created")]
+    ImageCreated {
+        #[serde(flatten)]
+        file: CoconutOutputFile,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum CoconutOutputFile {
+    Image {
+        urls: Vec<String>,
+    },
+    Video {
+        url: String,
+        metadata: CoconutMetadata,
+    },
+}
+
+#[derive(Deserialize)]
+struct CoconutMetadata {
+    streams: Vec<CoconutMetadataStream>,
+    format: CoconutMetadataFormat,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "codec_name")]
+enum CoconutMetadataStream {
+    #[serde(rename = "h264")]
+    H264 { height: i32, width: i32 },
+    #[serde(rename = "vp9")]
+    Vp9,
+    #[serde(rename = "aac")]
+    Aac,
+}
+
+#[derive(Deserialize)]
+struct CoconutMetadataFormat {
+    size: String,
+    duration: String,
+}
+
+const COCONUT_FORMATS: &[&str] = &["mp4:1080p", "mp4:720p", "mp4:480p", "mp4:360p"];
 
 async fn coconut_webhook(
     config: web::Data<Config>,
     faktory: web::Data<FaktoryClient>,
     secret: web::Path<String>,
     web::Query(query): web::Query<CoconutWebHookRequestQuery>,
-    data: web::Json<CoconutWebHookRequestBody>,
+    data: web::Json<serde_json::Value>,
 ) -> Result<HttpResponse, actix_web::Error> {
     tracing::info!("got coconut webhook");
 
@@ -378,55 +434,103 @@ async fn coconut_webhook(
         return Ok(HttpResponse::Unauthorized().finish());
     }
 
+    let event: CoconutWebHook = match serde_json::from_value(data.into_inner()) {
+        Ok(data) => data,
+        Err(err) => {
+            tracing::error!("unknown coconut data: {}", err);
+            return Ok(HttpResponse::Ok().body("OK"));
+        }
+    };
+
     let display_name = query.name;
 
-    let job = if let Some(progress) = &data.progress {
-        tracing::debug!("event was progress");
-
-        CoconutEventJob::Progress {
+    let job = match event {
+        CoconutWebHook::OutputCompleted { progress, .. } => Some(CoconutEventJob::Progress {
             display_name,
-            progress: progress.to_string(),
+            progress,
+        }),
+        CoconutWebHook::JobCompleted { outputs, .. } => {
+            let thumb_url = outputs
+                .iter()
+                .find_map(|output| match &output.status {
+                    CoconutOutputStatus::ImageCreated {
+                        file: CoconutOutputFile::Image { urls },
+                    } => urls.first(),
+                    _ => None,
+                })
+                .ok_or_else(|| actix_web::error::ErrorBadRequest("missing thumbnail"))?
+                .to_owned();
+
+            let mut video_formats: HashMap<
+                String,
+                (String, String, String, Vec<CoconutMetadataStream>),
+            > = outputs
+                .into_iter()
+                .filter_map(|output| match output.status {
+                    CoconutOutputStatus::VideoEncoded {
+                        file: CoconutOutputFile::Video { url, metadata },
+                    } => Some((
+                        output.key,
+                        (
+                            url,
+                            metadata.format.size,
+                            metadata.format.duration,
+                            metadata.streams,
+                        ),
+                    )),
+                    _ => None,
+                })
+                .collect();
+
+            let mut video_data = None;
+
+            for format in COCONUT_FORMATS {
+                if let Some(data) = video_formats.remove(*format) {
+                    video_data = Some(data);
+                    break;
+                }
+            }
+
+            let (video_url, video_size, video_duration, streams) = video_data
+                .ok_or_else(|| actix_web::error::ErrorBadRequest("no known video formats"))?;
+
+            let video_size = video_size.parse().unwrap_or(i32::MAX);
+
+            let duration = video_duration.parse::<f32>().unwrap_or_default().ceil() as i32;
+
+            let dimensions = streams
+                .into_iter()
+                .find_map(|stream| match stream {
+                    CoconutMetadataStream::H264 { height, width } => Some((height, width)),
+                    _ => None,
+                })
+                .ok_or_else(|| actix_web::error::ErrorBadRequest("no known streams"))?;
+
+            Some(CoconutEventJob::Completed {
+                display_name,
+                thumb_url,
+                video_url,
+                video_size,
+                duration,
+                height: dimensions.0,
+                width: dimensions.1,
+            })
         }
-    } else if let Some(output_urls) = &data.output_urls {
-        tracing::debug!("event was output");
-
-        let thumb_url = output_urls
-            .thumbnail
-            .first()
-            .ok_or_else(|| actix_web::error::ErrorBadRequest("missing thumbnail"))?
-            .to_owned();
-
-        let video_url = if let Some(url) = &output_urls.video_720p {
-            url
-        } else if let Some(url) = &output_urls.video_480p {
-            url
-        } else if let Some(url) = &output_urls.video_360p {
-            url
-        } else {
-            return Err(actix_web::error::ErrorBadRequest(
-                "all output formats empty",
-            ));
-        };
-
-        CoconutEventJob::Completed {
-            display_name,
-            thumb_url,
-            video_url: video_url.to_owned(),
-        }
-    } else {
-        return Err(actix_web::error::ErrorBadRequest(
-            "no progress and no output urls",
-        ));
+        CoconutWebHook::InputTransferred { .. } => None,
     };
 
     tracing::info!("computed event: {:?}", job);
 
-    let job_id = faktory
-        .enqueue_job(job, None)
-        .await
-        .map_err(actix_web::error::ErrorBadRequest)?;
+    if let Some(job) = job {
+        let job_id = faktory
+            .enqueue_job(job, None)
+            .await
+            .map_err(actix_web::error::ErrorBadRequest)?;
 
-    tracing::trace!(%job_id, "enqueued video event");
+        tracing::trace!(%job_id, "enqueued video event");
+    } else {
+        tracing::debug!("event was not actionable");
+    }
 
     Ok(HttpResponse::Ok().body("OK"))
 }

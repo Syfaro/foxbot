@@ -3,14 +3,17 @@ authors = ["Syfaro <syfaro@huefox.com>"]
 edition = "2021"
 name = "foxbot"
 publish = false
-version = "0.6.4"
+version = "0.7.3"
+
+[package.metadata.release]
+sign-tag = true
 
 [features]
 env = ["dotenv"]
 
 [dependencies]
-actix-session = "0.5.0-beta.7"
-actix-web = {version = "4.0.0-beta.20", default-features = false}
+actix-session = "0.5.0-beta.8"
+actix-web = {version = "4.0.0-rc.2", default-features = false}
 anyhow = "1"
 askama = "0.11"
 async-trait = "0.1"
@@ -48,8 +51,8 @@ reqwest = {version = "0.11", features = ["json"]}
 rusoto_core = "0.47"
 rusoto_credential = "0.47"
 rusoto_s3 = "0.47"
-sentry = {git = "https://github.com/getsentry/sentry-rust.git"}
-sentry-tracing = {git = "https://github.com/getsentry/sentry-rust.git"}
+sentry = "0.24"
+sentry-tracing = "0.24"
 serde = {version = "1", features = ["derive"]}
 serde_json = "1"
 sha2 = "0.10"
@@ -59,15 +62,15 @@ thiserror = "1"
 tokio = {version = "1", features = ["rt"]}
 tokio-stream = "0.1"
 tracing = "0.1"
-tracing-actix-web = {version = "0.5.0-beta.10", features = ["opentelemetry_0_16"]}
+tracing-actix-web = {version = "0.5.0-rc.2", features = ["opentelemetry_0_16"]}
 tracing-opentelemetry = "0.16"
 tracing-subscriber = {version = "0.3", features = ["env-filter"]}
-twilight-cache-inmemory = "0.8"
-twilight-embed-builder = "0.8"
-twilight-gateway = {version = "0.8", features = ["tracing"]}
-twilight-http = {version = "0.8", features = ["tracing"]}
-twilight-model = "0.8"
-twilight-util = {version = "0.8", features = ["builder"]}
+twilight-cache-inmemory = "0.9"
+twilight-embed-builder = "0.9"
+twilight-gateway = {version = "0.9", features = ["tracing"]}
+twilight-http = {version = "0.9", features = ["tracing"]}
+twilight-model = "0.9"
+twilight-util = {version = "0.9", features = ["builder"]}
 unic-langid = "0.9"
 url = "2"
 uuid = "0.8"

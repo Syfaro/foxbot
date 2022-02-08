@@ -5,7 +5,7 @@ use std::{borrow::Cow, collections::HashMap};
 
 use crate::{
     models::{self, User},
-    Error,
+    utils, Error,
 };
 
 /// User agent used with all HTTP requests to sites.
@@ -51,10 +51,7 @@ pub struct PostInfo {
 /// A basic attempt to get the extension from a given URL. It assumes the URL
 /// ends in a filename with an extension.
 fn get_file_ext(name: &str) -> Option<&str> {
-    name.split('.')
-        .last()
-        .map(|ext| ext.split('?').next())
-        .flatten()
+    name.split('.').last().and_then(|ext| ext.split('?').next())
 }
 
 /// A site that we can potentially load image data from.
@@ -126,11 +123,6 @@ pub struct Direct {
 }
 
 impl Direct {
-    /// URL extensions we should load to test content.
-    const EXTENSIONS: &'static [&'static str] = &["png", "jpg", "jpeg", "gif"];
-    /// Mime types we should consider valid images.
-    const TYPES: &'static [&'static str] = &["image/png", "image/jpeg", "image/gif"];
-
     pub fn new(fuzzysearch_apitoken: String) -> Self {
         let fautil = std::sync::Arc::new(fuzzysearch::FuzzySearch::new(fuzzysearch_apitoken));
 
@@ -148,21 +140,17 @@ impl Direct {
     /// source and keep the request fast, but a timeout should be applied for
     /// use in inline queries in case FuzzySearch is running behind.
     async fn reverse_search(&self, url: &str) -> Option<fuzzysearch::File> {
-        let image = self.client.get(url).send().await;
+        let mut checked_download = utils::CheckFileSize::new(url, 20_000_000);
+        let bytes = checked_download.get_bytes().await;
 
-        let image = match image {
-            Ok(res) => res.bytes().await,
-            Err(_) => return None,
-        };
-
-        let body = match image {
+        let body = match bytes {
             Ok(body) => body,
             Err(_) => return None,
         };
 
         let results = self
             .fautil
-            .image_search(&body, MatchType::Exact, Some(1))
+            .image_search(body, MatchType::Exact, Some(1))
             .await;
 
         match results {
@@ -179,36 +167,33 @@ impl Site for Direct {
     }
 
     fn url_id(&self, url: &str) -> Option<String> {
-        if !Direct::EXTENSIONS.iter().any(|ext| url.ends_with(ext)) {
-            return None;
-        }
-
         Some(url.to_owned())
     }
 
     async fn url_supported(&mut self, url: &str) -> bool {
-        // If the URL extension isn't one in our list, ignore.
-        if !Self::EXTENSIONS.iter().any(|ext| url.ends_with(ext)) {
-            return false;
-        }
+        tracing::trace!("checking if url is supported");
 
-        // Make a HTTP HEAD request to determine the Content-Type.
-        let resp = match self.client.head(url).send().await {
-            Ok(resp) => resp,
-            Err(_) => return false,
+        let mut data = match self.client.get(url).send().await {
+            Ok(data) => data,
+            Err(_err) => return false,
         };
 
-        if !resp.status().is_success() {
-            return false;
+        let mut buf = bytes::BytesMut::new();
+
+        while let Ok(Some(chunk)) = data.chunk().await {
+            if buf.len() + chunk.len() > 20_000_000 {
+                tracing::warn!("buf wanted to be larger than max download size");
+                return false;
+            }
+
+            buf.extend(chunk);
+
+            if buf.len() > 8_192 {
+                break;
+            }
         }
 
-        let content_type = match resp.headers().get(reqwest::header::CONTENT_TYPE) {
-            Some(content_type) => content_type,
-            None => return false,
-        };
-
-        // Return if the Content-Type is in our list.
-        Self::TYPES.iter().any(|t| content_type == t)
+        infer::is_image(&buf) || infer::is_video(&buf)
     }
 
     async fn get_images(
@@ -373,8 +358,7 @@ impl E621 {
                 artists: tags
                     .into_iter()
                     .filter(|(category, _tags)| category == "artist")
-                    .map(|(_category, tags)| tags)
-                    .flatten()
+                    .flat_map(|(_category, tags)| tags)
                     .filter(|tag| !Self::INVALID_ARTISTS.contains(&&**tag))
                     .collect(),
             }),
@@ -536,6 +520,35 @@ pub struct Twitter {
     conn: sqlx::Pool<sqlx::Postgres>,
 }
 
+impl Twitter {
+    fn update_error(err: egg_mode::error::Error) -> Error {
+        match &err {
+            egg_mode::error::Error::TwitterError(_headers, twitter_errors) => {
+                let codes: std::collections::HashSet<i32> = twitter_errors
+                    .errors
+                    .iter()
+                    .map(|error| error.code)
+                    .collect();
+
+                if codes.contains(&34)
+                    || codes.contains(&144)
+                    || codes.contains(&421)
+                    || codes.contains(&422)
+                {
+                    return Error::user_message_with_error("Tweet not found", err);
+                } else if codes.contains(&50) || codes.contains(&63) {
+                    return Error::user_message_with_error("Twitter user not found", err);
+                } else if codes.contains(&179) {
+                    return Error::user_message_with_error("Tweet is from locked account", err);
+                }
+            }
+            err => tracing::error!("got unknown twitter error: {:?}", err),
+        }
+
+        Error::user_message_with_error("Twitter returned unknown data", err)
+    }
+}
+
 struct TwitterData {
     user: Box<egg_mode::user::TwitterUser>,
     media: Vec<egg_mode::entities::MediaEntity>,
@@ -575,40 +588,7 @@ impl Twitter {
         if let Some(Ok(id)) = captures.name("id").map(|id| id.as_str().parse::<u64>()) {
             let tweet = egg_mode::tweet::show(id, token)
                 .await
-                .map_err(|err| {
-                    match &err {
-                        egg_mode::error::Error::TwitterError(_headers, twitter_errors) => {
-                            let codes: std::collections::HashSet<i32> = twitter_errors
-                                .errors
-                                .iter()
-                                .map(|error| error.code)
-                                .collect();
-
-                            tracing::warn!("got twitter error codes: {:?}", codes);
-
-                            if codes.contains(&34)
-                                || codes.contains(&144)
-                                || codes.contains(&421)
-                                || codes.contains(&422)
-                            {
-                                return Error::user_message_with_error("Tweet not found", err);
-                            } else if codes.contains(&50) || codes.contains(&63) {
-                                return Error::user_message_with_error(
-                                    "Twitter user not found",
-                                    err,
-                                );
-                            } else if codes.contains(&179) {
-                                return Error::user_message_with_error(
-                                    "Tweet is from locked account",
-                                    err,
-                                );
-                            }
-                        }
-                        err => tracing::warn!("got unknown twitter error: {:?}", err),
-                    }
-
-                    Error::user_message_with_error("Twitter returned unknown data", err)
-                })?
+                .map_err(Self::update_error)?
                 .response;
 
             let user = match tweet.user {
@@ -636,7 +616,7 @@ impl Twitter {
             let user = captures["screen_name"].to_owned();
             let timeline =
                 egg_mode::tweet::user_timeline(user, false, false, token).with_page_size(200);
-            let (_timeline, feed) = timeline.start().await?;
+            let (_timeline, feed) = timeline.start().await.map_err(Self::update_error)?;
 
             let first_tweet = match feed.iter().next() {
                 Some(tweet) => tweet,

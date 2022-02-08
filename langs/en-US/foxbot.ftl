@@ -44,13 +44,15 @@ inline-no-results-body = I could not find any results for the provided query.
 
 # Inline Results Misc
 inline-help = Help
-inline-process = Process Video
 
 # Inline Videos
+inline-process = Process Video
+inline-large-video = Get Large Video
 video-starting = Starting to process video...
 video-progress = Video processing is { $percent } complete...
 video-finished = Finished transcoding, uploading video...
 video-return-button = Return and send
+video-too-large = Sorry, this video is too large to send inline. I'll send you the video to forward instead.
 video-unknown = Sorry, something went wrong.
 
 # Reverse Search

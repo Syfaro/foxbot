@@ -27,6 +27,7 @@ pub enum User {
 }
 
 impl User {
+    #[allow(clippy::manual_map)]
     pub fn from_one(telegram_id: Option<i64>, discord_id: Option<BigDecimal>) -> Option<Self> {
         if let Some(id) = telegram_id {
             Some(Self::Telegram(id))
@@ -73,9 +74,9 @@ impl From<&tgbotapi::User> for User {
     }
 }
 
-impl From<twilight_model::id::UserId> for User {
-    fn from(user_id: twilight_model::id::UserId) -> Self {
-        let id: u64 = user_id.0.into();
+impl From<twilight_model::id::Id<twilight_model::id::marker::UserMarker>> for User {
+    fn from(user_id: twilight_model::id::Id<twilight_model::id::marker::UserMarker>) -> Self {
+        let id: u64 = user_id.get();
         Self::Discord(id.into())
     }
 }
@@ -538,7 +539,10 @@ impl MediaGroup {
         executor: E,
         message: &tgbotapi::Message,
     ) -> Result<i32, Error> {
-        let media_group_id = message.media_group_id.as_ref().ok_or(Error::Missing)?;
+        let media_group_id = message
+            .media_group_id
+            .as_ref()
+            .ok_or_else(|| Error::missing("media group id"))?;
 
         let id = sqlx::query_file_scalar!(
             "queries/media_group/add_message.sql",
@@ -654,11 +658,15 @@ pub struct Video {
     pub source: String,
     pub url: String,
     pub mp4_url: Option<String>,
-    pub job_id: Option<i32>,
+    pub job_id: Option<String>,
     pub display_name: String,
     pub thumb_url: Option<String>,
     pub display_url: String,
     pub created_at: chrono::NaiveDateTime,
+    pub file_size: Option<i32>,
+    pub height: Option<i32>,
+    pub width: Option<i32>,
+    pub duration: Option<i32>,
 }
 
 impl Video {
@@ -711,7 +719,7 @@ impl Video {
     pub async fn set_job_id<'a, E: PgExecutor<'a>>(
         executor: E,
         id: i32,
-        job_id: i32,
+        job_id: &str,
     ) -> Result<(), Error> {
         sqlx::query_file!("queries/video/set_job_id.sql", id, job_id)
             .execute(executor)
@@ -725,12 +733,18 @@ impl Video {
         id: i32,
         mp4_url: &str,
         thumb_url: &str,
+        file_size: i32,
+        height: i32,
+        width: i32,
     ) -> Result<(), Error> {
         sqlx::query_file!(
             "queries/video/set_processed_url.sql",
             id,
             mp4_url,
-            thumb_url
+            thumb_url,
+            file_size,
+            height,
+            width
         )
         .execute(executor)
         .await?;

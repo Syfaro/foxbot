@@ -11,7 +11,7 @@ pub struct Coconut {
 }
 
 impl Coconut {
-    const COCONUT_API_ENDPOINT: &'static str = "https://api.coconut.co/v1/jobs";
+    const COCONUT_API_ENDPOINT: &'static str = "https://api.coconut.co/v2/jobs";
 
     pub fn new(
         api_token: String,
@@ -33,14 +33,14 @@ impl Coconut {
         }
     }
 
-    pub async fn start_video(&self, source: &str, name: &str) -> Result<i32, Error> {
+    pub async fn start_video(&self, source: &str, name: &str) -> Result<String, Error> {
         let config = self.build_config(source, name);
 
         let resp = self
             .client
             .post(Self::COCONUT_API_ENDPOINT)
             .basic_auth(&self.api_token, None::<&str>)
-            .body(config)
+            .json(&config)
             .send()
             .await?;
 
@@ -59,36 +59,58 @@ impl Coconut {
 
         let id = json
             .get("id")
-            .ok_or(Error::Missing)?
-            .as_i64()
-            .ok_or(Error::Missing)?;
-        Ok(id as i32)
+            .ok_or_else(|| Error::missing("job id"))?
+            .as_str()
+            .ok_or_else(|| Error::missing("job id as str"))?;
+
+        Ok(id.to_owned())
     }
 
-    fn build_config(&self, source: &str, name: &str) -> String {
-        format!(
-            "
-            var account_id = {account_id}
-            var app_key = {app_key}
-            var bucket_id = {bucket_id}
-            var cdn = b2://$account_id:$app_key@$bucket_id
-
-            # Settings
-            set source = {source}
-            set webhook = {webhook}?name={name}, events=true
-
-            # Outputs
-            -> mp4:720p = $cdn/video/{name}.mp4, if=$source_duration <= 60
-            -> mp4:480p = $cdn/video/{name}.mp4, if=$source_duration <= 120 AND $source_duration > 60
-            -> mp4:360p = $cdn/video/{name}.mp4, if=$source_duration > 120, duration = 150
-            -> jpg:250x0 = $cdn/thumbnail/{name}.jpg, number=1
-        ",
-            account_id = self.b2_account_id,
-            app_key = self.b2_app_key,
-            bucket_id = self.b2_bucket_id,
-            source = source,
-            webhook = self.webhook,
-            name = name
-        )
+    /// Create a Coconut request where the encoded video can be at most 50MB.
+    fn build_config(&self, source: &str, name: &str) -> serde_json::Value {
+        serde_json::json!({
+            "input": {
+                "url": source,
+            },
+            "storage": {
+                "service": "backblaze",
+                "bucket_id": self.b2_bucket_id,
+                "credentials": {
+                    "app_key_id": self.b2_account_id,
+                    "app_key": self.b2_app_key,
+                }
+            },
+            "notification": {
+                "type": "http",
+                "url": self.webhook,
+                "events": true,
+                "metadata": true,
+                "params": {
+                    "name": name,
+                }
+            },
+            "outputs": {
+                "jpg:250x0": {
+                    "path": format!("/thumbnail/{}.jpg", name),
+                },
+                "mp4:1080p": {
+                    "path": format!("/video/{}.mp4", name),
+                    "if": "{{ input.duration }} <= 100",
+                },
+                "mp4:720p": {
+                    "path": format!("/video/{}.mp4", name),
+                    "if": "{{ input.duration }} <= 200 and {{ input.duration }} > 100",
+                },
+                "mp4:480p": {
+                    "path": format!("/video/{}.mp4", name),
+                    "if": "{{ input.duration }} <= 400 and {{ input.duration }} > 200",
+                },
+                "mp4:360p": {
+                    "path": format!("/video/{}.mp4", name),
+                    "if": "{{ input.duration }} > 400",
+                    "duration": 500,
+                }
+            }
+        })
     }
 }

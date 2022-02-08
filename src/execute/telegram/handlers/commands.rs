@@ -80,7 +80,10 @@ impl Handler for CommandHandler {
 
 impl CommandHandler {
     async fn handle_mirror(&self, cx: &Context, message: &tgbotapi::Message) -> Result<(), Error> {
-        let from = message.from.as_ref().unwrap();
+        let from = message
+            .from
+            .as_ref()
+            .ok_or_else(|| Error::missing("user"))?;
 
         let action = utils::continuous_action(
             cx.bot.clone(),
@@ -348,7 +351,10 @@ impl CommandHandler {
 
             utils::match_image(&cx.bot, &cx.redis, &cx.fuzzysearch, best_photo, Some(10)).await?
         } else {
-            let from = message.from.as_ref().ok_or(Error::Missing)?;
+            let from = message
+                .from
+                .as_ref()
+                .ok_or_else(|| Error::missing("user"))?;
 
             let links = utils::extract_links(message);
 
@@ -406,7 +412,7 @@ impl CommandHandler {
             .map(|m| fuzzysearch::File {
                 artists: Some(
                     m.artists
-                        .unwrap_or_else(Vec::new)
+                        .unwrap_or_default()
                         .iter()
                         .map(|artist| artist.to_lowercase())
                         .collect(),
@@ -417,7 +423,7 @@ impl CommandHandler {
 
         for m in matches {
             let v = results
-                .entry(m.artists.clone().unwrap_or_else(Vec::new))
+                .entry(m.artists.clone().unwrap_or_default())
                 .or_default();
             v.push(m);
         }

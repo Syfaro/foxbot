@@ -1,6 +1,6 @@
 SELECT
     *
 FROM
-    videos
+    video
 WHERE
     source = $1;

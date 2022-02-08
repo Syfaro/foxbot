@@ -24,7 +24,7 @@ impl Handler for ChannelPhotoHandler {
     ) -> Result<Status, Error> {
         // Ensure we have a channel_post Message and a photo within.
         let message = needs_field!(update, channel_post);
-        needs_field!(&message, photo);
+        needs_field!(message, photo);
 
         potential_return!(initial_filter(message));
 

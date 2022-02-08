@@ -252,9 +252,24 @@ pub async fn telegram(args: Args, config: RunConfig, telegram_config: TelegramCo
     let mut environment = faktory_environment.finalize();
     environment.workers(telegram_config.worker_threads);
 
+    let mut tags = vec!["foxbot".to_string()];
+    if telegram_config.high_priority {
+        tags.push("high".to_string());
+    }
+
+    environment.labels(tags);
+
     let faktory = environment.connect(Some(&config.faktory_url)).unwrap();
 
-    faktory.run_to_completion(&TelegramJobQueue::priority_order());
+    if telegram_config.high_priority {
+        tracing::info!("only running high priority jobs");
+
+        faktory.run_to_completion(&[TelegramJobQueue::HighPriority.as_str()]);
+    } else {
+        tracing::info!("running all jobs");
+
+        faktory.run_to_completion(&TelegramJobQueue::priority_order());
+    }
 }
 
 pub struct Context {
@@ -638,7 +653,11 @@ async fn process_update(cx: &Context, update: tgbotapi::Update) -> Result<(), Er
                 handler_duration.stop_and_record();
                 HANDLER_ERRORS.with_label_values(&[handler.name()]).inc();
 
-                tracing::error!(handled_by = handler.name(), "handler error: {:?}", err);
+                if matches!(err, Error::UserMessage { .. }) {
+                    tracing::warn!(handled_by = handler.name(), "user error: {:?}", err);
+                } else {
+                    tracing::error!(handled_by = handler.name(), "handler error: {:?}", err);
+                }
 
                 let mut tags = vec![("handler", handler.name().to_string())];
                 if let Some(chat) = chat {

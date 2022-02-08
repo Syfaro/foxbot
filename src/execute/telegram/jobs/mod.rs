@@ -31,14 +31,15 @@ async fn needs_more_time(
 
     if seconds <= 0 {
         tracing::warn!(seconds, "needed time already happened");
-    }
+    } else {
+        let key = format!("retry-at:{}", chat_id);
 
-    let key = format!("retry-at:{}", chat_id);
-    if let Err(err) = redis
-        .set_ex::<_, _, ()>(&key, at.timestamp(), seconds as usize)
-        .await
-    {
-        tracing::error!("unable to set retry-at: {:?}", err);
+        if let Err(err) = redis
+            .set_ex::<_, _, ()>(&key, at.timestamp(), seconds as usize)
+            .await
+        {
+            tracing::error!("unable to set retry-at: {:?}", err);
+        }
     }
 }
 
@@ -264,6 +265,13 @@ pub enum CoconutEventJob {
         display_name: String,
         video_url: String,
         thumb_url: String,
+        video_size: i32,
+        duration: i32,
+        height: i32,
+        width: i32,
+    },
+    Failed {
+        display_name: String,
     },
 }
 
