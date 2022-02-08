@@ -184,12 +184,18 @@ async fn add_inline_history(
 ) -> Result<(), Error> {
     let key = format!("inline-history:{}", user);
 
+    if links.is_empty() {
+        tracing::trace!("no items to add to history, skipping");
+        return Ok(());
+    }
+
     let expires_at = (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp();
 
     let items: Vec<(i64, &str)> = links
         .iter()
         .map(|link| (expires_at, link.as_ref()))
         .collect();
+
     redis
         .zadd_multiple::<_, i64, &str, ()>(&key, &items)
         .await?;
