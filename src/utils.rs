@@ -767,7 +767,7 @@ pub async fn match_image(
 pub async fn sort_results<U: Into<User>>(
     conn: &sqlx::Pool<sqlx::Postgres>,
     user: U,
-    results: &mut Vec<fuzzysearch::File>,
+    results: &mut [fuzzysearch::File],
 ) -> Result<(), Error> {
     // If we have 1 or fewer items, we don't need to do any sorting.
     if results.len() <= 1 {

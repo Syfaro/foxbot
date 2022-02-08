@@ -411,7 +411,7 @@ impl CommandHandler {
             .map(|m| fuzzysearch::File {
                 artists: Some(
                     m.artists
-                        .unwrap_or_else(Vec::new)
+                        .unwrap_or_default()
                         .iter()
                         .map(|artist| artist.to_lowercase())
                         .collect(),
@@ -422,7 +422,7 @@ impl CommandHandler {
 
         for m in matches {
             let v = results
-                .entry(m.artists.clone().unwrap_or_else(Vec::new))
+                .entry(m.artists.clone().unwrap_or_default())
                 .or_default();
             v.push(m);
         }

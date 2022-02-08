@@ -51,10 +51,7 @@ pub struct PostInfo {
 /// A basic attempt to get the extension from a given URL. It assumes the URL
 /// ends in a filename with an extension.
 fn get_file_ext(name: &str) -> Option<&str> {
-    name.split('.')
-        .last()
-        .map(|ext| ext.split('?').next())
-        .flatten()
+    name.split('.').last().and_then(|ext| ext.split('?').next())
 }
 
 /// A site that we can potentially load image data from.
@@ -361,8 +358,7 @@ impl E621 {
                 artists: tags
                     .into_iter()
                     .filter(|(category, _tags)| category == "artist")
-                    .map(|(_category, tags)| tags)
-                    .flatten()
+                    .flat_map(|(_category, tags)| tags)
                     .filter(|tag| !Self::INVALID_ARTISTS.contains(&&**tag))
                     .collect(),
             }),
