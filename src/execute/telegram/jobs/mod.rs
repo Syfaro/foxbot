@@ -166,9 +166,9 @@ impl JobQueue for TelegramJobQueue {
 
     fn priority_order() -> Vec<&'static str> {
         vec![
-            Self::Default.as_str(),
             Self::HighPriority.as_str(),
             Self::StandardPriority.as_str(),
+            Self::Default.as_str(),
         ]
     }
 }
