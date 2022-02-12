@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use fluent_bundle::FluentArgs;
+use futures_retry::FutureRetry;
 use prometheus::{register_histogram_vec, HistogramVec};
 use tgbotapi::requests::*;
 
@@ -455,7 +456,13 @@ impl CommandHandler {
 
         let sent = cx.make_request(&send_message).await?;
 
-        let matches = cx.fuzzysearch.lookup_hashes(&used_hashes, Some(10)).await?;
+        let matches = FutureRetry::new(
+            || cx.fuzzysearch.lookup_hashes(&used_hashes, Some(10)),
+            utils::Retry::new(3),
+        )
+        .await
+        .map(|(matches, _attempts)| matches)
+        .map_err(|(err, _attempts)| err)?;
 
         if matches.is_empty() {
             cx.send_generic_reply(message, "reverse-no-results").await?;

@@ -705,7 +705,12 @@ pub async fn lookup_single_hash(
     hash: i64,
     distance: Option<i64>,
 ) -> Result<Vec<fuzzysearch::File>, Error> {
-    let mut matches = fapi.lookup_hashes(&[hash], distance).await?;
+    let hashes = [hash];
+
+    let mut matches = FutureRetry::new(|| fapi.lookup_hashes(&hashes, distance), Retry::new(3))
+        .await
+        .map(|(matches, _attempts)| matches)
+        .map_err(|(err, _attempts)| err)?;
 
     for mut m in &mut matches {
         m.distance =
