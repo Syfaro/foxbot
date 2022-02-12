@@ -525,6 +525,10 @@ impl Twitter {
         tracing::trace!("got twitter errors: {:?}", err);
 
         match &err {
+            egg_mode::error::Error::BadStatus(code) => match code.as_u16() {
+                401 => return Error::user_message_with_error("Unauthorized", err),
+                _ => tracing::warn!("got unknown twitter status code: {:?}", code),
+            },
             egg_mode::error::Error::TwitterError(_headers, twitter_errors) => {
                 let codes: std::collections::HashSet<i32> = twitter_errors
                     .errors
