@@ -1,6 +1,12 @@
-use std::{collections::HashSet, str::FromStr, sync::Arc, time::Instant};
+use std::{
+    collections::HashSet,
+    str::FromStr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use fluent_bundle::{bundle::FluentBundle, FluentArgs, FluentResource};
+use futures_retry::{ErrorHandler, FutureRetry, RetryPolicy};
 use intl_memoizer::concurrent::IntlLangMemoizer;
 use redis::AsyncCommands;
 use sha2::{Digest, Sha256};
@@ -749,7 +755,16 @@ pub async fn match_image(
         file_id: file.file_id.clone(),
     };
 
-    let file_info = bot.make_request(&get_file).await?;
+    let file_info = FutureRetry::new(|| bot.make_request(&get_file), Retry::new(3))
+        .await
+        .map(|(file, attempts)| {
+            if attempts > 0 {
+                tracing::warn!("took {} attempts to get file", attempts);
+            }
+            file
+        })
+        .map_err(|(err, _attempts)| err)?;
+
     let data = bot.download_file(&file_info.file_path.unwrap()).await?;
 
     let hash = tokio::task::spawn_blocking(move || fuzzysearch::hash_bytes(&data))
@@ -1289,4 +1304,30 @@ where
         },
         || callback(err),
     )
+}
+
+pub struct Retry {
+    max_attempts: usize,
+    duration: Duration,
+}
+
+impl Retry {
+    pub fn new(max_attempts: usize) -> Self {
+        Self {
+            max_attempts,
+            duration: Duration::from_secs(1),
+        }
+    }
+}
+
+impl<T> ErrorHandler<T> for Retry {
+    type OutError = T;
+
+    fn handle(&mut self, attempt: usize, err: T) -> RetryPolicy<Self::OutError> {
+        if attempt >= self.max_attempts {
+            return RetryPolicy::ForwardError(err);
+        }
+
+        RetryPolicy::WaitRetry(self.duration)
+    }
 }

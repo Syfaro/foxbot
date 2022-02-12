@@ -532,11 +532,7 @@ impl Twitter {
                     .map(|error| error.code)
                     .collect();
 
-                if codes.contains(&34)
-                    || codes.contains(&144)
-                    || codes.contains(&421)
-                    || codes.contains(&422)
-                {
+                if codes.contains(&34) || codes.contains(&144) || codes.contains(&421) {
                     return Error::user_message_with_error("Tweet not found", err);
                 } else if codes.contains(&50) || codes.contains(&63) {
                     return Error::user_message_with_error("Twitter user not found", err);
@@ -570,7 +566,7 @@ impl Twitter {
 
         Self {
             matcher: regex::Regex::new(
-                r"https://(?:mobile\.)?twitter.com/(?P<screen_name>\w+)(?:/status/(?P<id>\d+))?",
+                r"(?:https?://)?(?:mobile\.)?twitter.com/(?P<screen_name>\w+)(?:/status/(?P<id>\d+))?",
             )
             .unwrap(),
             consumer,
@@ -588,10 +584,20 @@ impl Twitter {
         captures: &regex::Captures<'_>,
     ) -> Result<Option<TwitterData>, Error> {
         if let Some(Ok(id)) = captures.name("id").map(|id| id.as_str().parse::<u64>()) {
-            let tweet = egg_mode::tweet::show(id, token)
-                .await
-                .map_err(Self::update_error)?
-                .response;
+            let tweet = futures_retry::FutureRetry::new(
+                || egg_mode::tweet::show(id, token),
+                utils::Retry::new(3),
+            )
+            .await
+            .map(|(tweet, attempts)| {
+                if attempts > 0 {
+                    tracing::warn!("took {} attempts to load tweet", attempts);
+                }
+
+                tweet
+            })
+            .map_err(|(err, _attempts)| Self::update_error(err))?
+            .response;
 
             let user = match tweet.user {
                 Some(user) => user,

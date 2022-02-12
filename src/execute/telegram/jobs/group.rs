@@ -1,6 +1,7 @@
 use std::{ops::Add, sync::Arc};
 
 use fluent_bundle::FluentArgs;
+use futures_retry::FutureRetry;
 use rusoto_s3::S3;
 use tracing::Instrument;
 
@@ -329,7 +330,16 @@ pub async fn process_group_mediagroup_hash(
         file_id: best_photo.file_id.clone(),
     };
 
-    let file_info = cx.bot.make_request(&get_file).await?;
+    let file_info = FutureRetry::new(|| cx.make_request(&get_file), utils::Retry::new(3))
+        .await
+        .map(|(file, attempts)| {
+            if attempts > 0 {
+                tracing::warn!("took {} attempts to get file", attempts);
+            }
+            file
+        })
+        .map_err(|(err, _attempts)| err)?;
+
     let data = cx.bot.download_file(&file_info.file_path.unwrap()).await?;
 
     if models::GroupConfig::get(
