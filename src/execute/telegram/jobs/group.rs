@@ -333,9 +333,10 @@ pub async fn process_group_mediagroup_hash(
     let file_info = FutureRetry::new(|| cx.make_request(&get_file), utils::Retry::new(3))
         .await
         .map(|(file, attempts)| {
-            if attempts > 0 {
+            if attempts > 1 {
                 tracing::warn!("took {} attempts to get file", attempts);
             }
+
             file
         })
         .map_err(|(err, _attempts)| err)?;

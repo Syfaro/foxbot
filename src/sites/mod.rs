@@ -594,7 +594,7 @@ impl Twitter {
             )
             .await
             .map(|(tweet, attempts)| {
-                if attempts > 0 {
+                if attempts > 1 {
                     tracing::warn!("took {} attempts to load tweet", attempts);
                 }
 

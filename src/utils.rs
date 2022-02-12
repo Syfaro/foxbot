@@ -763,9 +763,10 @@ pub async fn match_image(
     let file_info = FutureRetry::new(|| bot.make_request(&get_file), Retry::new(3))
         .await
         .map(|(file, attempts)| {
-            if attempts > 0 {
+            if attempts > 1 {
                 tracing::warn!("took {} attempts to get file", attempts);
             }
+
             file
         })
         .map_err(|(err, _attempts)| err)?;
