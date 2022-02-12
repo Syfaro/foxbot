@@ -522,6 +522,8 @@ pub struct Twitter {
 
 impl Twitter {
     fn update_error(err: egg_mode::error::Error) -> Error {
+        tracing::trace!("got twitter errors: {:?}", err);
+
         match &err {
             egg_mode::error::Error::TwitterError(_headers, twitter_errors) => {
                 let codes: std::collections::HashSet<i32> = twitter_errors
