@@ -363,12 +363,21 @@ async fn main() {
         .install_batch(opentelemetry::runtime::Tokio)
         .expect("could not create jaeger tracer");
 
-    tracing_subscriber::registry()
+    if matches!(std::env::var("LOG_FMT").as_deref(), Ok("json")) {
+        tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().json())
+        .with(sentry_tracing::layer())
+        .with(tracing_subscriber::EnvFilter::from_default_env())
+        .with(tracing_opentelemetry::layer().with_tracer(tracer))
+        .init();
+    } else {
+        tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
         .with(sentry_tracing::layer())
         .with(tracing_subscriber::EnvFilter::from_default_env())
         .with(tracing_opentelemetry::layer().with_tracer(tracer))
         .init();
+    }
 
     let _sentry = sentry::init(sentry::ClientOptions {
         dsn: Some(args.sentry_url.clone()),

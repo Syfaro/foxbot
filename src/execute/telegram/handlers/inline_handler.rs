@@ -118,7 +118,7 @@ impl InlineHandler {
                     ..Default::default()
                 };
 
-                let message = cx.make_request(&send_video).await?;
+                let message = cx.bot.make_request(&send_video).await?;
                 if let Some(sent_as) = find_sent_as(&message) {
                     cache_video(&cx.redis, display_name, &sent_as).await?;
                 }
@@ -147,7 +147,7 @@ impl InlineHandler {
             text: video_starting,
             ..Default::default()
         };
-        let sent = cx.make_request(&send_message).await?;
+        let sent = cx.bot.make_request(&send_message).await?;
 
         models::Video::add_message_id(&cx.pool, video.id, &sent.chat, sent.message_id).await?;
 
@@ -320,7 +320,7 @@ impl Handler for InlineHandler {
                 ..Default::default()
             };
 
-            cx.make_request(&answer_inline).await?;
+            cx.bot.make_request(&answer_inline).await?;
 
             return Ok(Completed);
         }
@@ -407,7 +407,7 @@ impl Handler for InlineHandler {
             answer_inline.switch_pm_parameter = Some(result.id);
         }
 
-        cx.make_request(&answer_inline).await?;
+        cx.bot.make_request(&answer_inline).await?;
 
         Ok(Completed)
     }
@@ -469,7 +469,7 @@ async fn send_video_progress(cx: &Context, display_name: &str, message: &str) ->
             ..Default::default()
         };
 
-        if let Err(err) = cx.make_request(&edit_message).await {
+        if let Err(err) = cx.bot.make_request(&edit_message).await {
             tracing::error!("could not send video progress message: {}", err);
         }
     }
@@ -547,7 +547,7 @@ async fn video_complete(
             ..Default::default()
         };
 
-        cx.make_request(&send_message).await?;
+        cx.bot.make_request(&send_message).await?;
     }
 
     let action =
@@ -591,7 +591,7 @@ async fn video_complete(
         }
     };
 
-    let message = cx.make_request(&send_video).await?;
+    let message = cx.bot.make_request(&send_video).await?;
     drop(action);
 
     if messages.is_empty() {
@@ -635,7 +635,7 @@ async fn video_complete(
                 ..Default::default()
             };
 
-            if let Err(err) = cx.make_request(&send_message).await {
+            if let Err(err) = cx.bot.make_request(&send_message).await {
                 tracing::error!("could not send too large message: {}", err);
             }
         }
@@ -1154,7 +1154,7 @@ async fn send_previous_video(
                 ..Default::default()
             };
 
-            cx.make_request(&send_video).await
+            cx.bot.make_request(&send_video).await
         }
         SentAs::Animation(ref file_id) => {
             let send_animation = SendAnimation {
@@ -1167,7 +1167,7 @@ async fn send_previous_video(
                 ..Default::default()
             };
 
-            cx.make_request(&send_animation).await
+            cx.bot.make_request(&send_animation).await
         }
         SentAs::Document(ref file_id) => {
             let send_document = SendDocument {
@@ -1177,7 +1177,7 @@ async fn send_previous_video(
                 ..Default::default()
             };
 
-            cx.make_request(&send_document).await
+            cx.bot.make_request(&send_document).await
         }
     };
 

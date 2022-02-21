@@ -150,7 +150,7 @@ impl CommandHandler {
 
                 drop(action);
 
-                cx.make_request(&video).await?;
+                cx.bot.make_request(&video).await?;
             } else if let Ok(file_type) = utils::resize_photo(&result.url, 5_000_000).await {
                 let photo = SendPhoto {
                     chat_id: message.chat_id(),
@@ -162,7 +162,7 @@ impl CommandHandler {
 
                 drop(action);
 
-                cx.make_request(&photo).await?;
+                cx.bot.make_request(&photo).await?;
             } else {
                 missing.push(result.source_link.as_deref().unwrap_or(&result.url));
             }
@@ -209,7 +209,7 @@ impl CommandHandler {
                     ..Default::default()
                 };
 
-                cx.make_request(&media_group).await?;
+                cx.bot.make_request(&media_group).await?;
 
                 drop(action);
             }
@@ -232,7 +232,7 @@ impl CommandHandler {
                 ..Default::default()
             };
 
-            cx.make_request(&send_message).await?;
+            cx.bot.make_request(&send_message).await?;
         }
 
         Ok(())
@@ -277,7 +277,7 @@ impl CommandHandler {
                 message_id: summoning_id,
             };
 
-            if let Err(err) = cx.make_request(&delete_message).await {
+            if let Err(err) = cx.bot.make_request(&delete_message).await {
                 reply_to_id = summoning_id;
 
                 match err {
@@ -329,7 +329,8 @@ impl CommandHandler {
             ..Default::default()
         };
 
-        cx.make_request(&send_message)
+        cx.bot
+            .make_request(&send_message)
             .await
             .map(|_msg| ())
             .map_err(Into::into)
@@ -454,7 +455,7 @@ impl CommandHandler {
             ..Default::default()
         };
 
-        let sent = cx.make_request(&send_message).await?;
+        let sent = cx.bot.make_request(&send_message).await?;
 
         let matches = FutureRetry::new(
             || cx.fuzzysearch.lookup_hashes(&used_hashes, Some(10)),
@@ -501,7 +502,8 @@ impl CommandHandler {
             ..Default::default()
         };
 
-        cx.make_request(&edit)
+        cx.bot
+            .make_request(&edit)
             .await
             .map(|_msg| ())
             .map_err(Into::into)
@@ -536,7 +538,7 @@ impl CommandHandler {
                     chat_id: message.chat_id(),
                     user_id: user.id,
                 };
-                let chat_member = cx.make_request(&get_chat_member).await?;
+                let chat_member = cx.bot.make_request(&get_chat_member).await?;
 
                 matches!(chat_member.status, Administrator | Creator)
             }
@@ -560,7 +562,7 @@ impl CommandHandler {
                         chat_id: message.chat_id(),
                         user_id: cx.bot_user.id,
                     };
-                    let bot_member = cx.make_request(&get_chat_member).await?;
+                    let bot_member = cx.bot.make_request(&get_chat_member).await?;
 
                     // Already fetching it, should save it for trying to delete summoning
                     // messages.

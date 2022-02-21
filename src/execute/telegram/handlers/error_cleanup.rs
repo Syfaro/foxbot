@@ -42,7 +42,7 @@ impl Handler for ErrorCleanup {
                     ..Default::default()
                 };
 
-                cx.make_request(&answer).await?;
+                cx.bot.make_request(&answer).await?;
 
                 return Ok(Completed);
             }
@@ -56,7 +56,7 @@ impl Handler for ErrorCleanup {
             message_id,
         };
 
-        let err = match cx.make_request(&delete).await {
+        let err = match cx.bot.make_request(&delete).await {
             Ok(_resp) => None,
             Err(tgbotapi::Error::Telegram(err)) if err.error_code == Some(400) => None,
             Err(err) => Some(err.to_string()),
@@ -78,7 +78,7 @@ impl Handler for ErrorCleanup {
             ..Default::default()
         };
 
-        cx.make_request(&answer).await?;
+        cx.bot.make_request(&answer).await?;
 
         Ok(Completed)
     }

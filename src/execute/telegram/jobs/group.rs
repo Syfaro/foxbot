@@ -330,7 +330,7 @@ pub async fn process_group_mediagroup_hash(
         file_id: best_photo.file_id.clone(),
     };
 
-    let file_info = FutureRetry::new(|| cx.make_request(&get_file), utils::Retry::new(3))
+    let file_info = FutureRetry::new(|| cx.bot.make_request(&get_file), utils::Retry::new(3))
         .await
         .map(|(file, attempts)| {
             if attempts > 1 {

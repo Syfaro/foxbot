@@ -15,6 +15,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::{
     models::{self, Chat, User},
+    services::Telegram,
     sites::{BoxedSite, PostInfo},
     Error,
 };
@@ -597,7 +598,7 @@ pub struct ContinuousAction {
 #[tracing::instrument(skip(bot))]
 #[must_use]
 pub fn continuous_action(
-    bot: Arc<tgbotapi::Telegram>,
+    bot: Arc<Telegram>,
     max: usize,
     chat_id: tgbotapi::requests::ChatID,
     action: tgbotapi::requests::ChatAction,
@@ -658,7 +659,7 @@ impl Drop for ContinuousAction {
 /// Check if the bot has permissions to delete in a chat. Checks the cache if
 /// not being told to ignore it.
 pub async fn can_delete_in_chat<C: Into<Chat>, U: Into<User>>(
-    bot: &tgbotapi::Telegram,
+    bot: &Telegram,
     conn: &sqlx::Pool<sqlx::Postgres>,
     chat: C,
     user: U,
@@ -744,7 +745,7 @@ pub async fn lookup_single_hash(
 /// * Looking up the hash with [`lookup_single_hash`]
 #[tracing::instrument(err, skip(bot, redis, fapi))]
 pub async fn match_image(
-    bot: &tgbotapi::Telegram,
+    bot: &Telegram,
     redis: &redis::aio::ConnectionManager,
     fapi: &fuzzysearch::FuzzySearch,
     file: &tgbotapi::PhotoSize,

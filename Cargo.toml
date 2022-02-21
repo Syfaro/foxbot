@@ -62,7 +62,7 @@ tokio-stream = "0.1"
 tracing = "0.1"
 tracing-actix-web = {version = "0.5.0-rc.2", features = ["opentelemetry_0_16"]}
 tracing-opentelemetry = "0.16"
-tracing-subscriber = {version = "0.3", features = ["env-filter"]}
+tracing-subscriber = {version = "0.3", features = ["env-filter", "json"]}
 twilight-cache-inmemory = "0.9"
 twilight-embed-builder = "0.9"
 twilight-gateway = {version = "0.9", features = ["tracing"]}
