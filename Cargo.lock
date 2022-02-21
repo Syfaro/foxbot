@@ -1088,7 +1088,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "tracing-actix-web",
- "tracing-opentelemetry 0.17.1",
+ "tracing-opentelemetry 0.17.2",
  "tracing-subscriber",
  "twilight-cache-inmemory",
  "twilight-embed-builder",
@@ -3041,9 +3041,9 @@ checksum = "1ef965a420fe14fdac7dd018862966a4c14094f900e1650bbc71ddd7d580c8af"
 
 [[package]]
 name = "semver"
-version = "1.0.5"
+version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0486718e92ec9a68fbed73bb5ef687d71103b142595b406835649bebd33f72c7"
+checksum = "a4a3381e03edd24287172047536f20cabde766e2cd3e65e6b00fb3af51c4f38d"
 
 [[package]]
 name = "sentry"
@@ -3907,7 +3907,7 @@ dependencies = [
  "pin-project",
  "tracing",
  "tracing-futures",
- "tracing-opentelemetry 0.17.1",
+ "tracing-opentelemetry 0.17.2",
  "uuid",
 ]
 
@@ -3968,9 +3968,9 @@ dependencies = [
 
 [[package]]
 name = "tracing-opentelemetry"
-version = "0.17.1"
+version = "0.17.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a73d0f08e0d227c4c63e6d003804946767f4c4f01f52098b56821ae22e336bfc"
+checksum = "1f9378e96a9361190ae297e7f3a8ff644aacd2897f244b1ff81f381669196fa6"
 dependencies = [
  "opentelemetry 0.17.0",
  "tracing",

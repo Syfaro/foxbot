@@ -2,6 +2,7 @@ use std::{borrow::Cow, num::NonZeroU64};
 
 use clap::{Parser, Subcommand};
 use opentelemetry::{sdk::trace, KeyValue};
+use opentelemetry_otlp::WithExportConfig;
 use prometheus::Encoder;
 use thiserror::Error;
 use tracing_subscriber::prelude::*;
@@ -339,11 +340,13 @@ async fn main() {
         },
     };
 
-    let exporter = opentelemetry_otlp::new_exporter().tonic();
-
     let tracer = opentelemetry_otlp::new_pipeline()
         .tracing()
-        .with_exporter(exporter)
+        .with_exporter(
+            opentelemetry_otlp::new_exporter()
+                .tonic()
+                .with_endpoint(&args.otlp_agent),
+        )
         .with_trace_config(
             trace::config()
                 .with_sampler(trace::Sampler::AlwaysOn)
