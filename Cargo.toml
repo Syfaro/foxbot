@@ -34,7 +34,7 @@ hamming = "0.1"
 hex = "0.4"
 hyper = {version = "0.14", features = ["server"]}
 image = "0.23"
-infer = "0.6"
+infer = "0.7"
 intl-memoizer = "0.5"
 lazy_static = "1"
 linkify = "0.8"
