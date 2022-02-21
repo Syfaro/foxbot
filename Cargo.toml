@@ -3,7 +3,7 @@ authors = ["Syfaro <syfaro@huefox.com>"]
 edition = "2021"
 name = "foxbot"
 publish = false
-version = "0.8.0"
+version = "0.8.1"
 
 [package.metadata.release]
 sign-tag = true
