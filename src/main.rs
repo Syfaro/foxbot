@@ -1,7 +1,7 @@
 use std::{borrow::Cow, num::NonZeroU64};
 
 use clap::{Parser, Subcommand};
-use opentelemetry::KeyValue;
+use opentelemetry::{sdk::trace, KeyValue};
 use prometheus::Encoder;
 use thiserror::Error;
 use tracing_subscriber::prelude::*;
@@ -24,20 +24,11 @@ pub struct Args {
     #[clap(long, env)]
     pub metrics_host: std::net::SocketAddr,
 
-    #[clap(long, env, arg_enum)]
-    pub jaeger_type: JaegerType,
-
     #[clap(long, env)]
-    pub jaeger_endpoint: String,
+    pub otlp_agent: String,
 
     #[clap(subcommand)]
     pub command: Command,
-}
-
-#[derive(Clone, Debug, PartialEq, clap::ArgEnum)]
-pub enum JaegerType {
-    Agent,
-    Collector,
 }
 
 #[derive(Clone, Debug, Subcommand)]
@@ -348,35 +339,37 @@ async fn main() {
         },
     };
 
-    let tracer = match args.jaeger_type {
-        JaegerType::Agent => {
-            opentelemetry_jaeger::new_pipeline().with_agent_endpoint(&args.jaeger_endpoint)
-        }
-        JaegerType::Collector => {
-            opentelemetry_jaeger::new_pipeline().with_collector_endpoint(&args.jaeger_endpoint)
-        }
-    };
+    let exporter = opentelemetry_otlp::new_exporter().tonic();
 
-    let tracer = tracer
-        .with_service_name(service_name)
-        .with_tags(vec![KeyValue::new("version", env!("CARGO_PKG_VERSION"))])
+    let tracer = opentelemetry_otlp::new_pipeline()
+        .tracing()
+        .with_exporter(exporter)
+        .with_trace_config(
+            trace::config()
+                .with_sampler(trace::Sampler::AlwaysOn)
+                .with_resource(opentelemetry::sdk::Resource::new(vec![
+                    KeyValue::new("service.name", service_name),
+                    KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
+                    KeyValue::new("service.namespace", "foxbot"),
+                ])),
+        )
         .install_batch(opentelemetry::runtime::Tokio)
-        .expect("could not create jaeger tracer");
+        .expect("could not create otlp tracer");
 
     if matches!(std::env::var("LOG_FMT").as_deref(), Ok("json")) {
         tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer().json())
-        .with(sentry_tracing::layer())
-        .with(tracing_subscriber::EnvFilter::from_default_env())
-        .with(tracing_opentelemetry::layer().with_tracer(tracer))
-        .init();
+            .with(tracing_subscriber::fmt::layer().json())
+            .with(sentry_tracing::layer())
+            .with(tracing_subscriber::EnvFilter::from_default_env())
+            .with(tracing_opentelemetry::layer().with_tracer(tracer))
+            .init();
     } else {
         tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer())
-        .with(sentry_tracing::layer())
-        .with(tracing_subscriber::EnvFilter::from_default_env())
-        .with(tracing_opentelemetry::layer().with_tracer(tracer))
-        .init();
+            .with(tracing_subscriber::fmt::layer())
+            .with(sentry_tracing::layer())
+            .with(tracing_subscriber::EnvFilter::from_default_env())
+            .with(tracing_opentelemetry::layer().with_tracer(tracer))
+            .init();
     }
 
     let _sentry = sentry::init(sentry::ClientOptions {
