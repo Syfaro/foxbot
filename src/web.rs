@@ -371,10 +371,22 @@ struct CoconutMetadata {
 }
 
 #[derive(Deserialize)]
-#[serde(tag = "codec_name")]
-enum CoconutMetadataStream {
+struct CoconutMetadataStream {
+    codec_name: Option<CoconutCodecType>,
+    #[serde(flatten)]
+    dimensions: Option<CoconutDimensions>,
+}
+
+#[derive(Deserialize)]
+struct CoconutDimensions {
+    width: i32,
+    height: i32,
+}
+
+#[derive(Deserialize)]
+enum CoconutCodecType {
     #[serde(rename = "h264")]
-    H264 { height: i32, width: i32 },
+    H264,
     #[serde(rename = "vp9")]
     Vp9,
     #[serde(rename = "aac")]
@@ -469,8 +481,8 @@ async fn coconut_webhook(
 
             let dimensions = streams
                 .into_iter()
-                .find_map(|stream| match stream {
-                    CoconutMetadataStream::H264 { height, width } => Some((height, width)),
+                .find_map(|stream| match stream.codec_name {
+                    Some(CoconutCodecType::H264) => stream.dimensions,
                     _ => None,
                 })
                 .ok_or_else(|| actix_web::error::ErrorBadRequest("no known streams"))?;
@@ -481,8 +493,8 @@ async fn coconut_webhook(
                 video_url,
                 video_size,
                 duration,
-                height: dimensions.0,
-                width: dimensions.1,
+                height: dimensions.height,
+                width: dimensions.width,
             })
         }
         CoconutWebHook::InputTransferred { .. } => None,
