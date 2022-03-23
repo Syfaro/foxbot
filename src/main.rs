@@ -168,6 +168,15 @@ pub struct RunConfig {
     /// Twitter consumer secret.
     #[clap(long, env)]
     pub twitter_consumer_secret: String,
+    /// Twitter access key.
+    ///
+    /// This may be left empty to use app auth. Requires setting the Twitter
+    /// access secret.
+    #[clap(long, env, requires = "twitter-access-secret")]
+    pub twitter_access_key: Option<String>,
+    /// Twitter access secret.
+    #[clap(long, env)]
+    pub twitter_access_secret: Option<String>,
 
     /// Inkbunny username.
     #[clap(long, env)]

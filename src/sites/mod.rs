@@ -73,6 +73,27 @@ pub async fn get_all_sites(
     config: &crate::RunConfig,
     pool: sqlx::Pool<sqlx::Postgres>,
 ) -> Vec<BoxedSite> {
+    let twitter = match (&config.twitter_access_key, &config.twitter_access_secret) {
+        (Some(access_key), Some(access_secret)) => {
+            Twitter::new_access_tokens(
+                config.twitter_consumer_key.clone(),
+                config.twitter_consumer_secret.clone(),
+                access_key.clone(),
+                access_secret.clone(),
+                pool,
+            )
+            .await
+        }
+        _ => {
+            Twitter::new_app_auth(
+                config.twitter_consumer_key.clone(),
+                config.twitter_consumer_secret.clone(),
+                pool,
+            )
+            .await
+        }
+    };
+
     vec![
         Box::new(E621::new(
             E621Host::E621,
@@ -92,14 +113,7 @@ pub async fn get_all_sites(
             config.fuzzysearch_api_token.clone(),
         )),
         Box::new(Weasyl::new(config.weasyl_api_token.clone())),
-        Box::new(
-            Twitter::new(
-                config.twitter_consumer_key.clone(),
-                config.twitter_consumer_secret.clone(),
-                pool,
-            )
-            .await,
-        ),
+        Box::new(twitter),
         Box::new(Inkbunny::new(
             config.inkbunny_username.clone(),
             config.inkbunny_password.clone(),
@@ -558,16 +572,11 @@ struct TwitterData {
 }
 
 impl Twitter {
-    pub async fn new(
-        consumer_key: String,
-        consumer_secret: String,
+    async fn new(
+        consumer: egg_mode::KeyPair,
+        token: egg_mode::Token,
         conn: sqlx::Pool<sqlx::Postgres>,
     ) -> Self {
-        use egg_mode::KeyPair;
-
-        let consumer = KeyPair::new(consumer_key, consumer_secret);
-        let token = egg_mode::auth::bearer_token(&consumer).await.unwrap();
-
         Self {
             matcher: regex::Regex::new(
                 r"(?:https?://)?(?:mobile\.)?twitter.com/(?P<screen_name>\w+)(?:/status/(?P<id>\d+))?",
@@ -577,6 +586,39 @@ impl Twitter {
             token,
             conn,
         }
+    }
+
+    pub async fn new_app_auth(
+        consumer_key: String,
+        consumer_secret: String,
+        conn: sqlx::Pool<sqlx::Postgres>,
+    ) -> Self {
+        tracing::info!("Authenticating Twitter requests with App Auth");
+
+        let consumer = egg_mode::KeyPair::new(consumer_key, consumer_secret);
+        let token = egg_mode::auth::bearer_token(&consumer).await.unwrap();
+
+        Self::new(consumer, token, conn).await
+    }
+
+    pub async fn new_access_tokens(
+        consumer_key: String,
+        consumer_secret: String,
+        access_key: String,
+        access_secret: String,
+        conn: sqlx::PgPool,
+    ) -> Self {
+        tracing::info!("Authenticating Twitter requests with access tokens");
+
+        let consumer = egg_mode::KeyPair::new(consumer_key, consumer_secret);
+        let access = egg_mode::KeyPair::new(access_key, access_secret);
+
+        let token = egg_mode::Token::Access {
+            consumer: consumer.clone(),
+            access,
+        };
+
+        Self::new(consumer, token, conn).await
     }
 
     /// Get the media from a captured URL. If it is a direct link to a tweet,
