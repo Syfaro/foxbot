@@ -1076,7 +1076,6 @@ dependencies = [
  "tracing-opentelemetry 0.17.2",
  "tracing-subscriber",
  "twilight-cache-inmemory",
- "twilight-embed-builder",
  "twilight-gateway",
  "twilight-http",
  "twilight-model",
@@ -4048,15 +4047,6 @@ dependencies = [
  "bitflags",
  "dashmap",
  "serde",
- "twilight-model",
-]
-
-[[package]]
-name = "twilight-embed-builder"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7290d2ba2e7e1677bee70f007ae1b6992d606515669b9e4399bfa431d3867a8a"
-dependencies = [
  "twilight-model",
 ]
 
