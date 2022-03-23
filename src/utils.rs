@@ -410,7 +410,7 @@ where
             if site.url_supported(link).await {
                 tracing::debug!(link, site = site.name(), "found supported link");
 
-                let images = site.get_images(&user, link).await?;
+                let images = site.get_images(Some(&user), link).await?;
 
                 match images {
                     Some(results) => {

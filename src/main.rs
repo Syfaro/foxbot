@@ -212,6 +212,8 @@ pub struct TelegramConfig {
     pub high_priority: bool,
 }
 
+type CommandId = twilight_model::id::Id<twilight_model::id::marker::CommandMarker>;
+
 #[derive(Clone, Debug, Parser)]
 pub struct DiscordConfig {
     /// Discord API token.
@@ -222,7 +224,10 @@ pub struct DiscordConfig {
     pub discord_application_id: NonZeroU64,
     /// ID of registered find source command.
     #[clap(long, env)]
-    pub find_source_command: NonZeroU64,
+    pub find_source_command: CommandId,
+    /// ID of registered share images command.
+    #[clap(long, env)]
+    pub share_images_command: CommandId,
 }
 
 #[derive(Debug, Error)]

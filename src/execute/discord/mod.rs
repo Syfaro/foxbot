@@ -7,9 +7,11 @@ use twilight_gateway::{
     cluster::{Cluster, ShardScheme},
     Event,
 };
-use twilight_http::{request::channel::message::CreateMessage, Client as HttpClient};
+use twilight_http::{
+    client::InteractionClient, request::channel::message::CreateMessage, Client as HttpClient,
+};
 use twilight_model::{
-    application::interaction::Interaction,
+    application::interaction::{ApplicationCommand, Interaction},
     channel::{embed::Embed, message::MessageFlags, Attachment, ChannelType, Message},
     gateway::Intents,
     guild::Permissions,
@@ -205,83 +207,10 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
             Interaction::ApplicationCommand(command) => {
                 let interaction_client = ctx.http.interaction(ctx.application_id);
 
-                if command.data.id == Id::from(ctx.config.find_source_command) {
-                    let messages = command
-                        .data
-                        .resolved
-                        .as_ref()
-                        .map(|resolved| resolved.messages.values().collect::<Vec<_>>())
-                        .unwrap_or_default();
-
-                    tracing::debug!("Got command with {} messages", messages.len());
-
-                    let response = InteractionResponse {
-                        kind: InteractionResponseType::DeferredChannelMessageWithSource,
-                        data: Some(
-                            InteractionResponseDataBuilder::new()
-                                .flags(MessageFlags::EPHEMERAL)
-                                .content("Loading images...".to_string())
-                                .build(),
-                        ),
-                    };
-
-                    interaction_client
-                        .create_response(command.id, &command.token, &response)
-                        .exec()
-                        .await?;
-
-                    let mut embeds = Vec::with_capacity(messages.len());
-
-                    for message in messages {
-                        let attachments = &message.attachments;
-
-                        if attachments.is_empty() {
-                            tracing::info!("Attachments was empty");
-                            continue;
-                        }
-
-                        for attachment in attachments {
-                            let hash = if let Some(hash) =
-                                models::FileCache::get(&ctx.redis, &attachment.proxy_url).await?
-                            {
-                                hash
-                            } else {
-                                let hash = hash_attachment(&attachment.proxy_url).await?;
-                                models::FileCache::set(&ctx.redis, &attachment.proxy_url, hash)
-                                    .await?;
-                                hash
-                            };
-
-                            let files = lookup_hash(&ctx.fuzzysearch, hash, Some(3)).await?;
-
-                            if files.is_empty() {
-                                tracing::info!("No images or sources were found");
-                                continue;
-                            }
-
-                            let embed = sources_embed(attachment, &files).map_err(|err| {
-                                UserErrorMessage::new(err, "Unable to properly respond")
-                            })?;
-
-                            tracing::info!("Created embed: {:?}", embed);
-
-                            embeds.push(embed);
-                        }
-                    }
-
-                    if embeds.is_empty() {
-                        interaction_client
-                            .update_response(&command.token)
-                            .content(Some("No sources were found."))?
-                            .exec()
-                            .await?;
-                    } else {
-                        interaction_client
-                            .update_response(&command.token)
-                            .embeds(Some(&embeds))?
-                            .exec()
-                            .await?;
-                    }
+                if command.data.id == ctx.config.find_source_command {
+                    find_sources_interaction(&ctx, &interaction_client, command).await?;
+                } else if command.data.id == ctx.config.share_images_command {
+                    share_images_interaction(&ctx, &interaction_client, command).await?;
                 } else {
                     tracing::warn!("Got unknown command: {:?}", command);
                 }
@@ -349,6 +278,179 @@ impl std::fmt::Display for UserErrorMessage<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Error: {}", self.msg)
     }
+}
+
+async fn find_sources_interaction(
+    ctx: &Context,
+    interaction_client: &InteractionClient<'_>,
+    command: &ApplicationCommand,
+) -> anyhow::Result<()> {
+    let messages = command
+        .data
+        .resolved
+        .as_ref()
+        .map(|resolved| resolved.messages.values().collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    tracing::debug!("Got command with {} messages", messages.len());
+
+    let response = InteractionResponse {
+        kind: InteractionResponseType::DeferredChannelMessageWithSource,
+        data: Some(
+            InteractionResponseDataBuilder::new()
+                .flags(MessageFlags::EPHEMERAL)
+                .content("Loading images...".to_string())
+                .build(),
+        ),
+    };
+
+    interaction_client
+        .create_response(command.id, &command.token, &response)
+        .exec()
+        .await?;
+
+    let mut embeds = Vec::with_capacity(messages.len());
+
+    for message in messages {
+        let attachments = &message.attachments;
+
+        if attachments.is_empty() {
+            tracing::info!("Attachments was empty");
+            continue;
+        }
+
+        for attachment in attachments {
+            let hash = if let Some(hash) =
+                models::FileCache::get(&ctx.redis, &attachment.proxy_url).await?
+            {
+                hash
+            } else {
+                let hash = hash_attachment(&attachment.proxy_url).await?;
+                models::FileCache::set(&ctx.redis, &attachment.proxy_url, hash).await?;
+                hash
+            };
+
+            let files = lookup_hash(&ctx.fuzzysearch, hash, Some(3)).await?;
+
+            if files.is_empty() {
+                tracing::info!("No images or sources were found");
+                continue;
+            }
+
+            let embed = sources_embed(attachment, &files)
+                .map_err(|err| UserErrorMessage::new(err, "Unable to properly respond"))?;
+
+            tracing::info!("Created embed: {:?}", embed);
+
+            embeds.push(embed);
+        }
+    }
+
+    if embeds.is_empty() {
+        interaction_client
+            .update_response(&command.token)
+            .content(Some("No sources were found."))?
+            .exec()
+            .await?;
+    } else {
+        interaction_client
+            .update_response(&command.token)
+            .embeds(Some(&embeds))?
+            .exec()
+            .await?;
+    }
+
+    Ok(())
+}
+
+async fn share_images_interaction(
+    ctx: &Context,
+    interaction_client: &InteractionClient<'_>,
+    command: &ApplicationCommand,
+) -> anyhow::Result<()> {
+    let messages = command
+        .data
+        .resolved
+        .as_ref()
+        .map(|resolved| resolved.messages.values().collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    let mut finder = linkify::LinkFinder::new();
+    finder.kinds(&[linkify::LinkKind::Url]);
+
+    let links: Vec<&str> = messages
+        .iter()
+        .flat_map(|message| finder.links(&message.content).map(|link| link.as_str()))
+        .collect();
+
+    if links.is_empty() {
+        let response = InteractionResponse {
+            kind: InteractionResponseType::ChannelMessageWithSource,
+            data: Some(
+                InteractionResponseDataBuilder::new()
+                    .flags(MessageFlags::EPHEMERAL)
+                    .content("No links found".to_string())
+                    .build(),
+            ),
+        };
+
+        interaction_client
+            .create_response(command.id, &command.token, &response)
+            .exec()
+            .await?;
+
+        return Ok(());
+    }
+
+    let response = InteractionResponse {
+        kind: InteractionResponseType::DeferredChannelMessageWithSource,
+        data: Some(
+            InteractionResponseDataBuilder::new()
+                .content("Loading links...".to_string())
+                .build(),
+        ),
+    };
+
+    interaction_client
+        .create_response(command.id, &command.token, &response)
+        .exec()
+        .await?;
+
+    let mut results: Vec<PostInfo> = Vec::with_capacity(links.len());
+
+    let _missing = get_images(
+        ctx,
+        command.user.as_ref().map(|user| user.id),
+        &links,
+        &mut |info| {
+            results.extend(info.results);
+        },
+    )
+    .await?;
+
+    if results.is_empty() {
+        interaction_client
+            .update_response(&command.token)
+            .content(Some("No images found"))?
+            .exec()
+            .await?;
+
+        return Ok(());
+    }
+
+    let embeds: Vec<_> = results
+        .into_iter()
+        .map(|result| link_embed(&result))
+        .collect::<anyhow::Result<_>>()?;
+
+    interaction_client
+        .update_response(&command.token)
+        .content(None)?
+        .embeds(Some(&embeds))?
+        .exec()
+        .await?;
+
+    Ok(())
 }
 
 /// Download an attachment up to 50MB, attempt to load the image, and hash the
@@ -573,7 +675,7 @@ fn extract_links(content: &str) -> Option<Vec<&str>> {
 /// Collect all images from many links.
 async fn get_images<'a, C>(
     ctx: &Context,
-    user_id: Id<UserMarker>,
+    user_id: Option<Id<UserMarker>>,
     links: &'a [&str],
     callback: &mut C,
 ) -> anyhow::Result<Vec<&'a str>>
@@ -589,8 +691,8 @@ where
             if site.url_supported(link).await {
                 let start = std::time::Instant::now();
 
-                let user: models::User = user_id.into();
-                let images = site.get_images(&user, link).await?;
+                let user = user_id.map(crate::models::User::from);
+                let images = site.get_images(user.as_ref(), link).await?;
 
                 match images {
                     Some(results) => {
@@ -641,7 +743,7 @@ async fn mirror_links(
 ) -> anyhow::Result<()> {
     let mut results: Vec<PostInfo> = Vec::with_capacity(links.len());
 
-    let _missing = get_images(ctx, user_id, links, &mut |info| {
+    let _missing = get_images(ctx, Some(user_id), links, &mut |info| {
         results.extend(info.results);
     })
     .await?;

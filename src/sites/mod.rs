@@ -66,7 +66,11 @@ pub trait Site {
     async fn url_supported(&mut self, url: &str) -> bool;
     /// Attempt to load images from the given URL, with the Telegram user ID
     /// in case credentials are needed.
-    async fn get_images(&mut self, user: &User, url: &str) -> Result<Option<Vec<PostInfo>>, Error>;
+    async fn get_images(
+        &mut self,
+        user: Option<&User>,
+        url: &str,
+    ) -> Result<Option<Vec<PostInfo>>, Error>;
 }
 
 pub async fn get_all_sites(
@@ -212,7 +216,7 @@ impl Site for Direct {
 
     async fn get_images(
         &mut self,
-        _user: &User,
+        _user: Option<&User>,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, Error> {
         let u = url.to_string();
@@ -478,7 +482,7 @@ impl Site for E621 {
 
     async fn get_images(
         &mut self,
-        _user: &User,
+        _user: Option<&User>,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, Error> {
         let endpoint = if self.show.is_match(url) {
@@ -695,6 +699,25 @@ impl Twitter {
             }))
         }
     }
+
+    async fn get_token(&self, user: Option<&User>) -> Result<egg_mode::Token, Error> {
+        let user = match user {
+            Some(user) => user,
+            None => return Ok(self.token.clone()),
+        };
+
+        let account = models::TwitterAccount::get(&self.conn, user).await?;
+
+        let token = match account {
+            Some(account) => egg_mode::Token::Access {
+                consumer: self.consumer.clone(),
+                access: egg_mode::KeyPair::new(account.consumer_key, account.consumer_secret),
+            },
+            _ => self.token.clone(),
+        };
+
+        Ok(token)
+    }
 }
 
 #[async_trait]
@@ -722,20 +745,16 @@ impl Site for Twitter {
         self.matcher.is_match(url)
     }
 
-    async fn get_images(&mut self, user: &User, url: &str) -> Result<Option<Vec<PostInfo>>, Error> {
+    async fn get_images(
+        &mut self,
+        user: Option<&User>,
+        url: &str,
+    ) -> Result<Option<Vec<PostInfo>>, Error> {
         let captures = self.matcher.captures(url).unwrap();
 
-        tracing::trace!(%user, "attempting to find saved credentials",);
+        tracing::trace!(?user, "attempting to find saved credentials");
 
-        let account = models::TwitterAccount::get(&self.conn, user).await?;
-
-        let token = match account {
-            Some(account) => egg_mode::Token::Access {
-                consumer: self.consumer.clone(),
-                access: egg_mode::KeyPair::new(account.consumer_key, account.consumer_secret),
-            },
-            _ => self.token.clone(),
-        };
+        let token = self.get_token(user).await?;
 
         let TwitterData {
             user,
@@ -1025,7 +1044,7 @@ impl Site for FurAffinity {
 
     async fn get_images(
         &mut self,
-        _user: &User,
+        _user: Option<&User>,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, Error> {
         let captures = self
@@ -1140,7 +1159,7 @@ impl Site for Mastodon {
 
     async fn get_images(
         &mut self,
-        _user: &User,
+        _user: Option<&User>,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, Error> {
         let captures = self.matcher.captures(url).unwrap();
@@ -1252,7 +1271,7 @@ impl Site for Weasyl {
 
     async fn get_images(
         &mut self,
-        _user: &User,
+        _user: Option<&User>,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, Error> {
         let captures = self.matcher.captures(url).unwrap();
@@ -1488,7 +1507,7 @@ impl Site for Inkbunny {
 
     async fn get_images(
         &mut self,
-        _user: &User,
+        _user: Option<&User>,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, Error> {
         let captures = self.matcher.captures(url).unwrap();
@@ -1632,7 +1651,7 @@ impl Site for DeviantArt {
 
     async fn get_images(
         &mut self,
-        _user: &User,
+        _user: Option<&User>,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, Error> {
         let mut endpoint = url::Url::parse("https://backend.deviantart.com/oembed").unwrap();
