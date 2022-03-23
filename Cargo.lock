@@ -1049,8 +1049,8 @@ dependencies = [
  "intl-memoizer",
  "lazy_static",
  "linkify",
- "opentelemetry 0.17.0",
- "opentelemetry-http 0.6.0",
+ "opentelemetry",
+ "opentelemetry-http",
  "opentelemetry-jaeger",
  "opentelemetry-otlp",
  "prometheus",
@@ -1073,7 +1073,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "tracing-actix-web",
- "tracing-opentelemetry 0.17.2",
+ "tracing-opentelemetry",
  "tracing-subscriber",
  "twilight-cache-inmemory",
  "twilight-gateway",
@@ -1225,19 +1225,19 @@ dependencies = [
 [[package]]
 name = "fuzzysearch"
 version = "0.2.0"
-source = "git+https://github.com/Syfaro/fuzzysearch-rs#544ee161c25cfdcb9b86df1e1437fb2189a092ab"
+source = "git+https://github.com/Syfaro/fuzzysearch-rs#10a0850317aff8da4e45062de970f7e38b9a3a70"
 dependencies = [
  "chrono",
  "image",
  "img_hash",
- "opentelemetry 0.16.0",
- "opentelemetry-http 0.5.0",
+ "opentelemetry",
+ "opentelemetry-http",
  "reqwest",
  "serde",
  "serde_json",
  "tracing",
  "tracing-futures",
- "tracing-opentelemetry 0.16.0",
+ "tracing-opentelemetry",
  "tracing-subscriber",
 ]
 
@@ -2066,23 +2066,6 @@ dependencies = [
 
 [[package]]
 name = "opentelemetry"
-version = "0.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1cf9b1c4e9a6c4de793c632496fa490bdc0e1eea73f0c91394f7b6990935d22"
-dependencies = [
- "async-trait",
- "crossbeam-channel",
- "futures",
- "js-sys",
- "lazy_static",
- "percent-encoding",
- "pin-project",
- "rand 0.8.5",
- "thiserror",
-]
-
-[[package]]
-name = "opentelemetry"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6105e89802af13fdf48c49d7646d3b533a70e536d818aae7e78ba0433d01acb8"
@@ -2104,19 +2087,6 @@ dependencies = [
 
 [[package]]
 name = "opentelemetry-http"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d50ceb0b0e8b75cb3e388a2571a807c8228dabc5d6670f317b6eb21301095373"
-dependencies = [
- "async-trait",
- "bytes",
- "futures-util",
- "http",
- "opentelemetry 0.16.0",
-]
-
-[[package]]
-name = "opentelemetry-http"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "449048140ee61e28f57abe6e9975eedc1f3a29855c7407bd6c12b18578863379"
@@ -2124,7 +2094,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "http",
- "opentelemetry 0.17.0",
+ "opentelemetry",
 ]
 
 [[package]]
@@ -2135,7 +2105,7 @@ checksum = "f8c0b12cd9e3f9b35b52f6e0dac66866c519b26f424f4bbf96e3fe8bfbdc5229"
 dependencies = [
  "async-trait",
  "lazy_static",
- "opentelemetry 0.17.0",
+ "opentelemetry",
  "opentelemetry-semantic-conventions",
  "thiserror",
  "thrift",
@@ -2151,7 +2121,7 @@ dependencies = [
  "futures",
  "futures-util",
  "http",
- "opentelemetry 0.17.0",
+ "opentelemetry",
  "prost",
  "thiserror",
  "tokio",
@@ -2165,7 +2135,7 @@ version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985cc35d832d412224b2cffe2f9194b1b89b6aa5d0bef76d080dce09d90e62bd"
 dependencies = [
- "opentelemetry 0.17.0",
+ "opentelemetry",
 ]
 
 [[package]]
@@ -3888,11 +3858,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "99bcebac55fba44eadf75a424ee403e756f9165596a613d125876388e5fb4c34"
 dependencies = [
  "actix-web",
- "opentelemetry 0.17.0",
+ "opentelemetry",
  "pin-project",
  "tracing",
  "tracing-futures",
- "tracing-opentelemetry 0.17.2",
+ "tracing-opentelemetry",
  "uuid",
 ]
 
@@ -3940,24 +3910,11 @@ dependencies = [
 
 [[package]]
 name = "tracing-opentelemetry"
-version = "0.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ffbf13a0f8b054a4e59df3a173b818e9c6177c02789871f2073977fd0062076"
-dependencies = [
- "opentelemetry 0.16.0",
- "tracing",
- "tracing-core",
- "tracing-log",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "tracing-opentelemetry"
 version = "0.17.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f9378e96a9361190ae297e7f3a8ff644aacd2897f244b1ff81f381669196fa6"
 dependencies = [
- "opentelemetry 0.17.0",
+ "opentelemetry",
  "tracing",
  "tracing-core",
  "tracing-log",
