@@ -9,19 +9,17 @@ use twilight_gateway::{
 };
 use twilight_http::{request::channel::message::CreateMessage, Client as HttpClient};
 use twilight_model::{
-    application::{callback::InteractionResponse, interaction::Interaction},
-    channel::{
-        embed::Embed, message::MessageFlags, Attachment, Channel, ChannelType, GuildChannel,
-        Message,
-    },
+    application::interaction::Interaction,
+    channel::{embed::Embed, message::MessageFlags, Attachment, ChannelType, Message},
     gateway::Intents,
     guild::Permissions,
+    http::interaction::{InteractionResponse, InteractionResponseType},
     id::{
         marker::{ApplicationMarker, ChannelMarker, GuildMarker, MessageMarker, UserMarker},
         Id,
     },
 };
-use twilight_util::builder::CallbackDataBuilder;
+use twilight_util::builder::InteractionResponseDataBuilder;
 
 use crate::{
     models,
@@ -217,17 +215,18 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
 
                     tracing::debug!("Got command with {} messages", messages.len());
 
+                    let response = InteractionResponse {
+                        kind: InteractionResponseType::DeferredChannelMessageWithSource,
+                        data: Some(
+                            InteractionResponseDataBuilder::new()
+                                .flags(MessageFlags::EPHEMERAL)
+                                .content("Loading images...".to_string())
+                                .build(),
+                        ),
+                    };
+
                     interaction_client
-                        .interaction_callback(
-                            command.id,
-                            &command.token,
-                            &InteractionResponse::DeferredChannelMessageWithSource(
-                                CallbackDataBuilder::new()
-                                    .flags(MessageFlags::EPHEMERAL)
-                                    .content("Loading images...".to_string())
-                                    .build(),
-                            ),
-                        )
+                        .create_response(command.id, &command.token, &response)
                         .exec()
                         .await?;
 
@@ -272,13 +271,13 @@ async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
 
                     if embeds.is_empty() {
                         interaction_client
-                            .update_interaction_original(&command.token)
+                            .update_response(&command.token)
                             .content(Some("No sources were found."))?
                             .exec()
                             .await?;
                     } else {
                         interaction_client
-                            .update_interaction_original(&command.token)
+                            .update_response(&command.token)
                             .embeds(Some(&embeds))?
                             .exec()
                             .await?;
@@ -396,8 +395,8 @@ async fn is_pm(
     ctx: &Context,
     channel_id: Id<ChannelMarker>,
 ) -> Result<bool, UserErrorMessage<'static>> {
-    if let Some(channel) = ctx.cache.guild_channel(channel_id) {
-        return Ok(channel.kind() == ChannelType::Private);
+    if let Some(channel) = ctx.cache.channel(channel_id) {
+        return Ok(channel.kind == ChannelType::Private);
     }
 
     let channel = ctx
@@ -410,7 +409,7 @@ async fn is_pm(
         .await
         .map_err(|err| UserErrorMessage::new(err, "Channel did not load"))?;
 
-    Ok(matches!(channel, Channel::Private(_)))
+    Ok(channel.kind == ChannelType::Private)
 }
 
 /// Check if a message mentions the bot.
@@ -444,7 +443,7 @@ async fn is_mention(ctx: &Context, message: &Message) -> Result<bool, UserErrorM
 
 /// Build an embed for a collection of sources from an attachment.
 fn sources_embed(attachment: &Attachment, files: &[fuzzysearch::File]) -> anyhow::Result<Embed> {
-    use twilight_embed_builder::{EmbedBuilder, EmbedFooterBuilder, ImageSource};
+    use twilight_util::builder::embed::{EmbedBuilder, EmbedFooterBuilder, ImageSource};
 
     let urls = files
         .iter()
@@ -457,19 +456,19 @@ fn sources_embed(attachment: &Attachment, files: &[fuzzysearch::File]) -> anyhow
         .description(urls)
         .thumbnail(ImageSource::url(attachment.url.to_string())?)
         .footer(EmbedFooterBuilder::new("fuzzysearch.net"))
-        .build()?;
+        .build();
 
     Ok(embed)
 }
 
 fn link_embed(post: &PostInfo) -> anyhow::Result<Embed> {
-    use twilight_embed_builder::{EmbedBuilder, ImageSource};
+    use twilight_util::builder::embed::{EmbedBuilder, ImageSource};
 
     let embed = EmbedBuilder::new()
         .title(post.site_name.clone())
         .url(post.source_link.as_deref().unwrap_or(&post.url))
         .image(ImageSource::url(&post.url)?)
-        .build()?;
+        .build();
 
     Ok(embed)
 }
@@ -479,8 +478,7 @@ async fn allow_nsfw(ctx: &Context, channel_id: Id<ChannelMarker>) -> Option<bool
         return Some(true);
     }
 
-    let channel = ctx.cache.guild_channel(channel_id)?;
-    Some(matches!(channel.resource(), GuildChannel::Text(channel) if channel.nsfw))
+    ctx.cache.channel(channel_id)?.nsfw
 }
 
 async fn source_attachments(
