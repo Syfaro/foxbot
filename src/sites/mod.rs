@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use fuzzysearch::MatchType;
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, collections::HashMap};
+use tokio::sync::RwLock;
 
 use crate::{
     models::{self, User},
@@ -63,11 +64,11 @@ pub trait Site {
     fn url_id(&self, url: &str) -> Option<String>;
 
     /// Check if the URL might be supported by this site.
-    async fn url_supported(&mut self, url: &str) -> bool;
+    async fn url_supported(&self, url: &str) -> bool;
     /// Attempt to load images from the given URL, with the Telegram user ID
     /// in case credentials are needed.
     async fn get_images(
-        &mut self,
+        &self,
         user: Option<&User>,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, Error>;
@@ -188,7 +189,7 @@ impl Site for Direct {
         Some(url.to_owned())
     }
 
-    async fn url_supported(&mut self, url: &str) -> bool {
+    async fn url_supported(&self, url: &str) -> bool {
         tracing::trace!("checking if url is supported");
 
         let mut data = match self.client.get(url).send().await {
@@ -215,7 +216,7 @@ impl Site for Direct {
     }
 
     async fn get_images(
-        &mut self,
+        &self,
         _user: Option<&User>,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, Error> {
@@ -386,7 +387,7 @@ impl E621 {
 
     /// Load the 10 most recent posts from a pool at a given URL.
     #[tracing::instrument(skip(self, url), fields(pool_id))]
-    async fn get_pool(&mut self, url: &str) -> Result<Option<Vec<PostInfo>>, Error> {
+    async fn get_pool(&self, url: &str) -> Result<Option<Vec<PostInfo>>, Error> {
         let captures = self.pool.captures(url).unwrap();
         let id = &captures["id"];
         tracing::Span::current().record("pool_id", &id);
@@ -476,12 +477,12 @@ impl Site for E621 {
         Some(format!("{}-{}", self.site.name(), sub_id))
     }
 
-    async fn url_supported(&mut self, url: &str) -> bool {
+    async fn url_supported(&self, url: &str) -> bool {
         self.show.is_match(url) || self.data.is_match(url) || self.pool.is_match(url)
     }
 
     async fn get_images(
-        &mut self,
+        &self,
         _user: Option<&User>,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, Error> {
@@ -741,12 +742,12 @@ impl Site for Twitter {
         Some(format!("Twitter-{}", id))
     }
 
-    async fn url_supported(&mut self, url: &str) -> bool {
+    async fn url_supported(&self, url: &str) -> bool {
         self.matcher.is_match(url)
     }
 
     async fn get_images(
-        &mut self,
+        &self,
         user: Option<&User>,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, Error> {
@@ -1038,12 +1039,12 @@ impl Site for FurAffinity {
         }
     }
 
-    async fn url_supported(&mut self, url: &str) -> bool {
+    async fn url_supported(&self, url: &str) -> bool {
         self.matcher.is_match(url)
     }
 
     async fn get_images(
-        &mut self,
+        &self,
         _user: Option<&User>,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, Error> {
@@ -1072,7 +1073,7 @@ impl Site for FurAffinity {
 ///
 /// It holds an in-memory cache of if a URL is a Mastodon instance.
 pub struct Mastodon {
-    instance_cache: HashMap<String, bool>,
+    instance_cache: RwLock<HashMap<String, bool>>,
     matcher: regex::Regex,
     client: reqwest::Client,
 }
@@ -1092,7 +1093,7 @@ struct MastodonMediaAttachments {
 impl Mastodon {
     pub fn default() -> Self {
         Self {
-            instance_cache: HashMap::new(),
+            instance_cache: RwLock::new(HashMap::new()),
             matcher: regex::Regex::new(
                 r#"(?P<host>https?://(?:\S+))/(?:notice|users/\w+/statuses|@\w+)/(?P<id>\d+)"#,
             )
@@ -1122,7 +1123,7 @@ impl Site for Mastodon {
         Some(format!("Mastodon-{}", sub_id))
     }
 
-    async fn url_supported(&mut self, url: &str) -> bool {
+    async fn url_supported(&self, url: &str) -> bool {
         let captures = match self.matcher.captures(url) {
             Some(captures) => captures,
             None => return false,
@@ -1130,7 +1131,7 @@ impl Site for Mastodon {
 
         let base = captures["host"].to_owned();
 
-        if let Some(is_masto) = self.instance_cache.get(&base) {
+        if let Some(is_masto) = self.instance_cache.read().await.get(&base) {
             if !is_masto {
                 return false;
             }
@@ -1144,13 +1145,13 @@ impl Site for Mastodon {
         {
             Ok(resp) => resp,
             Err(_) => {
-                self.instance_cache.insert(base, false);
+                self.instance_cache.write().await.insert(base, false);
                 return false;
             }
         };
 
         if !resp.status().is_success() {
-            self.instance_cache.insert(base, false);
+            self.instance_cache.write().await.insert(base, false);
             return false;
         }
 
@@ -1158,7 +1159,7 @@ impl Site for Mastodon {
     }
 
     async fn get_images(
-        &mut self,
+        &self,
         _user: Option<&User>,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, Error> {
@@ -1265,12 +1266,12 @@ impl Site for Weasyl {
         Some(format!("Weasyl-{}", sub_id))
     }
 
-    async fn url_supported(&mut self, url: &str) -> bool {
+    async fn url_supported(&self, url: &str) -> bool {
         self.matcher.is_match(url)
     }
 
     async fn get_images(
-        &mut self,
+        &self,
         _user: Option<&User>,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, Error> {
@@ -1335,7 +1336,7 @@ pub struct Inkbunny {
     username: String,
     password: String,
 
-    sid: Option<String>,
+    sid: RwLock<Option<String>>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -1387,8 +1388,8 @@ impl Inkbunny {
     const API_SUBMISSIONS: &'static str = "https://inkbunny.net/api_submissions.php";
 
     /// Log into Inkbunny, getting a session ID for future requests.
-    pub async fn get_sid(&mut self) -> Result<String, Error> {
-        if let Some(sid) = &self.sid {
+    pub async fn get_sid(&self) -> Result<String, Error> {
+        if let Some(sid) = self.sid.read().await.as_ref() {
             return Ok(sid.clone());
         }
 
@@ -1418,12 +1419,12 @@ impl Inkbunny {
             return Err(Error::bot("Inkbunny account was missing permissions"));
         }
 
-        self.sid = Some(login.sid.clone());
+        *self.sid.write().await = Some(login.sid.clone());
         Ok(login.sid)
     }
 
     /// Load submissions from provided IDs.
-    pub async fn get_submissions(&mut self, ids: &[i32]) -> Result<InkbunnySubmissions, Error> {
+    pub async fn get_submissions(&self, ids: &[i32]) -> Result<InkbunnySubmissions, Error> {
         let ids: String = ids
             .iter()
             .map(|id| id.to_string())
@@ -1453,7 +1454,7 @@ impl Inkbunny {
                 InkbunnyResponse::Success(submissions) => break submissions,
                 InkbunnyResponse::Error { error_code: 2 } => {
                     tracing::info!("Inkbunny SID expired");
-                    self.sid = None;
+                    *self.sid.write().await = None;
                     continue;
                 }
                 _ => return Err(Error::bot("Unhandled Inkbunny error code")),
@@ -1476,7 +1477,7 @@ impl Inkbunny {
             username,
             password,
 
-            sid: None,
+            sid: RwLock::new(None),
         }
     }
 }
@@ -1501,12 +1502,12 @@ impl Site for Inkbunny {
         Some(format!("Inkbunny-{}", sub_id))
     }
 
-    async fn url_supported(&mut self, url: &str) -> bool {
+    async fn url_supported(&self, url: &str) -> bool {
         self.matcher.is_match(url)
     }
 
     async fn get_images(
-        &mut self,
+        &self,
         _user: Option<&User>,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, Error> {
@@ -1638,7 +1639,7 @@ impl Site for DeviantArt {
         "DeviantArt"
     }
 
-    async fn url_supported(&mut self, url: &str) -> bool {
+    async fn url_supported(&self, url: &str) -> bool {
         self.matcher.is_match(url)
     }
 
@@ -1650,7 +1651,7 @@ impl Site for DeviantArt {
     }
 
     async fn get_images(
-        &mut self,
+        &self,
         _user: Option<&User>,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, Error> {

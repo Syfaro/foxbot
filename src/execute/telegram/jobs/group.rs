@@ -104,11 +104,10 @@ pub async fn process_group_photo(
     }
 
     let links = utils::extract_links(&message);
-    let mut sites = cx.sites.lock().await;
 
     if wanted_matches
         .iter()
-        .any(|m| utils::link_was_seen(&sites, &links, &m.url()))
+        .any(|m| utils::link_was_seen(&cx.sites, &links, &m.url()))
     {
         tracing::debug!("group message already contained valid links");
         return Ok(());
@@ -119,7 +118,7 @@ pub async fn process_group_photo(
         let _ = utils::find_images(
             &tgbotapi::User::default(),
             links,
-            &mut sites,
+            &cx.sites,
             &cx.redis,
             &mut |info| {
                 results.extend(info.results);
@@ -136,8 +135,6 @@ pub async fn process_group_photo(
             return Ok(());
         }
     }
-
-    drop(sites);
 
     let twitter_matches = wanted_matches
         .iter()

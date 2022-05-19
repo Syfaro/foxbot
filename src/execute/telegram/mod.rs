@@ -11,7 +11,7 @@ use prometheus::{
 use rand::prelude::SliceRandom;
 use redis::AsyncCommands;
 use sqlx::PgPool;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use tracing::Instrument;
 use unic_langid::LanguageIdentifier;
 use uuid::Uuid;
@@ -106,7 +106,7 @@ pub async fn telegram(args: Args, config: RunConfig, telegram_config: TelegramCo
         .await
         .expect("could not connect to database");
 
-    let sites = Mutex::new(crate::sites::get_all_sites(&config, pool.clone()).await);
+    let sites = crate::sites::get_all_sites(&config, pool.clone()).await;
 
     let faktory = FaktoryClient::connect(&config.faktory_url)
         .await
@@ -262,7 +262,7 @@ pub async fn telegram(args: Args, config: RunConfig, telegram_config: TelegramCo
 
 pub struct Context {
     handlers: Vec<BoxedHandler>,
-    sites: Mutex<Vec<BoxedSite>>,
+    sites: Vec<BoxedSite>,
 
     langs: HashMap<LanguageIdentifier, Vec<String>>,
     best_lang: RwLock<HashMap<String, Arc<FluentBundle<FluentResource, IntlLangMemoizer>>>>,

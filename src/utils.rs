@@ -62,7 +62,7 @@ struct ImageCacheData {
 /// Attempt to get cached images for a given URL.
 async fn get_cached_images<'a>(
     link: &'a str,
-    sites: &'a mut [BoxedSite],
+    sites: &'a [BoxedSite],
     redis: &mut redis::aio::ConnectionManager,
 ) -> Result<Option<SiteCallback<'a>>, Error> {
     let url_id = match sites.iter().find_map(|site| site.url_id(link)) {
@@ -380,7 +380,7 @@ pub async fn resize_photo(url: &str, max_size: u64) -> Result<tgbotapi::FileType
 pub async fn find_images<'a, C, U: Into<User>>(
     user: U,
     links: Vec<&'a str>,
-    sites: &mut [BoxedSite],
+    sites: &[BoxedSite],
     redis: &redis::aio::ConnectionManager,
     callback: &mut C,
 ) -> Result<Vec<&'a str>, Error>
@@ -404,7 +404,7 @@ where
             Err(err) => tracing::error!("could not get cached images: {}", err),
         }
 
-        for site in sites.iter_mut() {
+        for site in sites.iter() {
             let start = Instant::now();
 
             if site.url_supported(link).await {
@@ -1229,11 +1229,7 @@ pub async fn size_post(post: &PostInfo, data: &bytes::Bytes) -> Result<PostInfo,
 }
 
 /// Check if a link was contained within a linkify Link.
-pub fn link_was_seen(
-    sites: &tokio::sync::MutexGuard<Vec<BoxedSite>>,
-    links: &[&str],
-    source: &str,
-) -> bool {
+pub fn link_was_seen(sites: &[BoxedSite], links: &[&str], source: &str) -> bool {
     // Find the unique ID for the source link. If one does not exist, we can't
     // find any matches against it.
     let source_id = match sites.iter().find_map(|site| site.url_id(source)) {

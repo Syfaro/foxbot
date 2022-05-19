@@ -283,9 +283,8 @@ impl Handler for InlineHandler {
 
         // Lock sites in order to find which of these links are usable
         let images_err = {
-            let mut sites = cx.sites.lock().await;
             let links = links.iter().map(|link| link.as_ref()).collect();
-            utils::find_images(&inline.from, links, &mut sites, &cx.redis, &mut |info| {
+            utils::find_images(&inline.from, links, &cx.sites, &cx.redis, &mut |info| {
                 results.extend(info.results);
             })
             .await
@@ -710,8 +709,7 @@ async fn process_result(
             };
 
             let url_id = {
-                let sites = cx.sites.lock().await;
-                sites
+                cx.sites
                     .iter()
                     .find_map(|site| site.url_id(&source))
                     .ok_or_else(|| Error::missing("site url_id"))?
