@@ -475,7 +475,7 @@ async fn coconut_webhook(
             let (video_url, video_size, video_duration, streams) = video_data
                 .ok_or_else(|| actix_web::error::ErrorBadRequest("no known video formats"))?;
 
-            let video_size = video_size.parse().unwrap_or(i32::MAX);
+            let video_size = video_size.parse().unwrap_or(i64::MAX);
 
             let duration = video_duration.parse::<f32>().unwrap_or_default().ceil() as i32;
 

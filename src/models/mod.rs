@@ -663,7 +663,7 @@ pub struct Video {
     pub thumb_url: Option<String>,
     pub display_url: String,
     pub created_at: chrono::NaiveDateTime,
-    pub file_size: Option<i32>,
+    pub file_size: Option<i64>,
     pub height: Option<i32>,
     pub width: Option<i32>,
     pub duration: Option<i32>,
@@ -733,7 +733,7 @@ impl Video {
         id: i32,
         mp4_url: &str,
         thumb_url: &str,
-        file_size: i32,
+        file_size: i64,
         height: i32,
         width: i32,
     ) -> Result<(), Error> {

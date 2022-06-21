@@ -23,8 +23,11 @@ use super::{
 /// Maximum size of inline image before resizing.
 static MAX_IMAGE_SIZE: usize = 5_000_000;
 
+/// Maximum size of inline GIF before transcoding.
+static MAX_GIF_SIZE: usize = 1_000_000;
+
 /// Maximum size of video allowed to be returned in inline result.
-static MAX_VIDEO_SIZE: i32 = 10_000_000;
+static MAX_VIDEO_SIZE: i64 = 10_000_000;
 
 pub struct InlineHandler;
 
@@ -497,7 +500,7 @@ async fn video_complete(
     display_name: &str,
     video_url: &str,
     thumb_url: &str,
-    video_size: i32,
+    video_size: i64,
     height: i32,
     width: i32,
     duration: i32,
@@ -723,7 +726,9 @@ async fn process_result(
             Ok(Some(results))
         }
         "mp4" => Ok(Some(build_mp4_result(result, thumb_url, &keyboard))),
-        "gif" => Ok(Some(build_gif_result(result, thumb_url, &keyboard))),
+        "gif" => Ok(Some(
+            build_gif_result(cx, result, thumb_url, &keyboard).await?,
+        )),
         other => {
             tracing::warn!(file_type = other, "got unusable type");
             Ok(None)
@@ -819,7 +824,7 @@ async fn build_image_result(
     include_tags: bool,
 ) -> Result<Vec<(ResultType, InlineQueryResult)>, Error> {
     let mut result = result.to_owned();
-    result.thumb = Some(thumb_url);
+    result.thumb = Some(thumb_url.clone());
 
     // There is a bit of processing required to figure out how to handle an
     // image before sending it off to Telegram. First, we check if the config
@@ -1072,11 +1077,89 @@ fn build_mp4_result(
     vec![(ResultType::Ready, video)]
 }
 
-fn build_gif_result(
+async fn build_gif_result(
+    cx: &Context,
     result: &PostInfo,
     thumb_url: String,
     keyboard: &InlineKeyboardMarkup,
-) -> Vec<(ResultType, InlineQueryResult)> {
+) -> Result<Vec<(ResultType, InlineQueryResult)>, Error> {
+    let data = utils::download_image(&result.url).await?;
+    let result = utils::size_post(result, &data).await?;
+
+    if result.image_size.unwrap_or_default() > MAX_GIF_SIZE {
+        let source = match &result.source_link {
+            Some(link) => link.to_owned(),
+            None => result.url.clone(),
+        };
+
+        let url_id = {
+            cx.sites
+                .iter()
+                .find_map(|site| site.url_id(&source))
+                .ok_or_else(|| Error::missing("site url_id"))?
+        };
+
+        let video = match models::Video::lookup_by_url_id(&cx.pool, &url_id).await? {
+            None => {
+                let display_name = models::Video::insert_media(
+                    &cx.pool,
+                    &url_id,
+                    &result.url,
+                    &source,
+                    &utils::generate_id(),
+                )
+                .await?;
+
+                return Ok(vec![(
+                    ResultType::VideoToBeProcessed,
+                    InlineQueryResult::article(
+                        format!("process-{}", display_name),
+                        "".into(),
+                        "".into(),
+                    ),
+                )]);
+            }
+            Some(video) if !video.processed => {
+                return Ok(vec![(
+                    ResultType::VideoToBeProcessed,
+                    InlineQueryResult::article(
+                        format!("process-{}", video.display_name),
+                        "".into(),
+                        "".into(),
+                    ),
+                )]);
+            }
+            Some(models::Video {
+                display_name,
+                file_size: Some(file_size),
+                ..
+            }) if file_size > MAX_VIDEO_SIZE => {
+                return Ok(vec![(
+                    ResultType::VideoTooLarge,
+                    InlineQueryResult::article(
+                        format!("process-{}", display_name),
+                        "".into(),
+                        "".into(),
+                    ),
+                )]);
+            }
+            Some(video) => video,
+        };
+
+        let full_url = video.mp4_url.unwrap();
+
+        let mut video_result = InlineQueryResult::video(
+            video.display_name,
+            full_url,
+            "video/mp4".to_owned(),
+            thumb_url.to_owned(),
+            result.url.clone(),
+        );
+        video_result.reply_markup = Some(keyboard.clone());
+
+        return Ok(vec![(ResultType::Ready, video_result)]);
+    }
+
     let full_url = result.url.clone();
 
     let mut gif = InlineQueryResult::gif(
@@ -1099,7 +1182,7 @@ fn build_gif_result(
         results.push((ResultType::Ready, gif));
     };
 
-    results
+    Ok(results)
 }
 
 #[allow(clippy::manual_map)]
