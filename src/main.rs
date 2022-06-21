@@ -414,6 +414,13 @@ async fn main() {
     opentelemetry::global::shutdown_tracer_provider();
 }
 
+async fn run_migrations(pool: &sqlx::PgPool) {
+    sqlx::migrate!()
+        .run(pool)
+        .await
+        .expect("could not run migrations");
+}
+
 fn metrics_server(host: std::net::SocketAddr) {
     tokio::task::spawn(async move {
         tracing::info!("starting metrics server");

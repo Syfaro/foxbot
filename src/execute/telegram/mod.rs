@@ -106,6 +106,8 @@ pub async fn telegram(args: Args, config: RunConfig, telegram_config: TelegramCo
         .await
         .expect("could not connect to database");
 
+    crate::run_migrations(&pool).await;
+
     let sites = crate::sites::get_all_sites(&config, pool.clone()).await;
 
     let faktory = FaktoryClient::connect(&config.faktory_url)

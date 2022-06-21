@@ -36,6 +36,8 @@ pub async fn web(config: WebConfig) {
         .await
         .expect("could not connect to database");
 
+    crate::run_migrations(&pool).await;
+
     let bot = tgbotapi::Telegram::new(config.telegram_api_token.clone());
 
     bot.make_request(&tgbotapi::requests::SetWebhook {

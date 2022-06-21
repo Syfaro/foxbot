@@ -39,6 +39,8 @@ pub async fn discord(config: RunConfig, discord_config: DiscordConfig) {
         .await
         .expect("Unable to connect to database");
 
+    crate::run_migrations(&pool).await;
+
     let redis = redis::Client::open(config.redis_url.clone()).expect("could not connect to redis");
     let redis = redis::aio::ConnectionManager::new(redis)
         .await
