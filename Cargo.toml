@@ -17,13 +17,13 @@ anyhow = "1"
 askama = "0.11"
 async-trait = "0.1"
 base64 = "0.13"
-bigdecimal = "0.2"
+bigdecimal = "0.3"
 bytes = "1"
 chrono = "0.4"
 clap = {version = "3", features = ["derive", "env"]}
 dotenv = {version = "0.15", optional = true}
 egg-mode = "0.16"
-faktory = "0.11"
+faktory = "0.12"
 fluent-bundle = "0.15"
 fluent-langneg = "0.13"
 furaffinity-rs = {git = "https://github.com/Syfaro/furaffinity-rs"}
@@ -34,7 +34,7 @@ hamming = "0.1"
 hex = "0.4"
 hyper = {version = "0.14", features = ["server"]}
 image = "0.23"
-infer = "0.7"
+infer = "0.8"
 intl-memoizer = "0.5"
 lazy_static = "1"
 linkify = "0.8"
@@ -47,15 +47,15 @@ rand = "0.8"
 redis = {version = "0.21", features = ["connection-manager", "tokio-comp"]}
 regex = "1"
 reqwest = {version = "0.11", features = ["json"]}
-rusoto_core = "0.47"
-rusoto_credential = "0.47"
-rusoto_s3 = "0.47"
-sentry = "0.25"
-sentry-tracing = "0.25"
+rusoto_core = "0.48"
+rusoto_credential = "0.48"
+rusoto_s3 = "0.48"
+sentry = "0.27"
+sentry-tracing = "0.27"
 serde = {version = "1", features = ["derive"]}
 serde_json = "1"
 sha2 = "0.10"
-sqlx = {version = "0.5", default-features = false, features = ["runtime-tokio-native-tls", "macros", "postgres", "offline", "json", "migrate", "chrono", "bigdecimal"]}
+sqlx = {version = "0.6", default-features = false, features = ["runtime-tokio-native-tls", "macros", "postgres", "offline", "json", "migrate", "chrono", "bigdecimal"]}
 tgbotapi = {git = "https://github.com/Syfaro/tgbotapi-rs"}
 thiserror = "1"
 tokio = {version = "1", features = ["rt"]}
@@ -64,11 +64,11 @@ tracing = "0.1"
 tracing-actix-web = {version = "0.5", features = ["opentelemetry_0_17"]}
 tracing-opentelemetry = "0.17"
 tracing-subscriber = {version = "0.3", features = ["env-filter", "json"]}
-twilight-cache-inmemory = "0.10"
-twilight-gateway = {version = "0.10", features = ["tracing"]}
-twilight-http = {version = "0.10", features = ["tracing"]}
-twilight-model = "0.10"
-twilight-util = {version = "0.10", features = ["builder"]}
+twilight-cache-inmemory = "0.11"
+twilight-gateway = "0.11"
+twilight-http = "0.11"
+twilight-model = "0.11"
+twilight-util = {version = "0.11", features = ["builder"]}
 unic-langid = "0.9"
 url = "2"
-uuid = "0.8"
+uuid = "1"

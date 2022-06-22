@@ -3,10 +3,7 @@ use std::sync::Arc;
 use futures::{stream::StreamExt, TryFutureExt};
 use tokio::sync::Mutex;
 use twilight_cache_inmemory::{InMemoryCache, ResourceType};
-use twilight_gateway::{
-    cluster::{Cluster, ShardScheme},
-    Event,
-};
+use twilight_gateway::{cluster::Cluster, Event};
 use twilight_http::{
     client::InteractionClient, request::channel::message::CreateMessage, Client as HttpClient,
 };
@@ -50,13 +47,10 @@ pub async fn discord(config: RunConfig, discord_config: DiscordConfig) {
 
     let sites = Arc::new(Mutex::new(sites));
 
-    let scheme = ShardScheme::Auto;
-
     let cluster = Cluster::builder(
         discord_config.discord_token.clone(),
         Intents::GUILDS | Intents::GUILD_MESSAGES | Intents::DIRECT_MESSAGES,
-    )
-    .shard_scheme(scheme);
+    );
 
     let (cluster, mut events) = cluster.build().await.expect("Unable to create cluster");
 
