@@ -208,7 +208,7 @@ where
                 }
                 Err(err) if !err.is_retryable() => {
                     JOB_FAILURE_COUNT.with_label_values(&[name]).inc();
-                    tracing::warn!(execution_time, "job failed, and marked as not retryable");
+                    tracing::warn!(execution_time, "job failed, and marked as not retryable: {:?}", err);
                     (Ok(()), sentry::protocol::SessionStatus::Abnormal)
                 }
                 Err(err) => {
