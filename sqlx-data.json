@@ -38,6 +38,26 @@
     },
     "query": "UPDATE chat_administrator SET chat_id = $1 WHERE chat_id = $2"
   },
+  "09ce665eb5ecdad0a572c71649939e7990f21fa2f7cd6172c4f9592bd3fe5cd6": {
+    "describe": {
+      "columns": [
+        {
+          "name": "exists",
+          "ordinal": 0,
+          "type_info": "Bool"
+        }
+      ],
+      "nullable": [
+        null
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      }
+    },
+    "query": "SELECT\n    exists(\n        SELECT\n            1\n        FROM\n            reddit_processed_mention\n        WHERE\n            mention_id = $1\n    );\n"
+  },
   "0c9960213c182d56e0fa2202ab2d7f1153302c9687da9f2812b1ff306b0fcbbb": {
     "describe": {
       "columns": [
@@ -909,6 +929,20 @@
       }
     },
     "query": "DELETE FROM\n    media_group_sent\nWHERE\n    media_group_id = $1;\n"
+  },
+  "bb9e2a0bf30f11234ce47e1062768460ee076e7ca0ad5c68ba548ebf65958a49": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Text",
+          "Int8",
+          "Text"
+        ]
+      }
+    },
+    "query": "INSERT INTO\n    reddit_processed_mention (mention_id, perceptual_hash, created_comment_id)\nVALUES\n    ($1, $2, $3);\n"
   },
   "be823b9738decf3ac8c9f0574a984a5ee07829a4b67241a567687d92a2f0b76e": {
     "describe": {

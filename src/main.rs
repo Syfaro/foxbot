@@ -34,14 +34,20 @@ pub struct Args {
 
 #[derive(Clone, Debug, Subcommand)]
 pub enum Command {
+    /// Web server used for displaying content to users and receiving webhooks.
     Web(Box<WebConfig>),
+    /// Run bot for a given site.
     Run(Box<RunConfig>),
 }
 
 #[derive(Clone, Debug, Subcommand)]
 pub enum RunService {
+    /// Run bot for Telegram.
     Telegram(TelegramConfig),
+    /// Run bot for Discord.
     Discord(DiscordConfig),
+    /// Run bot for Reddit.
+    Reddit(RedditConfig),
 }
 
 #[derive(Clone, Debug, Parser)]
@@ -230,6 +236,22 @@ pub struct DiscordConfig {
     pub share_images_command: CommandId,
 }
 
+#[derive(Clone, Debug, Parser)]
+pub struct RedditConfig {
+    /// Reddit OAuth client ID.
+    #[clap(long, env)]
+    pub reddit_client_id: String,
+    /// Reddit OAuth client secret.
+    #[clap(long, env)]
+    pub reddit_client_secret: String,
+    /// Reddit account username.
+    #[clap(long, env)]
+    pub reddit_username: String,
+    /// Reddit account password.
+    #[clap(long, env)]
+    pub reddit_password: String,
+}
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("faktory error: {0}")]
@@ -254,6 +276,8 @@ pub enum Error {
     S3(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("discord http error: {0}")]
     DiscordHttp(#[from] twilight_http::Error),
+    #[error("reddit error: {0}")]
+    Reddit(#[from] roux::util::error::RouxError),
 
     #[error("bot issue: {0}")]
     Bot(Cow<'static, str>),
@@ -351,6 +375,7 @@ async fn main() {
         Command::Run(run) => match run.service {
             RunService::Discord(_) => "foxbot-discord",
             RunService::Telegram(_) => "foxbot-telegram",
+            RunService::Reddit(_) => "foxbot-reddit",
         },
     };
 
@@ -407,6 +432,9 @@ async fn main() {
             }
             RunService::Discord(discord_config) => {
                 execute::start_discord(*run_config, discord_config).await
+            }
+            RunService::Reddit(reddit_config) => {
+                execute::start_reddit(*run_config, reddit_config).await
             }
         },
     }
