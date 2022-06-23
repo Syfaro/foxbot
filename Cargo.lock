@@ -1050,6 +1050,7 @@ dependencies = [
  "prometheus",
  "rand 0.8.5",
  "redis",
+ "redlock",
  "regex",
  "reqwest",
  "roux",
@@ -2679,6 +2680,16 @@ dependencies = [
  "tokio",
  "tokio-util 0.6.10",
  "url",
+]
+
+[[package]]
+name = "redlock"
+version = "1.1.0"
+source = "git+https://github.com/Syfaro/redlock-rs.git#6199cc7ec4fb6f0f7debe4d82c66249bea87748e"
+dependencies = [
+ "rand 0.8.5",
+ "redis",
+ "tokio",
 ]
 
 [[package]]

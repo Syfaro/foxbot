@@ -45,6 +45,7 @@ opentelemetry-otlp = {version = "0.10"}
 prometheus = {version = "0.13", features = ["process"]}
 rand = "0.8"
 redis = {version = "0.21", features = ["connection-manager", "tokio-comp"]}
+redlock = {git = "https://github.com/Syfaro/redlock-rs.git"}
 regex = "1"
 reqwest = {version = "0.11", features = ["json"]}
 roux = "1"
