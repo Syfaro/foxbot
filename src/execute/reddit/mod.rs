@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use async_recursion::async_recursion;
 use fuzzysearch::FuzzySearch;
 use serde::{Deserialize, Serialize};
 
@@ -214,6 +215,7 @@ pub async fn reddit(config: RunConfig, reddit_config: RedditConfig) {
     faktory.run_to_completion(&RedditJobQueue::priority_order());
 }
 
+#[async_recursion]
 async fn find_link(
     reddit_client: &reqwest::Client,
     parent_id: &str,
@@ -229,6 +231,13 @@ async fn find_link(
             }
             RedditInfo::Link { url, .. } => Some(url),
         },
+        RedditInfo::Link {
+            crosspost_parent: Some(crosspost_parent),
+            ..
+        } => {
+            tracing::debug!("was crosspost, fetching parent");
+            return find_link(reddit_client, &crosspost_parent).await;
+        }
         RedditInfo::Link { url, .. } => Some(url),
         _ => {
             tracing::warn!("missing reddit data to process mention");
@@ -420,6 +429,7 @@ pub enum RedditInfo {
         #[serde(flatten)]
         common: RedditCommonInfo,
         url: String,
+        crosspost_parent: Option<String>,
     },
 }
 
@@ -508,6 +518,7 @@ mod tests {
                     author: "username".to_string(),
                 },
                 url: "https://syfaro.net".to_string(),
+                crosspost_parent: None,
             }
         )
     }

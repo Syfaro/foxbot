@@ -15,6 +15,7 @@ env = ["dotenv"]
 actix-web = {version = "4", default-features = false}
 anyhow = "1"
 askama = "0.11"
+async-recursion = "1"
 async-trait = "0.1"
 base64 = "0.13"
 bigdecimal = "0.3"
