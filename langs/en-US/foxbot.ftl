@@ -161,3 +161,9 @@ subscribe-found-single =
     You can see it here: { $link }
 subscribe-found-multiple = I found matches to a previously searched image!
 subscribe-found-multiple-item = · { $link }
+
+feedback-message =
+    Hi there! Feedback is always appreciated.
+
+    You can view existing and share new feedback by clicking the button below.
+feedback-button = View and Share Feedback

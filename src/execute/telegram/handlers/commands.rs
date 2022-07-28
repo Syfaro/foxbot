@@ -10,7 +10,7 @@ use crate::{
     execute::telegram::Context,
     models, needs_field,
     sites::PostInfo,
-    utils::{self, CheckFileSize},
+    utils::{self, get_message, CheckFileSize},
     Error,
 };
 
@@ -68,6 +68,41 @@ impl Handler for CommandHandler {
             "/groupsource" => self.enable_group_source(cx, message).await,
             "/grouppreviews" => self.group_nopreviews(cx, message).await,
             "/groupalbums" => self.group_noalbums(cx, message).await,
+            "/feedback" => {
+                let bundle = cx
+                    .get_fluent_bundle(
+                        message
+                            .from
+                            .as_ref()
+                            .and_then(|user| user.language_code.as_deref()),
+                    )
+                    .await;
+
+                let text = get_message(&bundle, "feedback-message", None);
+                let button_text = get_message(&bundle, "feedback-button", None);
+
+                cx.bot
+                    .make_request(&tgbotapi::requests::SendMessage {
+                        chat_id: message.chat_id(),
+                        text,
+                        reply_markup: Some(tgbotapi::requests::ReplyMarkup::InlineKeyboardMarkup(
+                            tgbotapi::InlineKeyboardMarkup {
+                                inline_keyboard: vec![vec![tgbotapi::InlineKeyboardButton {
+                                    text: button_text,
+                                    login_url: Some(tgbotapi::LoginUrl {
+                                        url: format!("{}/feedback", cx.config.public_endpoint),
+                                        ..Default::default()
+                                    }),
+                                    ..Default::default()
+                                }]],
+                            },
+                        )),
+                        ..Default::default()
+                    })
+                    .await?;
+
+                return Ok(Completed);
+            }
             _ => {
                 tracing::info!(command = ?command.name, "unknown command");
                 return Ok(Ignored);

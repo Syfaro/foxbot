@@ -91,6 +91,22 @@ pub struct WebConfig {
     /// Twitter consumer secret.
     #[clap(long, env)]
     pub twitter_consumer_secret: String,
+
+    /// Base URL of Fider instance for feedback.
+    #[clap(long, env)]
+    pub feedback_base: String,
+
+    /// Fider OAuth URL.
+    #[clap(long, env)]
+    pub fider_oauth_url: String,
+
+    /// JWT secret for feedback login.
+    #[clap(long, env)]
+    pub jwt_secret: String,
+
+    /// Session secret token.
+    #[clap(long, env)]
+    pub session_secret: String,
 }
 
 #[derive(Clone, Debug, Parser)]

@@ -12,6 +12,7 @@ sign-tag = true
 env = ["dotenv"]
 
 [dependencies]
+actix-session = {version = "0.7", features = ["cookie-session"]}
 actix-web = {version = "4", default-features = false}
 anyhow = "1"
 askama = "0.11"
@@ -33,10 +34,12 @@ futures-retry = "0.6"
 fuzzysearch = {git = "https://github.com/Syfaro/fuzzysearch-rs", features = ["trace", "local_hash"]}
 hamming = "0.1"
 hex = "0.4"
+hmac = "0.12"
 hyper = {version = "0.14", features = ["server"]}
 image = "0.23"
 infer = "0.8"
 intl-memoizer = "0.5"
+jsonwebtoken = "8"
 lazy_static = "1"
 linkify = "0.8"
 opentelemetry = {version = "0.17", features = ["rt-tokio"]}
