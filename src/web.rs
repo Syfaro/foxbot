@@ -584,7 +584,7 @@ async fn feedback_redirect(
 
     let auth_date = chrono::Utc.timestamp(auth_date, 0);
     if auth_date + chrono::Duration::minutes(15) < chrono::Utc::now() {
-        return Err(actix_web::error::ErrorBadRequest("data too old").into());
+        return Err(actix_web::error::ErrorBadRequest("data too old"));
     }
 
     let mut data: Vec<_> = query.into_iter().collect();

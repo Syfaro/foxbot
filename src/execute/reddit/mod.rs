@@ -91,7 +91,7 @@ pub async fn reddit(config: RunConfig, reddit_config: RedditConfig) {
     });
 
     let mut faktory_environment: FaktoryWorkerEnvironment<_, Error> =
-        FaktoryWorkerEnvironment::new(cx.clone());
+        FaktoryWorkerEnvironment::new(cx);
 
     faktory_environment.register::<LoadMentionsJob, _, _, _>(|cx, _job, _args| async move {
         tracing::info!("loading mentions");
@@ -282,7 +282,7 @@ async fn generate_reply(
         }
     };
 
-    let results = crate::utils::lookup_single_hash(&fuzzysearch, hash, Some(3)).await?;
+    let results = crate::utils::lookup_single_hash(fuzzysearch, hash, Some(3)).await?;
     tracing::info!("found {} results for image", results.len());
 
     let reply = if results.is_empty() {
@@ -326,7 +326,7 @@ async fn post_reply(
         .form(&[
             ("api_type", "json"),
             ("text", &reply),
-            ("parent", &parent_id),
+            ("parent", parent_id),
         ])
         .send()
         .await
@@ -454,7 +454,7 @@ async fn reddit_info_one(reddit_client: &reqwest::Client, id: &str) -> Result<Re
         .data
         .children
         .pop()
-        .ok_or(Error::missing("could not find id on reddit"))?;
+        .ok_or_else(|| Error::missing("could not find id on reddit"))?;
 
     if !info.data.children.is_empty() {
         return Err(Error::user_message("more data was returned than expected"));
