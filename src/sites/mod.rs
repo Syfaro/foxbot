@@ -785,7 +785,7 @@ impl Site for Twitter {
                     }),
                     None => Some(PostInfo {
                         file_type: get_file_ext(&item.media_url_https)?.to_owned(),
-                        url: item.media_url_https.clone(),
+                        url: format!("{}:orig", item.media_url_https),
                         thumb: Some(format!("{}:thumb", item.media_url_https)),
                         source_link: Some(item.expanded_url),
                         personal: user.protected,
