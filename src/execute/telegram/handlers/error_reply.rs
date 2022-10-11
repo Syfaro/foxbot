@@ -123,6 +123,8 @@ mod tests {
             length: 36,
             url: None,
             user: None,
+            language: None,
+            custom_emoji_id: None,
         }];
         let text = "e52569fa-99a0-44fc-ae9d-2477177b550b";
 
