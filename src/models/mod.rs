@@ -973,6 +973,25 @@ impl FileCache {
 
 pub struct Manage;
 
+#[derive(Serialize)]
+pub struct SettingEntry {
+    pub name: String,
+    pub value: serde_json::Value,
+}
+
+impl SettingEntry {
+    pub fn new<N, V>(name: N, value: V) -> Self
+    where
+        N: ToString,
+        V: Into<serde_json::Value>,
+    {
+        Self {
+            name: name.to_string(),
+            value: value.into(),
+        }
+    }
+}
+
 impl Manage {
     pub async fn get_user_groups<U: Into<User>>(pool: &PgPool, user: U) -> Result<Vec<i64>, Error> {
         let user = user.into();
@@ -1005,5 +1024,25 @@ impl Manage {
         .await?;
 
         Ok(config)
+    }
+
+    pub async fn update_settings<C: Into<Chat>>(
+        pool: &PgPool,
+        chat: C,
+        settings: &[SettingEntry],
+    ) -> Result<(), Error> {
+        let chat = chat.into();
+        let settings = serde_json::to_value(settings)?;
+
+        sqlx::query_file!(
+            "queries/manage/update_settings.sql",
+            chat.telegram_id(),
+            chat.discord_id(),
+            settings
+        )
+        .execute(pool)
+        .await?;
+
+        Ok(())
     }
 }

@@ -91,7 +91,7 @@ impl Handler for CommandHandler {
                                 inline_keyboard: vec![vec![tgbotapi::InlineKeyboardButton {
                                     text: button_text,
                                     login_url: Some(tgbotapi::LoginUrl {
-                                        url: format!("{}/feedback", cx.config.public_endpoint),
+                                        url: format!("{}/feedback/login", cx.config.public_endpoint),
                                         ..Default::default()
                                     }),
                                     ..Default::default()

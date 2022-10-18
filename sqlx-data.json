@@ -785,6 +785,20 @@
     },
     "query": "UPDATE\n    media_group\nSET\n    sources = $2\nWHERE\n    id = $1;\n"
   },
+  "a66c5aad9e7d408844bd3a1494a643c206ff0c52fd40a9a28d99b6ad32bd9a55": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Numeric",
+          "Json"
+        ]
+      }
+    },
+    "query": "INSERT INTO\n    group_config (chat_id, name, value)\nSELECT\n    (lookup_chat($1, $2)) chat_id,\n    setting.name,\n    setting.value\nFROM\n    json_to_recordset($3::json) AS setting(name text, value json);\n"
+  },
   "b1edf542e68e59a16e623dec6328b93591c7406dde484d42b2a749da787ff7d9": {
     "describe": {
       "columns": [
