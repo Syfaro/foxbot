@@ -91,7 +91,10 @@ impl Handler for CommandHandler {
                                 inline_keyboard: vec![vec![tgbotapi::InlineKeyboardButton {
                                     text: button_text,
                                     login_url: Some(tgbotapi::LoginUrl {
-                                        url: format!("{}/feedback/login", cx.config.public_endpoint),
+                                        url: format!(
+                                            "{}/feedback/login",
+                                            cx.config.public_endpoint
+                                        ),
                                         ..Default::default()
                                     }),
                                     ..Default::default()
@@ -723,6 +726,19 @@ impl CommandHandler {
     }
 
     async fn manage(&self, cx: &Context, message: &tgbotapi::Message) -> Result<(), Error> {
+        let from = match message.from.as_ref() {
+            Some(from) => from,
+            None => return Ok(()),
+        };
+        let get_chat_member = GetChatMember {
+            chat_id: message.chat_id(),
+            user_id: from.id,
+        };
+        let chat_member = cx.bot.make_request(&get_chat_member).await?;
+
+        models::ChatAdmin::update_chat(&cx.pool, &message.chat, from, &chat_member.status, None)
+            .await?;
+
         let markup =
             tgbotapi::requests::ReplyMarkup::InlineKeyboardMarkup(tgbotapi::InlineKeyboardMarkup {
                 inline_keyboard: vec![vec![tgbotapi::InlineKeyboardButton {

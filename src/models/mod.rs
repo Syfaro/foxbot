@@ -253,6 +253,7 @@ pub enum GroupConfigKey {
     HasDeletePermission,
     CanEditChannel,
     HasLinkedChat,
+    ChannelCaption,
 }
 
 impl GroupConfigKey {
@@ -264,6 +265,7 @@ impl GroupConfigKey {
             Self::HasDeletePermission => "has_delete_permission",
             Self::CanEditChannel => "can_edit_channel",
             Self::HasLinkedChat => "has_linked_chat",
+            Self::ChannelCaption => "channel_caption",
         }
     }
 }

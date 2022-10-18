@@ -363,7 +363,7 @@ async fn manage_telegram_chat(
                 },
                 ConfigOption {
                     key: "group_no_albums".to_string(),
-                    name: "Disable Inline Album Sources".to_string(),
+                    name: "Use Web for Album Sources".to_string(),
                     help: "Send a link to sources for album instead of a message with many links."
                         .to_string(),
                     value: config
@@ -383,7 +383,14 @@ async fn manage_telegram_chat(
                 name: "Always Use Captions".to_string(),
                 help: "If sources should always be set in the caption instead of using buttons."
                     .to_string(),
-                value: ConfigValue::Bool(false),
+                value: config
+                    .get("channel_caption")
+                    .and_then(|value| {
+                        Some(ConfigValue::Bool(
+                            serde_json::from_value(value.to_owned()).ok()?,
+                        ))
+                    })
+                    .unwrap_or_else(|| ConfigValue::Bool(false)),
             }]
         }
         tgbotapi::ChatType::Private => {
