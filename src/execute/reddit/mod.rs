@@ -409,13 +409,13 @@ impl BotJob<RedditJobQueue> for ProcessMentionJob {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct RedditCommonInfo {
     pub name: String,
     pub author: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", content = "data")]
 pub enum RedditInfo {
     #[serde(rename = "t1")] // "Comment"

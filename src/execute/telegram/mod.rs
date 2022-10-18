@@ -627,7 +627,7 @@ macro_rules! needs_field {
     ($message:expr, $field:tt) => {
         match $message.$field {
             Some(ref field) => field,
-            _ => return Ok(crate::execute::telegram::handlers::Status::Ignored),
+            _ => return Ok($crate::execute::telegram::handlers::Status::Ignored),
         }
     };
 }

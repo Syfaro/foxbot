@@ -1268,7 +1268,7 @@ pub fn add_sentry_tracing(scope: &mut sentry::Scope) {
             Err(_err) => continue,
         };
 
-        scope.set_extra(&name.to_string(), value.into());
+        scope.set_extra(name.as_ref(), value.into());
     }
 }
 

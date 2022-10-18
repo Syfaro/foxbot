@@ -241,7 +241,7 @@ macro_rules! extract_args {
         {
             (
                 $(
-                    crate::services::faktory::get_arg::<$x>(&mut $args)?,
+                    $crate::services::faktory::get_arg::<$x>(&mut $args)?,
                 )*
             )
         }

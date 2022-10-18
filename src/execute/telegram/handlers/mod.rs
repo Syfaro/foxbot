@@ -34,7 +34,7 @@ pub use settings::SettingsHandler;
 pub use subscribe::SubscribeHandler;
 pub use twitter::TwitterHandler;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Status {
     Ignored,
     Completed,

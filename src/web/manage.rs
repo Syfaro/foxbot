@@ -147,18 +147,18 @@ async fn manage_login(
 
     let id: i64 = query
         .get("id")
-        .ok_or(actix_web::error::ErrorBadRequest("missing id"))?
+        .ok_or_else(|| actix_web::error::ErrorBadRequest("missing id"))?
         .parse()
         .map_err(actix_web::error::ErrorBadRequest)?;
 
     let first_name = query
         .get("first_name")
-        .ok_or(actix_web::error::ErrorBadRequest("missing first_name"))?
+        .ok_or_else(|| actix_web::error::ErrorBadRequest("missing first_name"))?
         .to_owned();
 
     let auth_date: i64 = query
         .get("auth_date")
-        .ok_or(actix_web::error::ErrorBadRequest("missing auth_date"))?
+        .ok_or_else(|| actix_web::error::ErrorBadRequest("missing auth_date"))?
         .parse()
         .map_err(actix_web::error::ErrorBadRequest)?;
 
@@ -345,7 +345,7 @@ async fn manage_telegram_chat(
                                 serde_json::from_value(value.to_owned()).ok()?,
                             ))
                         })
-                        .unwrap_or_else(|| ConfigValue::Bool(false)),
+                        .unwrap_or(ConfigValue::Bool(false)),
                 },
                 ConfigOption {
                     key: "group_no_previews".to_string(),
@@ -359,7 +359,7 @@ async fn manage_telegram_chat(
                                 serde_json::from_value(value.to_owned()).ok()?,
                             ))
                         })
-                        .unwrap_or_else(|| ConfigValue::Bool(true)),
+                        .unwrap_or(ConfigValue::Bool(true)),
                 },
                 ConfigOption {
                     key: "group_no_albums".to_string(),
@@ -373,7 +373,7 @@ async fn manage_telegram_chat(
                                 serde_json::from_value(value.to_owned()).ok()?,
                             ))
                         })
-                        .unwrap_or_else(|| ConfigValue::Bool(false)),
+                        .unwrap_or(ConfigValue::Bool(false)),
                 },
             ]
         }
@@ -390,7 +390,7 @@ async fn manage_telegram_chat(
                             serde_json::from_value(value.to_owned()).ok()?,
                         ))
                     })
-                    .unwrap_or_else(|| ConfigValue::Bool(false)),
+                    .unwrap_or(ConfigValue::Bool(false)),
             }]
         }
         tgbotapi::ChatType::Private => {
@@ -497,6 +497,6 @@ async fn manage_telegram_chat_post(
         .finish())
 }
 
-fn is_checked(val: &String) -> bool {
-    val.eq_ignore_ascii_case("on")
+fn is_checked<V: AsRef<str>>(val: V) -> bool {
+    val.as_ref().eq_ignore_ascii_case("on")
 }

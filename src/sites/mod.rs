@@ -316,7 +316,6 @@ struct E621Resp {
 
 #[derive(Debug, Deserialize)]
 struct E621Pool {
-    id: i32,
     post_count: usize,
     post_ids: Vec<i32>,
 }
@@ -1342,14 +1341,11 @@ pub struct Inkbunny {
 #[derive(Deserialize, Debug)]
 pub struct InkbunnyLogin {
     sid: String,
-    user_id: i32,
     ratingsmask: String,
 }
 
 #[derive(Deserialize, Debug)]
 pub struct InkbunnyFile {
-    file_id: String,
-    file_name: String,
     thumbnail_url_medium_noncustom: String,
     file_url_screen: String,
 }
@@ -1361,7 +1357,6 @@ pub struct InkbunnyKeyword {
 
 #[derive(Deserialize, Debug)]
 pub struct InkbunnySubmission {
-    submission_id: String,
     username: String,
     title: String,
     files: Vec<InkbunnyFile>,
@@ -1370,7 +1365,6 @@ pub struct InkbunnySubmission {
 
 #[derive(Deserialize, Debug)]
 pub struct InkbunnySubmissions {
-    results_count: i32,
     submissions: Vec<InkbunnySubmission>,
 }
 

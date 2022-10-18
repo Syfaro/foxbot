@@ -20,7 +20,7 @@ lazy_static! {
     .unwrap();
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum User {
     Telegram(i64),
     Discord(BigDecimal),
@@ -126,20 +126,17 @@ impl std::str::FromStr for Sites {
 #[derive(Clone, Debug)]
 pub enum Chat {
     Telegram(i64),
-    Discord(BigDecimal),
 }
 
 impl Chat {
     pub fn telegram_id(&self) -> Option<i64> {
         match self {
             Self::Telegram(id) => Some(*id),
-            Self::Discord(_id) => None,
         }
     }
 
     pub fn discord_id(&self) -> Option<BigDecimal> {
         match self {
-            Self::Discord(id) => Some(id.to_owned()),
             Self::Telegram(_id) => None,
         }
     }
