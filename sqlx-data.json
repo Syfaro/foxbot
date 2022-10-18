@@ -785,6 +785,20 @@
     },
     "query": "UPDATE\n    media_group\nSET\n    sources = $2\nWHERE\n    id = $1;\n"
   },
+  "a66c5aad9e7d408844bd3a1494a643c206ff0c52fd40a9a28d99b6ad32bd9a55": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Numeric",
+          "Json"
+        ]
+      }
+    },
+    "query": "INSERT INTO\n    group_config (chat_id, name, value)\nSELECT\n    (lookup_chat($1, $2)) chat_id,\n    setting.name,\n    setting.value\nFROM\n    json_to_recordset($3::json) AS setting(name text, value json);\n"
+  },
   "b1edf542e68e59a16e623dec6328b93591c7406dde484d42b2a749da787ff7d9": {
     "describe": {
       "columns": [
@@ -980,6 +994,39 @@
     },
     "query": "UPDATE chat_telegram SET chat_id = $1 WHERE telegram_id = $2"
   },
+  "c4ef657154973b544403ad8e6b32e7779da6451861b9d56f5f7a45c427fb3c55": {
+    "describe": {
+      "columns": [
+        {
+          "name": "chat_id",
+          "ordinal": 0,
+          "type_info": "Int4"
+        },
+        {
+          "name": "telegram_id!",
+          "ordinal": 1,
+          "type_info": "Int8"
+        },
+        {
+          "name": "is_admin",
+          "ordinal": 2,
+          "type_info": "Bool"
+        }
+      ],
+      "nullable": [
+        false,
+        false,
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Numeric"
+        ]
+      }
+    },
+    "query": "SELECT\n    DISTINCT ON (chat_administrator.chat_id) chat_administrator.chat_id,\n    telegram_id \"telegram_id!\",\n    is_admin\nFROM\n    chat_administrator\n    JOIN chat_telegram ON chat_telegram.chat_id = chat_administrator.chat_id\nWHERE\n    account_id = lookup_account($1, $2)\n    AND is_admin = true\n    AND telegram_id IS NOT NULL\nORDER BY\n    chat_administrator.chat_id,\n    updated_at DESC;\n"
+  },
   "c5f253419b3064b904e7781519656444e574a94633242eea343a958f00c308e0": {
     "describe": {
       "columns": [
@@ -1135,5 +1182,32 @@
       }
     },
     "query": "INSERT INTO\n    cached_post (post_url, thumb, cdn_url, width, height)\nVALUES\n    ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING;\n"
+  },
+  "f67ca9e5b0a3d0fa04ff5849a9dc4cf57bcbae1bf54bf66571ea6f7a67109b67": {
+    "describe": {
+      "columns": [
+        {
+          "name": "name",
+          "ordinal": 0,
+          "type_info": "Text"
+        },
+        {
+          "name": "value",
+          "ordinal": 1,
+          "type_info": "Jsonb"
+        }
+      ],
+      "nullable": [
+        false,
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Numeric"
+        ]
+      }
+    },
+    "query": "SELECT\n    DISTINCT ON (name) name,\n    value\nFROM\n    group_config\nWHERE\n    chat_id = lookup_chat($1, $2)\nORDER BY\n    name,\n    updated_at DESC;\n"
   }
 }

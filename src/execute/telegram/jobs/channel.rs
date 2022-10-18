@@ -137,9 +137,27 @@ pub async fn process_channel_edit(
 
     tracing::trace!(has_linked_chat, "evaluating if chat is linked");
 
+    let always_use_captions = if let Ok(chat_id) = chat_id.parse::<i64>() {
+        models::GroupConfig::get(
+            &cx.pool,
+            models::GroupConfigKey::ChannelCaption,
+            models::Chat::Telegram(chat_id),
+        )
+        .await?
+        .unwrap_or(false)
+    } else {
+        tracing::error!("chat_id was not i64: {chat_id}");
+        false
+    };
+
+    tracing::trace!(
+        always_use_captions,
+        "determined if channel always wants captions"
+    );
+
     // If this photo was part of a media group, we should set a caption on
     // the image because we can't make an inline keyboard on it.
-    let resp = if has_linked_chat || message_edit.media_group_id.is_some() {
+    let resp = if has_linked_chat || always_use_captions || message_edit.media_group_id.is_some() {
         let caption = message_edit
             .firsts
             .iter()

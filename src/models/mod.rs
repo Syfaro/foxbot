@@ -253,6 +253,7 @@ pub enum GroupConfigKey {
     HasDeletePermission,
     CanEditChannel,
     HasLinkedChat,
+    ChannelCaption,
 }
 
 impl GroupConfigKey {
@@ -264,6 +265,7 @@ impl GroupConfigKey {
             Self::HasDeletePermission => "has_delete_permission",
             Self::CanEditChannel => "can_edit_channel",
             Self::HasLinkedChat => "has_linked_chat",
+            Self::ChannelCaption => "channel_caption",
         }
     }
 }
@@ -852,9 +854,8 @@ impl ChatAdmin {
         Ok(is_admin)
     }
 
-    pub async fn is_admin<'a, E, C, U>(executor: E, chat: C, user: U) -> Result<Option<bool>, Error>
+    pub async fn is_admin<C, U>(pool: &PgPool, chat: C, user: U) -> Result<Option<bool>, Error>
     where
-        E: PgExecutor<'a>,
         C: Into<Chat>,
         U: Into<User>,
     {
@@ -867,7 +868,7 @@ impl ChatAdmin {
             user.discord_id(),
             chat.telegram_id()
         )
-        .fetch_optional(executor)
+        .fetch_optional(pool)
         .await?;
 
         Ok(is_admin)
@@ -967,6 +968,82 @@ impl FileCache {
         let mut redis = redis.clone();
 
         redis.set_ex(file_id, hash, 60 * 60 * 24 * 7).await?;
+
+        Ok(())
+    }
+}
+
+pub struct Manage;
+
+#[derive(Serialize)]
+pub struct SettingEntry {
+    pub name: String,
+    pub value: serde_json::Value,
+}
+
+impl SettingEntry {
+    pub fn new<N, V>(name: N, value: V) -> Self
+    where
+        N: ToString,
+        V: Into<serde_json::Value>,
+    {
+        Self {
+            name: name.to_string(),
+            value: value.into(),
+        }
+    }
+}
+
+impl Manage {
+    pub async fn get_user_groups<U: Into<User>>(pool: &PgPool, user: U) -> Result<Vec<i64>, Error> {
+        let user = user.into();
+
+        let chat_ids = sqlx::query_file!(
+            "queries/manage/get_user_groups.sql",
+            user.telegram_id(),
+            user.discord_id()
+        )
+        .map(|row| row.telegram_id)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(chat_ids)
+    }
+
+    pub async fn get_chat_config<C: Into<Chat>>(
+        pool: &PgPool,
+        chat: C,
+    ) -> Result<Vec<(String, serde_json::Value)>, Error> {
+        let chat = chat.into();
+
+        let config = sqlx::query_file!(
+            "queries/manage/get_chat_config.sql",
+            chat.telegram_id(),
+            chat.discord_id()
+        )
+        .map(|row| (row.name, row.value))
+        .fetch_all(pool)
+        .await?;
+
+        Ok(config)
+    }
+
+    pub async fn update_settings<C: Into<Chat>>(
+        pool: &PgPool,
+        chat: C,
+        settings: &[SettingEntry],
+    ) -> Result<(), Error> {
+        let chat = chat.into();
+        let settings = serde_json::to_value(settings)?;
+
+        sqlx::query_file!(
+            "queries/manage/update_settings.sql",
+            chat.telegram_id(),
+            chat.discord_id(),
+            settings
+        )
+        .execute(pool)
+        .await?;
 
         Ok(())
     }

@@ -20,7 +20,7 @@ pub static L10N_LANGS: &[&str] = &["en-US"];
 #[derive(Clone, Debug, Parser)]
 pub struct Args {
     #[clap(long, env)]
-    pub sentry_url: sentry::types::Dsn,
+    pub sentry_url: Option<sentry::types::Dsn>,
 
     #[clap(long, env)]
     pub metrics_host: std::net::SocketAddr,
@@ -83,6 +83,9 @@ pub struct WebConfig {
     /// PostgreSQL DSN.
     #[clap(long, env)]
     pub database_url: String,
+    /// URL for Redis.
+    #[clap(long, env)]
+    pub redis_url: String,
 
     /// Twitter consumer key.
     #[clap(long, env)]
@@ -92,6 +95,7 @@ pub struct WebConfig {
     #[clap(long, env)]
     pub twitter_consumer_secret: String,
 
+    /// Cookie secret for management web UI, encoded as hex.
     /// Base URL of Fider instance for feedback.
     #[clap(long, env)]
     pub feedback_base: String,
@@ -123,10 +127,10 @@ pub struct RunConfig {
 
     /// Sentry organization slug, for error feedback.
     #[clap(long, env)]
-    pub sentry_organization_slug: String,
+    pub sentry_organization_slug: Option<String>,
     /// Sentry project slug, for error feedback.
     #[clap(long, env)]
-    pub sentry_project_slug: String,
+    pub sentry_project_slug: Option<String>,
 
     /// The base address where the ingest service is available.
     #[clap(long, env)]
@@ -431,7 +435,7 @@ async fn main() {
     }
 
     let _sentry = sentry::init(sentry::ClientOptions {
-        dsn: Some(args.sentry_url.clone()),
+        dsn: args.sentry_url.clone(),
         release: sentry::release_name!(),
         attach_stacktrace: true,
         session_mode: sentry::SessionMode::Request,
