@@ -728,6 +728,7 @@ pub async fn lookup_single_hash(
     fapi: &fuzzysearch::FuzzySearch,
     hash: i64,
     distance: Option<i64>,
+    allow_nsfw: bool,
 ) -> Result<Vec<fuzzysearch::File>, Error> {
     let hashes = [hash];
 
@@ -759,6 +760,10 @@ pub async fn lookup_single_hash(
         }
     });
 
+    if !allow_nsfw {
+        matches.retain(|m| matches!(m.rating, None | Some(fuzzysearch::Rating::General)))
+    }
+
     Ok(matches)
 }
 
@@ -773,9 +778,10 @@ pub async fn match_image(
     fapi: &fuzzysearch::FuzzySearch,
     file: &tgbotapi::PhotoSize,
     distance: Option<i64>,
+    allow_nsfw: bool,
 ) -> Result<(i64, Vec<fuzzysearch::File>), Error> {
     if let Some(hash) = models::FileCache::get(redis, &file.file_unique_id).await? {
-        return lookup_single_hash(fapi, hash, distance)
+        return lookup_single_hash(fapi, hash, distance, allow_nsfw)
             .await
             .map(|files| (hash, files));
     }
@@ -803,7 +809,7 @@ pub async fn match_image(
 
     models::FileCache::set(redis, &file.file_unique_id, hash).await?;
 
-    lookup_single_hash(fapi, hash, distance)
+    lookup_single_hash(fapi, hash, distance, allow_nsfw)
         .await
         .map(|files| (hash, files))
 }

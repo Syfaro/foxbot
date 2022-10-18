@@ -25,7 +25,7 @@ pub async fn process_hash_new(
 
     tracing::debug!("found hash with subscriptions, loading full information");
 
-    let matches = utils::lookup_single_hash(&cx.fuzzysearch, hash, Some(3)).await?;
+    let matches = utils::lookup_single_hash(&cx.fuzzysearch, hash, Some(3), true).await?;
     if matches.is_empty() {
         tracing::warn!("got hash notification but found no matches");
         return Ok(());

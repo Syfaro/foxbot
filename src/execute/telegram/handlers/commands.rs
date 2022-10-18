@@ -338,11 +338,25 @@ impl CommandHandler {
             }
         }
 
+        let allow_nsfw = models::GroupConfig::get(
+            &cx.pool,
+            models::GroupConfigKey::Nsfw,
+            models::Chat::Telegram(message.chat.id),
+        )
+        .await?
+        .unwrap_or(true);
+
         let best_photo = utils::find_best_photo(photo).unwrap();
-        let mut matches =
-            utils::match_image(&cx.bot, &cx.redis, &cx.fuzzysearch, best_photo, Some(3))
-                .await?
-                .1;
+        let mut matches = utils::match_image(
+            &cx.bot,
+            &cx.redis,
+            &cx.fuzzysearch,
+            best_photo,
+            Some(3),
+            allow_nsfw,
+        )
+        .await?
+        .1;
         utils::sort_results(&cx.pool, message.from.as_ref().unwrap(), &mut matches).await?;
 
         let bundle = cx
@@ -387,10 +401,26 @@ impl CommandHandler {
                 (message.message_id, message)
             };
 
+        let allow_nsfw = models::GroupConfig::get(
+            &cx.pool,
+            models::GroupConfigKey::Nsfw,
+            models::Chat::Telegram(message.chat.id),
+        )
+        .await?
+        .unwrap_or(true);
+
         let (searched_hash, matches) = if let Some(sizes) = &message.photo {
             let best_photo = utils::find_best_photo(sizes).unwrap();
 
-            utils::match_image(&cx.bot, &cx.redis, &cx.fuzzysearch, best_photo, Some(10)).await?
+            utils::match_image(
+                &cx.bot,
+                &cx.redis,
+                &cx.fuzzysearch,
+                best_photo,
+                Some(10),
+                allow_nsfw,
+            )
+            .await?
         } else {
             let from = message
                 .from
@@ -428,7 +458,7 @@ impl CommandHandler {
 
                 (
                     hash,
-                    utils::lookup_single_hash(&cx.fuzzysearch, hash, Some(10)).await?,
+                    utils::lookup_single_hash(&cx.fuzzysearch, hash, Some(10), allow_nsfw).await?,
                 )
             } else {
                 drop(action);

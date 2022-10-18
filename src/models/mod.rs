@@ -266,6 +266,7 @@ pub enum GroupConfigKey {
     CanEditChannel,
     HasLinkedChat,
     ChannelCaption,
+    Nsfw,
 }
 
 impl GroupConfigKey {
@@ -278,6 +279,7 @@ impl GroupConfigKey {
             Self::CanEditChannel => "can_edit_channel",
             Self::HasLinkedChat => "has_linked_chat",
             Self::ChannelCaption => "channel_caption",
+            Self::Nsfw => "nsfw",
         }
     }
 }
