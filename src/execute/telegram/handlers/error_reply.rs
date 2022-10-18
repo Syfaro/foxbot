@@ -38,6 +38,17 @@ impl Handler for ErrorReplyHandler {
         let reply_message_text = needs_field!(reply_message, text);
         let entities = needs_field!(reply_message, entities);
 
+        let (sentry_url, organization, project) = match (
+            cx.config.sentry_url.as_deref(),
+            cx.config.sentry_organization_slug.as_deref(),
+            cx.config.sentry_project_slug.as_deref(),
+        ) {
+            (Some(sentry_url), Some(organization), Some(project)) => {
+                (sentry_url, organization, project)
+            }
+            _ => return Ok(Completed),
+        };
+
         // Only want to look at messages that are replies to this bot
         if reply_message_from.id != cx.bot_user.id {
             return Ok(Ignored);
@@ -48,7 +59,7 @@ impl Handler for ErrorReplyHandler {
             _ => return Ok(Ignored),
         };
 
-        let auth = format!("DSN {}", cx.config.sentry_url);
+        let auth = format!("DSN {}", sentry_url);
 
         let data = SentryFeedback {
             comments: text.to_string(),
@@ -64,7 +75,7 @@ impl Handler for ErrorReplyHandler {
         self.client
             .post(&format!(
                 "https://sentry.io/api/0/projects/{}/{}/user-feedback/",
-                cx.config.sentry_organization_slug, cx.config.sentry_project_slug
+                organization, project
             ))
             .json(&data)
             .header(reqwest::header::AUTHORIZATION, auth)

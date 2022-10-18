@@ -65,9 +65,9 @@ static STARTING_ARTWORK: &[&str] = &[
 ];
 
 pub struct Config {
-    pub sentry_url: String,
-    pub sentry_organization_slug: String,
-    pub sentry_project_slug: String,
+    pub sentry_url: Option<String>,
+    pub sentry_organization_slug: Option<String>,
+    pub sentry_project_slug: Option<String>,
 
     pub public_endpoint: String,
 
@@ -159,7 +159,7 @@ pub async fn telegram(args: Args, config: RunConfig, telegram_config: TelegramCo
         egg_mode::KeyPair::new(config.twitter_consumer_key, config.twitter_consumer_secret);
 
     let app_config = Config {
-        sentry_url: args.sentry_url.to_string(),
+        sentry_url: args.sentry_url.map(|dsn| dsn.to_string()),
         sentry_organization_slug: config.sentry_organization_slug,
         sentry_project_slug: config.sentry_project_slug,
 
