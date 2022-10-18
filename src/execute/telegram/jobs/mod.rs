@@ -166,9 +166,9 @@ impl JobQueue for TelegramJobQueue {
 
     fn priority_order() -> Vec<&'static str> {
         vec![
-            Self::Default.as_str(),
             Self::HighPriority.as_str(),
             Self::StandardPriority.as_str(),
+            Self::Default.as_str(),
         ]
     }
 }
@@ -265,7 +265,7 @@ pub enum CoconutEventJob {
         display_name: String,
         video_url: String,
         thumb_url: String,
-        video_size: i32,
+        video_size: i64,
         duration: i32,
         height: i32,
         width: i32,

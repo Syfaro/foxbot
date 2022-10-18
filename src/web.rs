@@ -21,12 +21,19 @@ use crate::{
 };
 
 struct Config {
+    public_endpoint: String,
+
     telegram_api_key: String,
+    telegram_bot_username: String,
     fuzzysearch_api_key: String,
     coconut_secret: String,
     twitter_consumer_key: String,
     twitter_consumer_secret: String,
     manage_jwt_secret: Vec<u8>,
+
+    feedback_base: String,
+    fider_oauth_url: String,
+    jwt_secret: String,
 
     cdn_prefix: String,
 }
@@ -47,7 +54,14 @@ pub async fn web(config: WebConfig) {
         .await
         .expect("could not create redis connection manager");
 
+    crate::run_migrations(&pool).await;
+
     let bot = tgbotapi::Telegram::new(config.telegram_api_token.clone());
+
+    let me = bot
+        .make_request(&tgbotapi::requests::GetMe)
+        .await
+        .expect("could not get bot information");
 
     bot.make_request(&tgbotapi::requests::SetWebhook {
         url: format!(
@@ -63,40 +77,57 @@ pub async fn web(config: WebConfig) {
             "my_chat_member".into(),
             "chat_member".into(),
         ]),
+        ..Default::default()
     })
     .await
     .expect("could not set telegram bot webhook");
 
-    let manage_jwt_secret =
-        hex::decode(config.manage_jwt_secret).expect("manage jwt secret was not hex");
+    let manage_jwt_secret = hex::decode(&config.jwt_secret).expect("manage jwt secret was not hex");
 
-    let session_secret = hex::decode(config.session_secret).expect("cookie secret was not hex");
+    let session_secret = actix_web::cookie::Key::from(
+        &hex::decode(config.session_secret).expect("cookie secret was not hex"),
+    );
 
     HttpServer::new(move || {
         let config = Config {
+            public_endpoint: config.public_endpoint.clone(),
+
             telegram_api_key: config.telegram_api_token.clone(),
+            telegram_bot_username: me.username.clone().expect("bot had no username"),
             fuzzysearch_api_key: config.fuzzysearch_api_key.clone(),
             coconut_secret: config.coconut_secret.clone(),
             twitter_consumer_key: config.twitter_consumer_key.clone(),
             twitter_consumer_secret: config.twitter_consumer_secret.clone(),
             manage_jwt_secret: manage_jwt_secret.clone(),
 
+            feedback_base: config.feedback_base.clone(),
+            fider_oauth_url: config.fider_oauth_url.clone(),
+            jwt_secret: config.jwt_secret.clone(),
+
             cdn_prefix: config.cdn_prefix.clone(),
         };
 
-        let session = actix_session::CookieSession::signed(&session_secret).secure(true);
+        let session = actix_session::SessionMiddleware::builder(
+            actix_session::storage::CookieSessionStore::default(),
+            session_secret.clone(),
+        )
+        .cookie_name("foxbot".to_string())
+        .build();
 
         App::new()
             .wrap(tracing_actix_web::TracingLogger::default())
+            .wrap(session)
             .route("/", web::get().to(index))
             .route("/mg/{media_group_id}", web::get().to(media_group))
             .route("/telegram/{secret}", web::post().to(telegram_webhook))
             .route("/fuzzysearch/{secret}", web::post().to(fuzzysearch_webhook))
             .route("/coconut/{secret}", web::post().to(coconut_webhook))
             .route("/twitter/callback", web::get().to(twitter_callback))
+            .route("/feedback", web::get().to(feedback_redirect))
+            .route("/feedback/authorize", web::get().to(feedback_authorize))
+            .route("/feedback/token", web::post().to(feedback_token))
             .service(
                 web::scope("/manage")
-                    .wrap(session)
                     .route("/login", web::get().to(manage_login))
                     .route("/list", web::get().to(manage_list))
                     .route("/telegram/chat/{id}", web::get().to(manage_telegram_chat))
@@ -402,10 +433,22 @@ struct CoconutMetadata {
 }
 
 #[derive(Deserialize)]
-#[serde(tag = "codec_name")]
-enum CoconutMetadataStream {
+struct CoconutMetadataStream {
+    codec_name: Option<CoconutCodecType>,
+    #[serde(flatten)]
+    dimensions: Option<CoconutDimensions>,
+}
+
+#[derive(Deserialize)]
+struct CoconutDimensions {
+    width: i32,
+    height: i32,
+}
+
+#[derive(Deserialize)]
+enum CoconutCodecType {
     #[serde(rename = "h264")]
-    H264 { height: i32, width: i32 },
+    H264,
     #[serde(rename = "vp9")]
     Vp9,
     #[serde(rename = "aac")]
@@ -494,14 +537,14 @@ async fn coconut_webhook(
             let (video_url, video_size, video_duration, streams) = video_data
                 .ok_or_else(|| actix_web::error::ErrorBadRequest("no known video formats"))?;
 
-            let video_size = video_size.parse().unwrap_or(i32::MAX);
+            let video_size = video_size.parse().unwrap_or(i64::MAX);
 
             let duration = video_duration.parse::<f32>().unwrap_or_default().ceil() as i32;
 
             let dimensions = streams
                 .into_iter()
-                .find_map(|stream| match stream {
-                    CoconutMetadataStream::H264 { height, width } => Some((height, width)),
+                .find_map(|stream| match stream.codec_name {
+                    Some(CoconutCodecType::H264) => stream.dimensions,
                     _ => None,
                 })
                 .ok_or_else(|| actix_web::error::ErrorBadRequest("no known streams"))?;
@@ -512,8 +555,8 @@ async fn coconut_webhook(
                 video_url,
                 video_size,
                 duration,
-                height: dimensions.0,
-                width: dimensions.1,
+                height: dimensions.height,
+                width: dimensions.width,
             })
         }
         CoconutWebHook::InputTransferred { .. } => None,
@@ -926,4 +969,180 @@ async fn manage_telegram_chat_post(
     tracing::info!("form: {:?}", form);
 
     Ok(HttpResponse::Ok().body("OK"))
+}
+
+async fn feedback_redirect(
+    config: web::Data<Config>,
+    web::Query(mut query): web::Query<HashMap<String, String>>,
+    session: actix_session::Session,
+) -> Result<HttpResponse, actix_web::Error> {
+    let hash = query
+        .remove("hash")
+        .ok_or_else(|| actix_web::error::ErrorBadRequest("missing hash"))?;
+
+    let hash = hex::decode(hash).map_err(actix_web::error::ErrorBadRequest)?;
+
+    let id: i64 = query
+        .get("id")
+        .ok_or_else(|| actix_web::error::ErrorBadRequest("missing id"))?
+        .parse()
+        .map_err(actix_web::error::ErrorBadRequest)?;
+
+    let first_name = query
+        .get("first_name")
+        .ok_or_else(|| actix_web::error::ErrorBadRequest("missing first_name"))?
+        .to_owned();
+
+    let auth_date: i64 = query
+        .get("auth_date")
+        .ok_or_else(|| actix_web::error::ErrorBadRequest("missing auth_date"))?
+        .parse()
+        .map_err(actix_web::error::ErrorBadRequest)?;
+
+    let auth_date = chrono::Utc.timestamp(auth_date, 0);
+    if auth_date + chrono::Duration::minutes(15) < chrono::Utc::now() {
+        return Err(actix_web::error::ErrorBadRequest("data too old"));
+    }
+
+    let mut data: Vec<_> = query.into_iter().collect();
+    data.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    let data = data
+        .into_iter()
+        .map(|(key, value)| format!("{}={}", key, value))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let token = Sha256::digest(&config.telegram_api_key);
+
+    let mut mac = Hmac::<Sha256>::new_from_slice(&token)
+        .expect("hmac could not be constructed with provided token");
+    mac.update(data.as_bytes());
+
+    mac.verify_slice(&hash)
+        .map_err(actix_web::error::ErrorBadRequest)?;
+
+    session.insert("telegram-login", (id, first_name))?;
+
+    Ok(HttpResponse::Found()
+        .insert_header(("Location", config.fider_oauth_url.clone()))
+        .finish())
+}
+
+#[derive(Debug, Deserialize)]
+struct FiderOAuthQuery {
+    redirect_uri: String,
+    state: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct FiderCodeData {
+    telegram_id: i64,
+    telegram_first_name: String,
+    exp: i64,
+}
+
+#[derive(Template)]
+#[template(path = "signin.html")]
+struct SignInTemplate<'a> {
+    bot_username: &'a str,
+    auth_url: &'a str,
+}
+
+async fn feedback_authorize(
+    config: web::Data<Config>,
+    session: actix_session::Session,
+    web::Query(query): web::Query<FiderOAuthQuery>,
+) -> Result<HttpResponse, actix_web::Error> {
+    let login_data: (i64, String) = match session.get("telegram-login") {
+        Ok(Some(id)) => id,
+        _ => {
+            let auth_url = format!("{}/feedback", config.public_endpoint);
+
+            return SignInTemplate {
+                bot_username: &config.telegram_bot_username,
+                auth_url: &auth_url,
+            }
+            .render()
+            .map(|body| {
+                HttpResponse::Ok()
+                    .insert_header(("content-type", "text/html"))
+                    .body(body)
+            })
+            .map_err(actix_web::error::ErrorInternalServerError);
+        }
+    };
+
+    if !query
+        .redirect_uri
+        .to_ascii_lowercase()
+        .starts_with(&config.feedback_base.to_ascii_lowercase())
+    {
+        return Err(actix_web::error::ErrorBadRequest("redirect uri not valid"));
+    }
+
+    let code = jsonwebtoken::encode(
+        &jsonwebtoken::Header::default(),
+        &FiderCodeData {
+            telegram_id: login_data.0,
+            telegram_first_name: login_data.1,
+            exp: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp(),
+        },
+        &jsonwebtoken::EncodingKey::from_secret(config.jwt_secret.as_bytes()),
+    )
+    .map_err(actix_web::error::ErrorInternalServerError)?;
+
+    let mut location =
+        url::Url::parse(&query.redirect_uri).map_err(actix_web::error::ErrorBadRequest)?;
+
+    location
+        .query_pairs_mut()
+        .append_pair("code", &code)
+        .append_pair("state", &query.state);
+
+    Ok(HttpResponse::Found()
+        .insert_header(("Location", location.as_str()))
+        .finish())
+}
+
+#[derive(Deserialize)]
+struct FiderOAuthToken {
+    code: String,
+}
+
+async fn feedback_token(
+    config: web::Data<Config>,
+    form: web::Form<FiderOAuthToken>,
+    req: actix_web::HttpRequest,
+) -> Result<HttpResponse, actix_web::Error> {
+    let auth = req
+        .headers()
+        .get("authorization")
+        .and_then(|auth| auth.to_str().ok())
+        .and_then(|auth| auth.strip_prefix("Basic "))
+        .and_then(|auth| base64::decode(auth).ok())
+        .and_then(|auth| String::from_utf8(auth).ok())
+        .ok_or_else(|| actix_web::error::ErrorBadRequest("missing authorization"))?;
+
+    match auth.split_once(':') {
+        Some((username, password)) if username == "foxbot" && password == config.jwt_secret => (),
+        _ => return Err(actix_web::error::ErrorUnauthorized("bad authorization")),
+    }
+
+    jsonwebtoken::decode::<FiderCodeData>(
+        &form.code,
+        &jsonwebtoken::DecodingKey::from_secret(config.jwt_secret.as_bytes()),
+        &jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256),
+    )
+    .map_err(actix_web::error::ErrorInternalServerError)?;
+
+    Ok(HttpResponse::Ok()
+        .append_header(("content-type", "application/json"))
+        .body(
+            serde_json::to_string(&serde_json::json!({
+                "access_token": form.code,
+                "token_type": "Bearer",
+            }))
+            .map_err(actix_web::error::ErrorInternalServerError)?,
+        ))
 }

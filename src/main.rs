@@ -1,7 +1,8 @@
 use std::{borrow::Cow, num::NonZeroU64};
 
 use clap::{Parser, Subcommand};
-use opentelemetry::KeyValue;
+use opentelemetry::{sdk::trace, KeyValue};
+use opentelemetry_otlp::WithExportConfig;
 use prometheus::Encoder;
 use thiserror::Error;
 use tracing_subscriber::prelude::*;
@@ -24,32 +25,29 @@ pub struct Args {
     #[clap(long, env)]
     pub metrics_host: std::net::SocketAddr,
 
-    #[clap(long, env, arg_enum)]
-    pub jaeger_type: JaegerType,
-
     #[clap(long, env)]
-    pub jaeger_endpoint: String,
+    pub otlp_agent: String,
 
     #[clap(subcommand)]
     pub command: Command,
 }
 
-#[derive(Clone, Debug, PartialEq, clap::ArgEnum)]
-pub enum JaegerType {
-    Agent,
-    Collector,
-}
-
 #[derive(Clone, Debug, Subcommand)]
 pub enum Command {
+    /// Web server used for displaying content to users and receiving webhooks.
     Web(Box<WebConfig>),
+    /// Run bot for a given site.
     Run(Box<RunConfig>),
 }
 
 #[derive(Clone, Debug, Subcommand)]
 pub enum RunService {
+    /// Run bot for Telegram.
     Telegram(TelegramConfig),
+    /// Run bot for Discord.
     Discord(DiscordConfig),
+    /// Run bot for Reddit.
+    Reddit(RedditConfig),
 }
 
 #[derive(Clone, Debug, Parser)]
@@ -97,11 +95,20 @@ pub struct WebConfig {
     #[clap(long, env)]
     pub twitter_consumer_secret: String,
 
-    /// JWT secret for management web UI, encoded as hex.
-    #[clap(long, env)]
-    pub manage_jwt_secret: String,
-
     /// Cookie secret for management web UI, encoded as hex.
+    /// Base URL of Fider instance for feedback.
+    #[clap(long, env)]
+    pub feedback_base: String,
+
+    /// Fider OAuth URL.
+    #[clap(long, env)]
+    pub fider_oauth_url: String,
+
+    /// JWT secret for feedback login.
+    #[clap(long, env)]
+    pub jwt_secret: String,
+
+    /// Session secret token.
     #[clap(long, env)]
     pub session_secret: String,
 }
@@ -187,6 +194,15 @@ pub struct RunConfig {
     /// Twitter consumer secret.
     #[clap(long, env)]
     pub twitter_consumer_secret: String,
+    /// Twitter access key.
+    ///
+    /// This may be left empty to use app auth. Requires setting the Twitter
+    /// access secret.
+    #[clap(long, env, requires = "twitter-access-secret")]
+    pub twitter_access_key: Option<String>,
+    /// Twitter access secret.
+    #[clap(long, env)]
+    pub twitter_access_secret: Option<String>,
 
     /// Inkbunny username.
     #[clap(long, env)]
@@ -222,6 +238,8 @@ pub struct TelegramConfig {
     pub high_priority: bool,
 }
 
+type CommandId = twilight_model::id::Id<twilight_model::id::marker::CommandMarker>;
+
 #[derive(Clone, Debug, Parser)]
 pub struct DiscordConfig {
     /// Discord API token.
@@ -232,7 +250,26 @@ pub struct DiscordConfig {
     pub discord_application_id: NonZeroU64,
     /// ID of registered find source command.
     #[clap(long, env)]
-    pub find_source_command: NonZeroU64,
+    pub find_source_command: CommandId,
+    /// ID of registered share images command.
+    #[clap(long, env)]
+    pub share_images_command: CommandId,
+}
+
+#[derive(Clone, Debug, Parser)]
+pub struct RedditConfig {
+    /// Reddit OAuth client ID.
+    #[clap(long, env)]
+    pub reddit_client_id: String,
+    /// Reddit OAuth client secret.
+    #[clap(long, env)]
+    pub reddit_client_secret: String,
+    /// Reddit account username.
+    #[clap(long, env)]
+    pub reddit_username: String,
+    /// Reddit account password.
+    #[clap(long, env)]
+    pub reddit_password: String,
 }
 
 #[derive(Debug, Error)]
@@ -259,6 +296,8 @@ pub enum Error {
     S3(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("discord http error: {0}")]
     DiscordHttp(#[from] twilight_http::Error),
+    #[error("reddit error: {0}")]
+    Reddit(#[from] roux::util::error::RouxError),
 
     #[error("bot issue: {0}")]
     Bot(Cow<'static, str>),
@@ -356,30 +395,44 @@ async fn main() {
         Command::Run(run) => match run.service {
             RunService::Discord(_) => "foxbot-discord",
             RunService::Telegram(_) => "foxbot-telegram",
+            RunService::Reddit(_) => "foxbot-reddit",
         },
     };
 
-    let tracer = match args.jaeger_type {
-        JaegerType::Agent => {
-            opentelemetry_jaeger::new_pipeline().with_agent_endpoint(&args.jaeger_endpoint)
-        }
-        JaegerType::Collector => {
-            opentelemetry_jaeger::new_pipeline().with_collector_endpoint(&args.jaeger_endpoint)
-        }
-    };
-
-    let tracer = tracer
-        .with_service_name(service_name)
-        .with_tags(vec![KeyValue::new("version", env!("CARGO_PKG_VERSION"))])
+    let tracer = opentelemetry_otlp::new_pipeline()
+        .tracing()
+        .with_exporter(
+            opentelemetry_otlp::new_exporter()
+                .tonic()
+                .with_endpoint(&args.otlp_agent),
+        )
+        .with_trace_config(
+            trace::config()
+                .with_sampler(trace::Sampler::AlwaysOn)
+                .with_resource(opentelemetry::sdk::Resource::new(vec![
+                    KeyValue::new("service.name", service_name),
+                    KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
+                    KeyValue::new("service.namespace", "foxbot"),
+                ])),
+        )
         .install_batch(opentelemetry::runtime::Tokio)
-        .expect("could not create jaeger tracer");
+        .expect("could not create otlp tracer");
 
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer())
-        .with(sentry_tracing::layer())
-        .with(tracing_subscriber::EnvFilter::from_default_env())
-        .with(tracing_opentelemetry::layer().with_tracer(tracer))
-        .init();
+    if matches!(std::env::var("LOG_FMT").as_deref(), Ok("json")) {
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::fmt::layer().json())
+            .with(sentry_tracing::layer())
+            .with(tracing_subscriber::EnvFilter::from_default_env())
+            .with(tracing_opentelemetry::layer().with_tracer(tracer))
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::fmt::layer())
+            .with(sentry_tracing::layer())
+            .with(tracing_subscriber::EnvFilter::from_default_env())
+            .with(tracing_opentelemetry::layer().with_tracer(tracer))
+            .init();
+    }
 
     let _sentry = sentry::init(sentry::ClientOptions {
         dsn: Some(args.sentry_url.clone()),
@@ -400,10 +453,20 @@ async fn main() {
             RunService::Discord(discord_config) => {
                 execute::start_discord(*run_config, discord_config).await
             }
+            RunService::Reddit(reddit_config) => {
+                execute::start_reddit(*run_config, reddit_config).await
+            }
         },
     }
 
     opentelemetry::global::shutdown_tracer_provider();
+}
+
+async fn run_migrations(pool: &sqlx::PgPool) {
+    sqlx::migrate!()
+        .run(pool)
+        .await
+        .expect("could not run migrations");
 }
 
 fn metrics_server(host: std::net::SocketAddr) {

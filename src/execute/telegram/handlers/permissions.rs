@@ -158,7 +158,7 @@ async fn handle_bot_update(
             chat_id: chat_member.chat.id.into(),
         };
 
-        let admins = cx.make_request(&get_chat_administrators).await?;
+        let admins = cx.bot.make_request(&get_chat_administrators).await?;
 
         for admin in admins {
             tracing::trace!(user_id = admin.user.id, "discovered group admin");

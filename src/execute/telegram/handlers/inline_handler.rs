@@ -23,8 +23,11 @@ use super::{
 /// Maximum size of inline image before resizing.
 static MAX_IMAGE_SIZE: usize = 5_000_000;
 
+/// Maximum size of inline GIF before transcoding.
+static MAX_GIF_SIZE: usize = 1_000_000;
+
 /// Maximum size of video allowed to be returned in inline result.
-static MAX_VIDEO_SIZE: i32 = 10_000_000;
+static MAX_VIDEO_SIZE: i64 = 10_000_000;
 
 pub struct InlineHandler;
 
@@ -118,7 +121,7 @@ impl InlineHandler {
                     ..Default::default()
                 };
 
-                let message = cx.make_request(&send_video).await?;
+                let message = cx.bot.make_request(&send_video).await?;
                 if let Some(sent_as) = find_sent_as(&message) {
                     cache_video(&cx.redis, display_name, &sent_as).await?;
                 }
@@ -147,7 +150,7 @@ impl InlineHandler {
             text: video_starting,
             ..Default::default()
         };
-        let sent = cx.make_request(&send_message).await?;
+        let sent = cx.bot.make_request(&send_message).await?;
 
         models::Video::add_message_id(&cx.pool, video.id, &sent.chat, sent.message_id).await?;
 
@@ -283,9 +286,8 @@ impl Handler for InlineHandler {
 
         // Lock sites in order to find which of these links are usable
         let images_err = {
-            let mut sites = cx.sites.lock().await;
             let links = links.iter().map(|link| link.as_ref()).collect();
-            utils::find_images(&inline.from, links, &mut sites, &cx.redis, &mut |info| {
+            utils::find_images(&inline.from, links, &cx.sites, &cx.redis, &mut |info| {
                 results.extend(info.results);
             })
             .await
@@ -320,7 +322,7 @@ impl Handler for InlineHandler {
                 ..Default::default()
             };
 
-            cx.make_request(&answer_inline).await?;
+            cx.bot.make_request(&answer_inline).await?;
 
             return Ok(Completed);
         }
@@ -407,7 +409,7 @@ impl Handler for InlineHandler {
             answer_inline.switch_pm_parameter = Some(result.id);
         }
 
-        cx.make_request(&answer_inline).await?;
+        cx.bot.make_request(&answer_inline).await?;
 
         Ok(Completed)
     }
@@ -469,7 +471,7 @@ async fn send_video_progress(cx: &Context, display_name: &str, message: &str) ->
             ..Default::default()
         };
 
-        if let Err(err) = cx.make_request(&edit_message).await {
+        if let Err(err) = cx.bot.make_request(&edit_message).await {
             tracing::error!("could not send video progress message: {}", err);
         }
     }
@@ -498,7 +500,7 @@ async fn video_complete(
     display_name: &str,
     video_url: &str,
     thumb_url: &str,
-    video_size: i32,
+    video_size: i64,
     height: i32,
     width: i32,
     duration: i32,
@@ -547,7 +549,7 @@ async fn video_complete(
             ..Default::default()
         };
 
-        cx.make_request(&send_message).await?;
+        cx.bot.make_request(&send_message).await?;
     }
 
     let action =
@@ -591,7 +593,7 @@ async fn video_complete(
         }
     };
 
-    let message = cx.make_request(&send_video).await?;
+    let message = cx.bot.make_request(&send_video).await?;
     drop(action);
 
     if messages.is_empty() {
@@ -635,7 +637,7 @@ async fn video_complete(
                 ..Default::default()
             };
 
-            if let Err(err) = cx.make_request(&send_message).await {
+            if let Err(err) = cx.bot.make_request(&send_message).await {
                 tracing::error!("could not send too large message: {}", err);
             }
         }
@@ -710,8 +712,7 @@ async fn process_result(
             };
 
             let url_id = {
-                let sites = cx.sites.lock().await;
-                sites
+                cx.sites
                     .iter()
                     .find_map(|site| site.url_id(&source))
                     .ok_or_else(|| Error::missing("site url_id"))?
@@ -725,7 +726,9 @@ async fn process_result(
             Ok(Some(results))
         }
         "mp4" => Ok(Some(build_mp4_result(result, thumb_url, &keyboard))),
-        "gif" => Ok(Some(build_gif_result(result, thumb_url, &keyboard))),
+        "gif" => Ok(Some(
+            build_gif_result(cx, result, thumb_url, &keyboard).await?,
+        )),
         other => {
             tracing::warn!(file_type = other, "got unusable type");
             Ok(None)
@@ -821,7 +824,7 @@ async fn build_image_result(
     include_tags: bool,
 ) -> Result<Vec<(ResultType, InlineQueryResult)>, Error> {
     let mut result = result.to_owned();
-    result.thumb = Some(thumb_url);
+    result.thumb = Some(thumb_url.clone());
 
     // There is a bit of processing required to figure out how to handle an
     // image before sending it off to Telegram. First, we check if the config
@@ -1074,11 +1077,89 @@ fn build_mp4_result(
     vec![(ResultType::Ready, video)]
 }
 
-fn build_gif_result(
+async fn build_gif_result(
+    cx: &Context,
     result: &PostInfo,
     thumb_url: String,
     keyboard: &InlineKeyboardMarkup,
-) -> Vec<(ResultType, InlineQueryResult)> {
+) -> Result<Vec<(ResultType, InlineQueryResult)>, Error> {
+    let data = utils::download_image(&result.url).await?;
+    let result = utils::size_post(result, &data).await?;
+
+    if result.image_size.unwrap_or_default() > MAX_GIF_SIZE {
+        let source = match &result.source_link {
+            Some(link) => link.to_owned(),
+            None => result.url.clone(),
+        };
+
+        let url_id = {
+            cx.sites
+                .iter()
+                .find_map(|site| site.url_id(&source))
+                .ok_or_else(|| Error::missing("site url_id"))?
+        };
+
+        let video = match models::Video::lookup_by_url_id(&cx.pool, &url_id).await? {
+            None => {
+                let display_name = models::Video::insert_media(
+                    &cx.pool,
+                    &url_id,
+                    &result.url,
+                    &source,
+                    &utils::generate_id(),
+                )
+                .await?;
+
+                return Ok(vec![(
+                    ResultType::VideoToBeProcessed,
+                    InlineQueryResult::article(
+                        format!("process-{}", display_name),
+                        "".into(),
+                        "".into(),
+                    ),
+                )]);
+            }
+            Some(video) if !video.processed => {
+                return Ok(vec![(
+                    ResultType::VideoToBeProcessed,
+                    InlineQueryResult::article(
+                        format!("process-{}", video.display_name),
+                        "".into(),
+                        "".into(),
+                    ),
+                )]);
+            }
+            Some(models::Video {
+                display_name,
+                file_size: Some(file_size),
+                ..
+            }) if file_size > MAX_VIDEO_SIZE => {
+                return Ok(vec![(
+                    ResultType::VideoTooLarge,
+                    InlineQueryResult::article(
+                        format!("process-{}", display_name),
+                        "".into(),
+                        "".into(),
+                    ),
+                )]);
+            }
+            Some(video) => video,
+        };
+
+        let full_url = video.mp4_url.unwrap();
+
+        let mut video_result = InlineQueryResult::video(
+            video.display_name,
+            full_url,
+            "video/mp4".to_owned(),
+            thumb_url.to_owned(),
+            result.url.clone(),
+        );
+        video_result.reply_markup = Some(keyboard.clone());
+
+        return Ok(vec![(ResultType::Ready, video_result)]);
+    }
+
     let full_url = result.url.clone();
 
     let mut gif = InlineQueryResult::gif(
@@ -1101,7 +1182,7 @@ fn build_gif_result(
         results.push((ResultType::Ready, gif));
     };
 
-    results
+    Ok(results)
 }
 
 #[allow(clippy::manual_map)]
@@ -1154,7 +1235,7 @@ async fn send_previous_video(
                 ..Default::default()
             };
 
-            cx.make_request(&send_video).await
+            cx.bot.make_request(&send_video).await
         }
         SentAs::Animation(ref file_id) => {
             let send_animation = SendAnimation {
@@ -1167,7 +1248,7 @@ async fn send_previous_video(
                 ..Default::default()
             };
 
-            cx.make_request(&send_animation).await
+            cx.bot.make_request(&send_animation).await
         }
         SentAs::Document(ref file_id) => {
             let send_document = SendDocument {
@@ -1177,7 +1258,7 @@ async fn send_previous_video(
                 ..Default::default()
             };
 
-            cx.make_request(&send_document).await
+            cx.bot.make_request(&send_document).await
         }
     };
 

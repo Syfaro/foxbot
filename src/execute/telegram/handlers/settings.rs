@@ -73,7 +73,7 @@ async fn order(cx: &Context, callback_query: &CallbackQuery, data: &str) -> Resu
             ..Default::default()
         };
 
-        cx.make_request(&answer).await?;
+        cx.bot.make_request(&answer).await?;
 
         return Ok(Completed);
     }
@@ -92,7 +92,7 @@ async fn order(cx: &Context, callback_query: &CallbackQuery, data: &str) -> Resu
             ..Default::default()
         };
 
-        cx.make_request(&answer).await?;
+        cx.bot.make_request(&answer).await?;
 
         return Ok(Completed);
     }
@@ -156,7 +156,10 @@ async fn order(cx: &Context, callback_query: &CallbackQuery, data: &str) -> Resu
             ..Default::default()
         };
 
-        futures::try_join!(cx.make_request(&edit_message), cx.make_request(&answer))?;
+        futures::try_join!(
+            cx.bot.make_request(&edit_message),
+            cx.bot.make_request(&answer)
+        )?;
 
         return Ok(Completed);
     }
@@ -178,7 +181,10 @@ async fn order(cx: &Context, callback_query: &CallbackQuery, data: &str) -> Resu
         ..Default::default()
     };
 
-    futures::try_join!(cx.make_request(&edit_message), cx.make_request(&answer))?;
+    futures::try_join!(
+        cx.bot.make_request(&edit_message),
+        cx.bot.make_request(&answer)
+    )?;
 
     Ok(Completed)
 }
@@ -260,7 +266,10 @@ async fn inline_history(
             ..Default::default()
         };
 
-        futures::try_join!(cx.make_request(&edit_message), cx.make_request(&answer))?;
+        futures::try_join!(
+            cx.bot.make_request(&edit_message),
+            cx.bot.make_request(&answer)
+        )?;
     } else {
         let enabled = models::UserConfig::get(
             &cx.pool,
@@ -280,7 +289,7 @@ async fn inline_history(
             ..Default::default()
         };
 
-        cx.make_request(&edit_message).await?;
+        cx.bot.make_request(&edit_message).await?;
     }
 
     Ok(Completed)
@@ -328,7 +337,7 @@ async fn send_settings_message(cx: &Context, message: &Message) -> Result<Messag
         ..Default::default()
     };
 
-    let sent_message = cx.make_request(&message).await?;
+    let sent_message = cx.bot.make_request(&message).await?;
 
     Ok(sent_message)
 }

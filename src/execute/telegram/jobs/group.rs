@@ -1,6 +1,7 @@
 use std::{ops::Add, sync::Arc};
 
 use fluent_bundle::FluentArgs;
+use futures_retry::FutureRetry;
 use rusoto_s3::S3;
 use tracing::Instrument;
 
@@ -103,11 +104,10 @@ pub async fn process_group_photo(
     }
 
     let links = utils::extract_links(&message);
-    let mut sites = cx.sites.lock().await;
 
     if wanted_matches
         .iter()
-        .any(|m| utils::link_was_seen(&sites, &links, &m.url()))
+        .any(|m| utils::link_was_seen(&cx.sites, &links, &m.url()))
     {
         tracing::debug!("group message already contained valid links");
         return Ok(());
@@ -118,7 +118,7 @@ pub async fn process_group_photo(
         let _ = utils::find_images(
             &tgbotapi::User::default(),
             links,
-            &mut sites,
+            &cx.sites,
             &cx.redis,
             &mut |info| {
                 results.extend(info.results);
@@ -135,8 +135,6 @@ pub async fn process_group_photo(
             return Ok(());
         }
     }
-
-    drop(sites);
 
     let twitter_matches = wanted_matches
         .iter()
@@ -329,7 +327,17 @@ pub async fn process_group_mediagroup_hash(
         file_id: best_photo.file_id.clone(),
     };
 
-    let file_info = cx.bot.make_request(&get_file).await?;
+    let file_info = FutureRetry::new(|| cx.bot.make_request(&get_file), utils::Retry::new(3))
+        .await
+        .map(|(file, attempts)| {
+            if attempts > 1 {
+                tracing::warn!("took {} attempts to get file", attempts);
+            }
+
+            file
+        })
+        .map_err(|(err, _attempts)| err)?;
+
     let data = cx.bot.download_file(&file_info.file_path.unwrap()).await?;
 
     if models::GroupConfig::get(

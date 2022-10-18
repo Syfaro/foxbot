@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use fuzzysearch::MatchType;
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, collections::HashMap};
+use tokio::sync::RwLock;
 
 use crate::{
     models::{self, User},
@@ -63,16 +64,41 @@ pub trait Site {
     fn url_id(&self, url: &str) -> Option<String>;
 
     /// Check if the URL might be supported by this site.
-    async fn url_supported(&mut self, url: &str) -> bool;
+    async fn url_supported(&self, url: &str) -> bool;
     /// Attempt to load images from the given URL, with the Telegram user ID
     /// in case credentials are needed.
-    async fn get_images(&mut self, user: &User, url: &str) -> Result<Option<Vec<PostInfo>>, Error>;
+    async fn get_images(
+        &self,
+        user: Option<&User>,
+        url: &str,
+    ) -> Result<Option<Vec<PostInfo>>, Error>;
 }
 
 pub async fn get_all_sites(
     config: &crate::RunConfig,
     pool: sqlx::Pool<sqlx::Postgres>,
 ) -> Vec<BoxedSite> {
+    let twitter = match (&config.twitter_access_key, &config.twitter_access_secret) {
+        (Some(access_key), Some(access_secret)) => {
+            Twitter::new_access_tokens(
+                config.twitter_consumer_key.clone(),
+                config.twitter_consumer_secret.clone(),
+                access_key.clone(),
+                access_secret.clone(),
+                pool,
+            )
+            .await
+        }
+        _ => {
+            Twitter::new_app_auth(
+                config.twitter_consumer_key.clone(),
+                config.twitter_consumer_secret.clone(),
+                pool,
+            )
+            .await
+        }
+    };
+
     vec![
         Box::new(E621::new(
             E621Host::E621,
@@ -92,14 +118,7 @@ pub async fn get_all_sites(
             config.fuzzysearch_api_token.clone(),
         )),
         Box::new(Weasyl::new(config.weasyl_api_token.clone())),
-        Box::new(
-            Twitter::new(
-                config.twitter_consumer_key.clone(),
-                config.twitter_consumer_secret.clone(),
-                pool,
-            )
-            .await,
-        ),
+        Box::new(twitter),
         Box::new(Inkbunny::new(
             config.inkbunny_username.clone(),
             config.inkbunny_password.clone(),
@@ -170,7 +189,7 @@ impl Site for Direct {
         Some(url.to_owned())
     }
 
-    async fn url_supported(&mut self, url: &str) -> bool {
+    async fn url_supported(&self, url: &str) -> bool {
         tracing::trace!("checking if url is supported");
 
         let mut data = match self.client.get(url).send().await {
@@ -197,8 +216,8 @@ impl Site for Direct {
     }
 
     async fn get_images(
-        &mut self,
-        _user: &User,
+        &self,
+        _user: Option<&User>,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, Error> {
         let u = url.to_string();
@@ -368,7 +387,7 @@ impl E621 {
 
     /// Load the 10 most recent posts from a pool at a given URL.
     #[tracing::instrument(skip(self, url), fields(pool_id))]
-    async fn get_pool(&mut self, url: &str) -> Result<Option<Vec<PostInfo>>, Error> {
+    async fn get_pool(&self, url: &str) -> Result<Option<Vec<PostInfo>>, Error> {
         let captures = self.pool.captures(url).unwrap();
         let id = &captures["id"];
         tracing::Span::current().record("pool_id", &id);
@@ -458,13 +477,13 @@ impl Site for E621 {
         Some(format!("{}-{}", self.site.name(), sub_id))
     }
 
-    async fn url_supported(&mut self, url: &str) -> bool {
+    async fn url_supported(&self, url: &str) -> bool {
         self.show.is_match(url) || self.data.is_match(url) || self.pool.is_match(url)
     }
 
     async fn get_images(
-        &mut self,
-        _user: &User,
+        &self,
+        _user: Option<&User>,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, Error> {
         let endpoint = if self.show.is_match(url) {
@@ -522,7 +541,13 @@ pub struct Twitter {
 
 impl Twitter {
     fn update_error(err: egg_mode::error::Error) -> Error {
+        tracing::trace!("got twitter errors: {:?}", err);
+
         match &err {
+            egg_mode::error::Error::BadStatus(code) => match code.as_u16() {
+                401 => return Error::user_message_with_error("Unauthorized", err),
+                _ => tracing::warn!("got unknown twitter status code: {:?}", code),
+            },
             egg_mode::error::Error::TwitterError(_headers, twitter_errors) => {
                 let codes: std::collections::HashSet<i32> = twitter_errors
                     .errors
@@ -530,11 +555,7 @@ impl Twitter {
                     .map(|error| error.code)
                     .collect();
 
-                if codes.contains(&34)
-                    || codes.contains(&144)
-                    || codes.contains(&421)
-                    || codes.contains(&422)
-                {
+                if codes.contains(&34) || codes.contains(&144) || codes.contains(&421) {
                     return Error::user_message_with_error("Tweet not found", err);
                 } else if codes.contains(&50) || codes.contains(&63) {
                     return Error::user_message_with_error("Twitter user not found", err);
@@ -556,25 +577,53 @@ struct TwitterData {
 }
 
 impl Twitter {
-    pub async fn new(
-        consumer_key: String,
-        consumer_secret: String,
+    async fn new(
+        consumer: egg_mode::KeyPair,
+        token: egg_mode::Token,
         conn: sqlx::Pool<sqlx::Postgres>,
     ) -> Self {
-        use egg_mode::KeyPair;
-
-        let consumer = KeyPair::new(consumer_key, consumer_secret);
-        let token = egg_mode::auth::bearer_token(&consumer).await.unwrap();
-
         Self {
             matcher: regex::Regex::new(
-                r"https://(?:mobile\.)?twitter.com/(?P<screen_name>\w+)(?:/status/(?P<id>\d+))?",
+                r"(?:https?://)?(?:mobile\.)?twitter.com/(?P<screen_name>\w+)(?:/status/(?P<id>\d+))?",
             )
             .unwrap(),
             consumer,
             token,
             conn,
         }
+    }
+
+    pub async fn new_app_auth(
+        consumer_key: String,
+        consumer_secret: String,
+        conn: sqlx::Pool<sqlx::Postgres>,
+    ) -> Self {
+        tracing::info!("Authenticating Twitter requests with App Auth");
+
+        let consumer = egg_mode::KeyPair::new(consumer_key, consumer_secret);
+        let token = egg_mode::auth::bearer_token(&consumer).await.unwrap();
+
+        Self::new(consumer, token, conn).await
+    }
+
+    pub async fn new_access_tokens(
+        consumer_key: String,
+        consumer_secret: String,
+        access_key: String,
+        access_secret: String,
+        conn: sqlx::PgPool,
+    ) -> Self {
+        tracing::info!("Authenticating Twitter requests with access tokens");
+
+        let consumer = egg_mode::KeyPair::new(consumer_key, consumer_secret);
+        let access = egg_mode::KeyPair::new(access_key, access_secret);
+
+        let token = egg_mode::Token::Access {
+            consumer: consumer.clone(),
+            access,
+        };
+
+        Self::new(consumer, token, conn).await
     }
 
     /// Get the media from a captured URL. If it is a direct link to a tweet,
@@ -586,10 +635,20 @@ impl Twitter {
         captures: &regex::Captures<'_>,
     ) -> Result<Option<TwitterData>, Error> {
         if let Some(Ok(id)) = captures.name("id").map(|id| id.as_str().parse::<u64>()) {
-            let tweet = egg_mode::tweet::show(id, token)
-                .await
-                .map_err(Self::update_error)?
-                .response;
+            let tweet = futures_retry::FutureRetry::new(
+                || egg_mode::tweet::show(id, token),
+                utils::Retry::new(3),
+            )
+            .await
+            .map(|(tweet, attempts)| {
+                if attempts > 1 {
+                    tracing::warn!("took {} attempts to load tweet", attempts);
+                }
+
+                tweet
+            })
+            .map_err(|(err, _attempts)| Self::update_error(err))?
+            .response;
 
             let user = match tweet.user {
                 Some(user) => user,
@@ -641,6 +700,25 @@ impl Twitter {
             }))
         }
     }
+
+    async fn get_token(&self, user: Option<&User>) -> Result<egg_mode::Token, Error> {
+        let user = match user {
+            Some(user) => user,
+            None => return Ok(self.token.clone()),
+        };
+
+        let account = models::TwitterAccount::get(&self.conn, user).await?;
+
+        let token = match account {
+            Some(account) => egg_mode::Token::Access {
+                consumer: self.consumer.clone(),
+                access: egg_mode::KeyPair::new(account.consumer_key, account.consumer_secret),
+            },
+            _ => self.token.clone(),
+        };
+
+        Ok(token)
+    }
 }
 
 #[async_trait]
@@ -664,24 +742,20 @@ impl Site for Twitter {
         Some(format!("Twitter-{}", id))
     }
 
-    async fn url_supported(&mut self, url: &str) -> bool {
+    async fn url_supported(&self, url: &str) -> bool {
         self.matcher.is_match(url)
     }
 
-    async fn get_images(&mut self, user: &User, url: &str) -> Result<Option<Vec<PostInfo>>, Error> {
+    async fn get_images(
+        &self,
+        user: Option<&User>,
+        url: &str,
+    ) -> Result<Option<Vec<PostInfo>>, Error> {
         let captures = self.matcher.captures(url).unwrap();
 
-        tracing::trace!(%user, "attempting to find saved credentials",);
+        tracing::trace!(?user, "attempting to find saved credentials");
 
-        let account = models::TwitterAccount::get(&self.conn, user).await?;
-
-        let token = match account {
-            Some(account) => egg_mode::Token::Access {
-                consumer: self.consumer.clone(),
-                access: egg_mode::KeyPair::new(account.consumer_key, account.consumer_secret),
-            },
-            _ => self.token.clone(),
-        };
+        let token = self.get_token(user).await?;
 
         let TwitterData {
             user,
@@ -965,13 +1039,13 @@ impl Site for FurAffinity {
         }
     }
 
-    async fn url_supported(&mut self, url: &str) -> bool {
+    async fn url_supported(&self, url: &str) -> bool {
         self.matcher.is_match(url)
     }
 
     async fn get_images(
-        &mut self,
-        _user: &User,
+        &self,
+        _user: Option<&User>,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, Error> {
         let captures = self
@@ -999,7 +1073,7 @@ impl Site for FurAffinity {
 ///
 /// It holds an in-memory cache of if a URL is a Mastodon instance.
 pub struct Mastodon {
-    instance_cache: HashMap<String, bool>,
+    instance_cache: RwLock<HashMap<String, bool>>,
     matcher: regex::Regex,
     client: reqwest::Client,
 }
@@ -1019,7 +1093,7 @@ struct MastodonMediaAttachments {
 impl Mastodon {
     pub fn default() -> Self {
         Self {
-            instance_cache: HashMap::new(),
+            instance_cache: RwLock::new(HashMap::new()),
             matcher: regex::Regex::new(
                 r#"(?P<host>https?://(?:\S+))/(?:notice|users/\w+/statuses|@\w+)/(?P<id>\d+)"#,
             )
@@ -1049,7 +1123,7 @@ impl Site for Mastodon {
         Some(format!("Mastodon-{}", sub_id))
     }
 
-    async fn url_supported(&mut self, url: &str) -> bool {
+    async fn url_supported(&self, url: &str) -> bool {
         let captures = match self.matcher.captures(url) {
             Some(captures) => captures,
             None => return false,
@@ -1057,7 +1131,7 @@ impl Site for Mastodon {
 
         let base = captures["host"].to_owned();
 
-        if let Some(is_masto) = self.instance_cache.get(&base) {
+        if let Some(is_masto) = self.instance_cache.read().await.get(&base) {
             if !is_masto {
                 return false;
             }
@@ -1071,13 +1145,13 @@ impl Site for Mastodon {
         {
             Ok(resp) => resp,
             Err(_) => {
-                self.instance_cache.insert(base, false);
+                self.instance_cache.write().await.insert(base, false);
                 return false;
             }
         };
 
         if !resp.status().is_success() {
-            self.instance_cache.insert(base, false);
+            self.instance_cache.write().await.insert(base, false);
             return false;
         }
 
@@ -1085,8 +1159,8 @@ impl Site for Mastodon {
     }
 
     async fn get_images(
-        &mut self,
-        _user: &User,
+        &self,
+        _user: Option<&User>,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, Error> {
         let captures = self.matcher.captures(url).unwrap();
@@ -1192,13 +1266,13 @@ impl Site for Weasyl {
         Some(format!("Weasyl-{}", sub_id))
     }
 
-    async fn url_supported(&mut self, url: &str) -> bool {
+    async fn url_supported(&self, url: &str) -> bool {
         self.matcher.is_match(url)
     }
 
     async fn get_images(
-        &mut self,
-        _user: &User,
+        &self,
+        _user: Option<&User>,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, Error> {
         let captures = self.matcher.captures(url).unwrap();
@@ -1262,7 +1336,7 @@ pub struct Inkbunny {
     username: String,
     password: String,
 
-    sid: Option<String>,
+    sid: RwLock<Option<String>>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -1314,8 +1388,8 @@ impl Inkbunny {
     const API_SUBMISSIONS: &'static str = "https://inkbunny.net/api_submissions.php";
 
     /// Log into Inkbunny, getting a session ID for future requests.
-    pub async fn get_sid(&mut self) -> Result<String, Error> {
-        if let Some(sid) = &self.sid {
+    pub async fn get_sid(&self) -> Result<String, Error> {
+        if let Some(sid) = self.sid.read().await.as_ref() {
             return Ok(sid.clone());
         }
 
@@ -1345,12 +1419,12 @@ impl Inkbunny {
             return Err(Error::bot("Inkbunny account was missing permissions"));
         }
 
-        self.sid = Some(login.sid.clone());
+        *self.sid.write().await = Some(login.sid.clone());
         Ok(login.sid)
     }
 
     /// Load submissions from provided IDs.
-    pub async fn get_submissions(&mut self, ids: &[i32]) -> Result<InkbunnySubmissions, Error> {
+    pub async fn get_submissions(&self, ids: &[i32]) -> Result<InkbunnySubmissions, Error> {
         let ids: String = ids
             .iter()
             .map(|id| id.to_string())
@@ -1380,7 +1454,7 @@ impl Inkbunny {
                 InkbunnyResponse::Success(submissions) => break submissions,
                 InkbunnyResponse::Error { error_code: 2 } => {
                     tracing::info!("Inkbunny SID expired");
-                    self.sid = None;
+                    *self.sid.write().await = None;
                     continue;
                 }
                 _ => return Err(Error::bot("Unhandled Inkbunny error code")),
@@ -1403,7 +1477,7 @@ impl Inkbunny {
             username,
             password,
 
-            sid: None,
+            sid: RwLock::new(None),
         }
     }
 }
@@ -1428,13 +1502,13 @@ impl Site for Inkbunny {
         Some(format!("Inkbunny-{}", sub_id))
     }
 
-    async fn url_supported(&mut self, url: &str) -> bool {
+    async fn url_supported(&self, url: &str) -> bool {
         self.matcher.is_match(url)
     }
 
     async fn get_images(
-        &mut self,
-        _user: &User,
+        &self,
+        _user: Option<&User>,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, Error> {
         let captures = self.matcher.captures(url).unwrap();
@@ -1565,7 +1639,7 @@ impl Site for DeviantArt {
         "DeviantArt"
     }
 
-    async fn url_supported(&mut self, url: &str) -> bool {
+    async fn url_supported(&self, url: &str) -> bool {
         self.matcher.is_match(url)
     }
 
@@ -1577,8 +1651,8 @@ impl Site for DeviantArt {
     }
 
     async fn get_images(
-        &mut self,
-        _user: &User,
+        &self,
+        _user: Option<&User>,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, Error> {
         let mut endpoint = url::Url::parse("https://backend.deviantart.com/oembed").unwrap();

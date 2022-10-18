@@ -51,13 +51,11 @@ pub async fn process_channel_update(
 
     let links = utils::extract_links(&message);
 
-    let mut sites = cx.sites.lock().await;
-
     // If any matches contained a link we found in the message, skip adding
     // a source.
     if matches
         .iter()
-        .any(|file| utils::link_was_seen(&sites, &links, &file.url()))
+        .any(|file| utils::link_was_seen(&cx.sites, &links, &file.url()))
     {
         tracing::trace!("post already contained valid source url");
         return Ok(());
@@ -68,7 +66,7 @@ pub async fn process_channel_update(
         let _ = utils::find_images(
             &tgbotapi::User::default(),
             links,
-            &mut sites,
+            &cx.sites,
             &cx.redis,
             &mut |info| {
                 results.extend(info.results);
@@ -85,8 +83,6 @@ pub async fn process_channel_update(
             return Ok(());
         }
     }
-
-    drop(sites);
 
     if already_had_source(&cx.redis, &message, &matches).await? {
         tracing::trace!("post group already contained source url");

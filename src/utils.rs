@@ -1,6 +1,12 @@
-use std::{collections::HashSet, str::FromStr, sync::Arc, time::Instant};
+use std::{
+    collections::HashSet,
+    str::FromStr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use fluent_bundle::{bundle::FluentBundle, FluentArgs, FluentResource};
+use futures_retry::{ErrorHandler, FutureRetry, RetryPolicy};
 use intl_memoizer::concurrent::IntlLangMemoizer;
 use redis::AsyncCommands;
 use sha2::{Digest, Sha256};
@@ -9,6 +15,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::{
     models::{self, Chat, User},
+    services::Telegram,
     sites::{BoxedSite, PostInfo},
     Error,
 };
@@ -55,7 +62,7 @@ struct ImageCacheData {
 /// Attempt to get cached images for a given URL.
 async fn get_cached_images<'a>(
     link: &'a str,
-    sites: &'a mut [BoxedSite],
+    sites: &'a [BoxedSite],
     redis: &mut redis::aio::ConnectionManager,
 ) -> Result<Option<SiteCallback<'a>>, Error> {
     let url_id = match sites.iter().find_map(|site| site.url_id(link)) {
@@ -373,7 +380,7 @@ pub async fn resize_photo(url: &str, max_size: u64) -> Result<tgbotapi::FileType
 pub async fn find_images<'a, C, U: Into<User>>(
     user: U,
     links: Vec<&'a str>,
-    sites: &mut [BoxedSite],
+    sites: &[BoxedSite],
     redis: &redis::aio::ConnectionManager,
     callback: &mut C,
 ) -> Result<Vec<&'a str>, Error>
@@ -397,13 +404,13 @@ where
             Err(err) => tracing::error!("could not get cached images: {}", err),
         }
 
-        for site in sites.iter_mut() {
+        for site in sites.iter() {
             let start = Instant::now();
 
             if site.url_supported(link).await {
                 tracing::debug!(link, site = site.name(), "found supported link");
 
-                let images = site.get_images(&user, link).await?;
+                let images = site.get_images(Some(&user), link).await?;
 
                 match images {
                     Some(results) => {
@@ -591,7 +598,7 @@ pub struct ContinuousAction {
 #[tracing::instrument(skip(bot))]
 #[must_use]
 pub fn continuous_action(
-    bot: Arc<tgbotapi::Telegram>,
+    bot: Arc<Telegram>,
     max: usize,
     chat_id: tgbotapi::requests::ChatID,
     action: tgbotapi::requests::ChatAction,
@@ -652,7 +659,7 @@ impl Drop for ContinuousAction {
 /// Check if the bot has permissions to delete in a chat. Checks the cache if
 /// not being told to ignore it.
 pub async fn can_delete_in_chat<C: Into<Chat>, U: Into<User>>(
-    bot: &tgbotapi::Telegram,
+    bot: &Telegram,
     conn: &sqlx::Pool<sqlx::Postgres>,
     chat: C,
     user: U,
@@ -699,7 +706,12 @@ pub async fn lookup_single_hash(
     hash: i64,
     distance: Option<i64>,
 ) -> Result<Vec<fuzzysearch::File>, Error> {
-    let mut matches = fapi.lookup_hashes(&[hash], distance).await?;
+    let hashes = [hash];
+
+    let mut matches = FutureRetry::new(|| fapi.lookup_hashes(&hashes, distance), Retry::new(3))
+        .await
+        .map(|(matches, _attempts)| matches)
+        .map_err(|(err, _attempts)| err)?;
 
     for mut m in &mut matches {
         m.distance =
@@ -733,7 +745,7 @@ pub async fn lookup_single_hash(
 /// * Looking up the hash with [`lookup_single_hash`]
 #[tracing::instrument(err, skip(bot, redis, fapi))]
 pub async fn match_image(
-    bot: &tgbotapi::Telegram,
+    bot: &Telegram,
     redis: &redis::aio::ConnectionManager,
     fapi: &fuzzysearch::FuzzySearch,
     file: &tgbotapi::PhotoSize,
@@ -749,7 +761,17 @@ pub async fn match_image(
         file_id: file.file_id.clone(),
     };
 
-    let file_info = bot.make_request(&get_file).await?;
+    let file_info = FutureRetry::new(|| bot.make_request(&get_file), Retry::new(3))
+        .await
+        .map(|(file, attempts)| {
+            if attempts > 1 {
+                tracing::warn!("took {} attempts to get file", attempts);
+            }
+
+            file
+        })
+        .map_err(|(err, _attempts)| err)?;
+
     let data = bot.download_file(&file_info.file_path.unwrap()).await?;
 
     let hash = tokio::task::spawn_blocking(move || fuzzysearch::hash_bytes(&data))
@@ -1207,11 +1229,7 @@ pub async fn size_post(post: &PostInfo, data: &bytes::Bytes) -> Result<PostInfo,
 }
 
 /// Check if a link was contained within a linkify Link.
-pub fn link_was_seen(
-    sites: &tokio::sync::MutexGuard<Vec<BoxedSite>>,
-    links: &[&str],
-    source: &str,
-) -> bool {
+pub fn link_was_seen(sites: &[BoxedSite], links: &[&str], source: &str) -> bool {
     // Find the unique ID for the source link. If one does not exist, we can't
     // find any matches against it.
     let source_id = match sites.iter().find_map(|site| site.url_id(source)) {
@@ -1289,4 +1307,30 @@ where
         },
         || callback(err),
     )
+}
+
+pub struct Retry {
+    max_attempts: usize,
+    duration: Duration,
+}
+
+impl Retry {
+    pub fn new(max_attempts: usize) -> Self {
+        Self {
+            max_attempts,
+            duration: Duration::from_secs(1),
+        }
+    }
+}
+
+impl<T> ErrorHandler<T> for Retry {
+    type OutError = T;
+
+    fn handle(&mut self, attempt: usize, err: T) -> RetryPolicy<Self::OutError> {
+        if attempt >= self.max_attempts {
+            return RetryPolicy::ForwardError(err);
+        }
+
+        RetryPolicy::WaitRetry(self.duration)
+    }
 }

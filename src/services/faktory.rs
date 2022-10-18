@@ -17,7 +17,7 @@ lazy_static::lazy_static! {
 #[derive(Debug, thiserror::Error)]
 pub enum FaktoryError {
     #[error("protocol error: {0}")]
-    Protocol(#[source] Box<dyn std::error::Error + Send + Sync>),
+    Protocol(#[from] faktory::Error),
     #[error("runtime error: {0}")]
     Runtime(#[from] tokio::task::JoinError),
     #[error("json error: {0}")]
@@ -56,11 +56,7 @@ impl FaktoryClient {
 
         let producer = tokio::task::spawn_blocking(move || faktory::Producer::connect(Some(&host)))
             .in_current_span()
-            .await?
-            .map_err(|err| {
-                let err = err.compat();
-                FaktoryError::Protocol(Box::new(err))
-            })?;
+            .await??;
 
         let client = Arc::new(Mutex::new(producer));
 
@@ -112,11 +108,7 @@ impl FaktoryClient {
             client.enqueue(job)
         })
         .in_current_span()
-        .await?
-        .map_err(|err| {
-            let err = err.compat();
-            FaktoryError::Protocol(Box::new(err))
-        })?;
+        .await??;
 
         tracing::info!(%job_id, "enqueued job {}", name);
 
@@ -216,7 +208,11 @@ where
                 }
                 Err(err) if !err.is_retryable() => {
                     JOB_FAILURE_COUNT.with_label_values(&[name]).inc();
-                    tracing::warn!(execution_time, "job failed, and marked as not retryable");
+                    tracing::warn!(
+                        execution_time,
+                        "job failed, and marked as not retryable: {:?}",
+                        err
+                    );
                     (Ok(()), sentry::protocol::SessionStatus::Abnormal)
                 }
                 Err(err) => {

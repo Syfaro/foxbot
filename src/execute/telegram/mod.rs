@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc};
 
 use fluent_bundle::{bundle::FluentBundle, FluentArgs, FluentResource};
 use fuzzysearch::FuzzySearch;
@@ -11,8 +11,7 @@ use prometheus::{
 use rand::prelude::SliceRandom;
 use redis::AsyncCommands;
 use sqlx::PgPool;
-use tgbotapi::{Telegram, TelegramRequest};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use tracing::Instrument;
 use unic_langid::LanguageIdentifier;
 use uuid::Uuid;
@@ -21,6 +20,7 @@ use crate::{
     services::{
         self,
         faktory::{FaktoryClient, FaktoryWorkerEnvironment, JobQueue},
+        Telegram,
     },
     sites::BoxedSite,
     utils, Args, Error, ErrorMetadata, RunConfig, TelegramConfig, L10N_LANGS, L10N_RESOURCES,
@@ -49,18 +49,6 @@ lazy_static! {
         "foxbot_handler_errors_total",
         "Number of errors when trying to run a handler",
         &["handler"]
-    )
-    .unwrap();
-    static ref TELEGRAM_REQUESTS: CounterVec = register_counter_vec!(
-        "foxbot_telegram_requests_total",
-        "Number of requests made to Telegram",
-        &["endpoint"]
-    )
-    .unwrap();
-    static ref TELEGRAM_ERRORS: CounterVec = register_counter_vec!(
-        "foxbot_telegram_errors_total",
-        "Number of errors returned on requests to Telegram",
-        &["endpoint"]
     )
     .unwrap();
 }
@@ -118,7 +106,9 @@ pub async fn telegram(args: Args, config: RunConfig, telegram_config: TelegramCo
         .await
         .expect("could not connect to database");
 
-    let sites = Mutex::new(crate::sites::get_all_sites(&config, pool.clone()).await);
+    crate::run_migrations(&pool).await;
+
+    let sites = crate::sites::get_all_sites(&config, pool.clone()).await;
 
     let faktory = FaktoryClient::connect(&config.faktory_url)
         .await
@@ -129,7 +119,7 @@ pub async fn telegram(args: Args, config: RunConfig, telegram_config: TelegramCo
         .await
         .expect("could not create redis connection manager");
 
-    let bot = tgbotapi::Telegram::new(telegram_config.telegram_api_token);
+    let bot = Telegram::new(telegram_config.telegram_api_token);
 
     let bot_user = bot
         .make_request(&tgbotapi::requests::GetMe)
@@ -274,7 +264,7 @@ pub async fn telegram(args: Args, config: RunConfig, telegram_config: TelegramCo
 
 pub struct Context {
     handlers: Vec<BoxedHandler>,
-    sites: Mutex<Vec<BoxedSite>>,
+    sites: Vec<BoxedSite>,
 
     langs: HashMap<LanguageIdentifier, Vec<String>>,
     best_lang: RwLock<HashMap<String, Arc<FluentBundle<FluentResource, IntlLangMemoizer>>>>,
@@ -350,67 +340,6 @@ impl Context {
         bundle
     }
 
-    async fn make_request<T>(&self, request: &T) -> Result<T::Response, tgbotapi::Error>
-    where
-        T: TelegramRequest,
-    {
-        let mut attempts = 0;
-
-        loop {
-            TELEGRAM_REQUESTS
-                .with_label_values(&[request.endpoint()])
-                .inc();
-
-            let err = match self.bot.make_request(request).await {
-                Ok(resp) => return Ok(resp),
-                Err(err) => err,
-            };
-
-            TELEGRAM_ERRORS
-                .with_label_values(&[request.endpoint()])
-                .inc();
-
-            if attempts > 2 {
-                return Err(err);
-            }
-
-            let retry_after = match err {
-                tgbotapi::Error::Telegram(tgbotapi::TelegramError {
-                    parameters:
-                        Some(tgbotapi::ResponseParameters {
-                            retry_after: Some(retry_after),
-                            ..
-                        }),
-                    ..
-                }) => {
-                    tracing::warn!(retry_after, "request was rate limited, retrying");
-                    retry_after
-                }
-                tgbotapi::Error::Telegram(tgbotapi::TelegramError {
-                    error_code: Some(400),
-                    description: Some(desc),
-                    ..
-                }) if desc
-                    == "Bad Request: wrong file_id or the file is temporarily unavailable" =>
-                {
-                    tracing::warn!("file_id temporarily unavailable");
-                    2
-                }
-                tgbotapi::Error::Request(err) => {
-                    tracing::warn!("telegram network request error: {}", err);
-                    2
-                }
-                err => {
-                    tracing::warn!("got other telegram error: {}", err);
-                    return Err(err);
-                }
-            };
-
-            tokio::time::sleep(Duration::from_secs(retry_after as u64)).await;
-            attempts += 1;
-        }
-    }
-
     async fn send_generic_reply(
         &self,
         message: &tgbotapi::Message,
@@ -428,7 +357,7 @@ impl Context {
             ..Default::default()
         };
 
-        let message = self.make_request(&send_message).await?;
+        let message = self.bot.make_request(&send_message).await?;
 
         Ok(message)
     }
@@ -467,7 +396,7 @@ impl Context {
             ..Default::default()
         };
 
-        self.make_request(&send_message).await?;
+        self.bot.make_request(&send_message).await?;
 
         Ok(())
     }
@@ -562,7 +491,7 @@ impl Context {
                 ..Default::default()
             };
 
-            if let Err(err) = self.make_request(&edit_message).await {
+            if let Err(err) = self.bot.make_request(&edit_message).await {
                 tracing::error!("could not update error message: {}", err);
 
                 let _ = conn.del::<_, ()>(&key_list).await;
@@ -578,7 +507,7 @@ impl Context {
                 ..Default::default()
             };
 
-            match self.make_request(&send_message).await {
+            match self.bot.make_request(&send_message).await {
                 Ok(resp) => {
                     if let Err(err) = conn
                         .set_ex::<_, _, ()>(key_message_id, resp.message_id, 60 * 5)

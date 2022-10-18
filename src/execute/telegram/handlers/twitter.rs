@@ -42,7 +42,7 @@ impl Handler for TwitterHandler {
                     ..Default::default()
                 };
 
-                cx.make_request(&message).await?;
+                cx.bot.make_request(&message).await?;
 
                 Ok(())
             },
@@ -140,7 +140,7 @@ async fn handle_command(
                 ..Default::default()
             };
 
-            cx.make_request(&message).await?;
+            cx.bot.make_request(&message).await?;
 
             return Ok(());
         }
@@ -154,7 +154,7 @@ async fn handle_command(
         ..Default::default()
     };
 
-    cx.make_request(&message).await?;
+    cx.bot.make_request(&message).await?;
 
     Ok(())
 }
@@ -165,7 +165,7 @@ async fn answer_callback(cx: &Context, callback: &tgbotapi::CallbackQuery) -> Re
         ..Default::default()
     };
 
-    cx.make_request(&answer_callback).await?;
+    cx.bot.make_request(&answer_callback).await?;
 
     Ok(())
 }
@@ -186,7 +186,7 @@ async fn handle_add(
         ..Default::default()
     };
 
-    cx.make_request(&edit_message).await?;
+    cx.bot.make_request(&edit_message).await?;
 
     Ok(())
 }
@@ -213,7 +213,7 @@ async fn handle_remove(
         ..Default::default()
     };
 
-    cx.make_request(&edit_message).await?;
+    cx.bot.make_request(&edit_message).await?;
 
     Ok(())
 }

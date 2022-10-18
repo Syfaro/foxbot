@@ -59,22 +59,23 @@ impl Handler for PhotoHandler {
                 utils::get_message(&bundle, "reverse-subscribe", None),
             );
 
-            cx.make_request(&SendMessage {
-                chat_id: message.chat_id(),
-                text,
-                reply_to_message_id: Some(message.message_id),
-                reply_markup: Some(tgbotapi::requests::ReplyMarkup::InlineKeyboardMarkup(
-                    tgbotapi::InlineKeyboardMarkup {
-                        inline_keyboard: vec![vec![tgbotapi::InlineKeyboardButton {
-                            text: subscribe,
-                            callback_data: Some(format!("notify-{}", hash)),
-                            ..Default::default()
-                        }]],
-                    },
-                )),
-                ..Default::default()
-            })
-            .await?;
+            cx.bot
+                .make_request(&SendMessage {
+                    chat_id: message.chat_id(),
+                    text,
+                    reply_to_message_id: Some(message.message_id),
+                    reply_markup: Some(tgbotapi::requests::ReplyMarkup::InlineKeyboardMarkup(
+                        tgbotapi::InlineKeyboardMarkup {
+                            inline_keyboard: vec![vec![tgbotapi::InlineKeyboardButton {
+                                text: subscribe,
+                                callback_data: Some(format!("notify-{}", hash)),
+                                ..Default::default()
+                            }]],
+                        },
+                    )),
+                    ..Default::default()
+                })
+                .await?;
 
             return Ok(Completed);
         }
@@ -99,7 +100,7 @@ impl Handler for PhotoHandler {
             ..Default::default()
         };
 
-        cx.make_request(&send_message).await?;
+        cx.bot.make_request(&send_message).await?;
 
         Ok(Completed)
     }
