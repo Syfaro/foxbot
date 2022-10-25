@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Write;
 
 use async_trait::async_trait;
 use fluent_bundle::FluentArgs;
@@ -69,6 +70,7 @@ impl Handler for CommandHandler {
             "/grouppreviews" => self.group_nopreviews(cx, message).await,
             "/groupalbums" => self.group_noalbums(cx, message).await,
             "/manage" => self.manage(cx, message).await,
+            "/trace" => self.trace(cx, message).await,
             "/feedback" => {
                 let bundle = cx
                     .get_fluent_bundle(
@@ -760,6 +762,102 @@ impl CommandHandler {
         };
 
         cx.bot.make_request(&message).await?;
+
+        Ok(())
+    }
+
+    async fn trace(&self, cx: &Context, message: &tgbotapi::Message) -> Result<(), Error> {
+        let mut resp = String::new();
+
+        let message = if let Some(reply_to_message) = message.reply_to_message.as_ref() {
+            writeln!(resp, "Looking at message {}\n", reply_to_message.message_id).unwrap();
+            reply_to_message
+        } else {
+            message
+        };
+
+        let links: Vec<_> = cx
+            .finder
+            .links(message.text.as_deref().unwrap_or_default())
+            .chain(
+                cx.finder
+                    .links(message.caption.as_deref().unwrap_or_default()),
+            )
+            .collect();
+        writeln!(resp, "Found {} links", links.len()).unwrap();
+
+        for (pos, link) in links.into_iter().enumerate() {
+            let link = link.as_str();
+            writeln!(resp, "Link {pos}: {link}").unwrap();
+
+            let site_id = cx.sites.iter().find_map(|site| site.url_id(link));
+
+            if let Some(site_id) = site_id {
+                writeln!(resp, "Image ID: <pre>{site_id}</pre>").unwrap();
+            } else {
+                writeln!(resp, "No image ID").unwrap();
+            }
+
+            for site in cx.sites.iter() {
+                if !site.url_supported(link).await {
+                    continue;
+                }
+
+                for (pos, image) in site
+                    .get_images(None, link)
+                    .await?
+                    .unwrap_or_default()
+                    .into_iter()
+                    .enumerate()
+                {
+                    writeln!(
+                        resp,
+                        "Image {} ({}, {}): {}",
+                        pos, image.site_name, image.file_type, image.url
+                    )
+                    .unwrap();
+                }
+
+                break;
+            }
+
+            writeln!(resp).unwrap();
+        }
+
+        if let Some(photo_sizes) = message.photo.as_ref() {
+            writeln!(resp, "Found photo with {} sizes", photo_sizes.len()).unwrap();
+            let best_size = utils::find_best_photo(photo_sizes).unwrap();
+            writeln!(
+                resp,
+                "Best size was {}x{}",
+                best_size.width, best_size.height
+            )
+            .unwrap();
+
+            let (searched_hash, fuzzysearch_matches) =
+                utils::match_image(&cx.bot, &cx.redis, &cx.fuzzysearch, best_size, Some(3)).await?;
+            writeln!(resp, "Photo had hash <pre>{searched_hash}</pre>").unwrap();
+            writeln!(resp, "Discovered {} results:", fuzzysearch_matches.len(),).unwrap();
+
+            for file in fuzzysearch_matches {
+                writeln!(resp, "{} - {}", file.url(), file.distance.unwrap_or(0)).unwrap();
+            }
+        }
+
+        if message.document.is_some() || message.animation.is_some() {
+            writeln!(resp, "Detected document or animation, ignoring.").unwrap();
+        }
+
+        let send_message = tgbotapi::requests::SendMessage {
+            chat_id: message.chat_id(),
+            text: resp,
+            disable_web_page_preview: Some(true),
+            reply_to_message_id: Some(message.message_id),
+            allow_sending_without_reply: Some(true),
+            parse_mode: Some(tgbotapi::requests::ParseMode::Html),
+            ..Default::default()
+        };
+        cx.bot.make_request(&send_message).await?;
 
         Ok(())
     }
