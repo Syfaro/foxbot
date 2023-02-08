@@ -92,6 +92,11 @@ async fn handle_command(
     message: &tgbotapi::Message,
     user: &tgbotapi::User,
 ) -> Result<(), Error> {
+    if cx.config.twitter_disable {
+        cx.send_generic_reply(message, "twitter-disabled").await?;
+        return Ok(());
+    }
+
     if message.chat.chat_type != tgbotapi::ChatType::Private {
         cx.send_generic_reply(message, "twitter-private").await?;
         return Ok(());

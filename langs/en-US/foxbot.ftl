@@ -72,6 +72,7 @@ twitter-existing-account = It looks like you already have the account { $account
 twitter-change-anyway = Change Account 
 twitter-remove-account = Remove Account
 twitter-removed-account = Okay, got it. Your Twitter account has been removed.
+twitter-disabled = Sorry, due to Twitter API changes it is no longer possible to link your account.
 
 # In-group mirroring
 mirror-no-links = Sorry, I could not find any links to mirror images from.

@@ -203,6 +203,9 @@ pub struct RunConfig {
     /// Twitter access secret.
     #[clap(long, env)]
     pub twitter_access_secret: Option<String>,
+    /// Disable Twitter logins.
+    #[clap(long, env, default_value = "false")]
+    pub twitter_disable: bool,
 
     /// Inkbunny username.
     #[clap(long, env)]

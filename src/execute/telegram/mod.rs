@@ -74,6 +74,7 @@ pub struct Config {
     pub s3_url: String,
     pub s3_bucket: String,
 
+    pub twitter_disable: bool,
     pub twitter_callback: String,
     pub twitter_keypair: egg_mode::KeyPair,
 }
@@ -168,6 +169,7 @@ pub async fn telegram(args: Args, config: RunConfig, telegram_config: TelegramCo
 
         twitter_callback: format!("{}/twitter/callback", config.public_endpoint),
         twitter_keypair,
+        twitter_disable: config.twitter_disable,
 
         public_endpoint: config.public_endpoint,
     };
