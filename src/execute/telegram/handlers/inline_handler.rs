@@ -304,7 +304,7 @@ impl Handler for InlineHandler {
                 InlineQueryResult::article(
                     utils::generate_id(),
                     format!("Error: {}", message),
-                    message.to_owned().to_string(),
+                    message.to_string(),
                 )
             } else {
                 tracing::error!("got non-displayable error message: {:?}", err);
@@ -494,6 +494,7 @@ async fn video_progress(cx: &Context, display_name: &str, progress: &str) -> Res
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip(cx), fields(video_id))]
 async fn video_complete(
     cx: &Context,
@@ -513,7 +514,7 @@ async fn video_complete(
     let video = models::Video::lookup_by_display_name(&cx.pool, display_name)
         .await?
         .ok_or_else(|| Error::missing("video for complete"))?;
-    tracing::Span::current().record("video_id", &video.id);
+    tracing::Span::current().record("video_id", video.id);
 
     models::Video::set_processed_url(
         &cx.pool, video.id, video_url, thumb_url, video_size, height, width,
@@ -908,11 +909,8 @@ async fn build_image_result(
                         // Escape tags for Markdown formatting and replace unsupported symbols
                         .map(|tag| escape_markdown(format!(
                             "#{}",
-                            tag.replace(' ', "_")
-                                .replace('/', "_")
-                                .replace('(', "")
-                                .replace(')', "")
-                                .replace('-', "_")
+                            tag.replace([' ', '/', '/', '-'], "_")
+                                .replace(['(', ')'], "")
                         )))
                         .take(50)
                         .collect::<Vec<_>>()
@@ -1064,7 +1062,7 @@ fn build_mp4_result(
         result
             .title
             .clone()
-            .unwrap_or_else(|| result.site_name.to_owned().into()),
+            .unwrap_or_else(|| result.site_name.to_string()),
     );
     video.reply_markup = Some(keyboard.clone());
 

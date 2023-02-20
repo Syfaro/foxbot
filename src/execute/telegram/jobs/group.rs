@@ -65,7 +65,7 @@ pub async fn process_group_photo(
             let date = message.forward_date.unwrap_or(message.date);
             let now = chrono::Utc::now();
             let message_date = chrono::DateTime::from_utc(
-                chrono::NaiveDateTime::from_timestamp(date, 0),
+                chrono::NaiveDateTime::from_timestamp_opt(date, 0).unwrap(),
                 chrono::Utc,
             );
             let hours_ago = (now - message_date).num_hours();
@@ -276,7 +276,7 @@ pub async fn process_group_mediagroup_message(
     message: tgbotapi::Message,
 ) -> Result<(), Error> {
     let media_group_id = message.media_group_id.as_deref().unwrap();
-    tracing::Span::current().record("media_group_id", &media_group_id);
+    tracing::Span::current().record("media_group_id", media_group_id);
 
     tracing::debug!("got media group message");
 
@@ -591,7 +591,7 @@ pub async fn process_group_mediagroup_prune(
     media_group_id: String,
 ) -> Result<(), Error> {
     let media_group_id: &str = &media_group_id;
-    tracing::Span::current().record("media_group_id", &media_group_id);
+    tracing::Span::current().record("media_group_id", media_group_id);
 
     tracing::debug!("pruning media group");
 

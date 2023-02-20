@@ -346,7 +346,7 @@ async fn fuzzysearch_webhook(
     };
 
     let mut data = [0u8; 8];
-    base64::decode_config_slice(&hash, base64::STANDARD, &mut data).unwrap();
+    base64::decode_config_slice(hash, base64::STANDARD, &mut data).unwrap();
 
     let job = NewHashJob { hash: data };
 

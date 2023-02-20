@@ -54,7 +54,7 @@ async fn check_more_time(
     let key = format!("retry-at:{}", chat_id);
     match redis.get::<_, Option<i64>>(&key).await {
         Ok(Some(timestamp)) => {
-            let after = chrono::Utc.timestamp(timestamp, 0);
+            let after = chrono::Utc.timestamp_opt(timestamp, 0).unwrap();
             if after <= chrono::Utc::now() {
                 tracing::trace!("retry-at was in past, ignoring");
                 None
@@ -123,7 +123,7 @@ async fn is_controlled_channel(cx: &Context, message: &tgbotapi::Message) -> Res
         None => return Ok(false),
     };
 
-    tracing::Span::current().record("forward_from_chat_id", &forward_from_chat.id);
+    tracing::Span::current().record("forward_from_chat_id", forward_from_chat.id);
 
     let can_edit = match models::GroupConfig::get::<_, _, bool>(
         &cx.pool,

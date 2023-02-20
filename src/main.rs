@@ -1,11 +1,7 @@
 use std::{borrow::Cow, num::NonZeroU64};
 
 use clap::{Parser, Subcommand};
-use opentelemetry::{sdk::trace, KeyValue};
-use opentelemetry_otlp::WithExportConfig;
-use prometheus::Encoder;
 use thiserror::Error;
-use tracing_subscriber::prelude::*;
 
 mod execute;
 mod models;
@@ -198,7 +194,7 @@ pub struct RunConfig {
     ///
     /// This may be left empty to use app auth. Requires setting the Twitter
     /// access secret.
-    #[clap(long, env, requires = "twitter-access-secret")]
+    #[clap(long, env, requires = "twitter_access_secret")]
     pub twitter_access_key: Option<String>,
     /// Twitter access secret.
     #[clap(long, env)]
@@ -391,8 +387,6 @@ async fn main() {
 
     let args = Args::parse();
 
-    opentelemetry::global::set_text_map_propagator(opentelemetry_jaeger::Propagator::new());
-
     let service_name = match &args.command {
         Command::Web(_) => "foxbot-web",
         Command::Run(run) => match run.service {
@@ -402,40 +396,12 @@ async fn main() {
         },
     };
 
-    let tracer = opentelemetry_otlp::new_pipeline()
-        .tracing()
-        .with_exporter(
-            opentelemetry_otlp::new_exporter()
-                .tonic()
-                .with_endpoint(&args.otlp_agent),
-        )
-        .with_trace_config(
-            trace::config()
-                .with_sampler(trace::Sampler::AlwaysOn)
-                .with_resource(opentelemetry::sdk::Resource::new(vec![
-                    KeyValue::new("service.name", service_name),
-                    KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
-                    KeyValue::new("service.namespace", "foxbot"),
-                ])),
-        )
-        .install_batch(opentelemetry::runtime::Tokio)
-        .expect("could not create otlp tracer");
-
-    if matches!(std::env::var("LOG_FMT").as_deref(), Ok("json")) {
-        tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer().json())
-            .with(sentry_tracing::layer())
-            .with(tracing_subscriber::EnvFilter::from_default_env())
-            .with(tracing_opentelemetry::layer().with_tracer(tracer))
-            .init();
-    } else {
-        tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer())
-            .with(sentry_tracing::layer())
-            .with(tracing_subscriber::EnvFilter::from_default_env())
-            .with(tracing_opentelemetry::layer().with_tracer(tracer))
-            .init();
-    }
+    foxlib::trace::init(foxlib::trace::TracingConfig {
+        namespace: "foxbot",
+        name: service_name,
+        version: env!("CARGO_PKG_VERSION"),
+        otlp: matches!(std::env::var("LOG_FMT").as_deref(), Ok("json")),
+    });
 
     let _sentry = sentry::init(sentry::ClientOptions {
         dsn: args.sentry_url.clone(),
@@ -445,7 +411,7 @@ async fn main() {
         ..Default::default()
     });
 
-    metrics_server(args.metrics_host);
+    foxlib::MetricsServer::serve(args.metrics_host, true).await;
 
     match args.command.clone() {
         Command::Web(config) => web::web(*config).await,
@@ -461,8 +427,6 @@ async fn main() {
             }
         },
     }
-
-    opentelemetry::global::shutdown_tracer_provider();
 }
 
 async fn run_migrations(pool: &sqlx::PgPool) {
@@ -470,48 +434,4 @@ async fn run_migrations(pool: &sqlx::PgPool) {
         .run(pool)
         .await
         .expect("could not run migrations");
-}
-
-fn metrics_server(host: std::net::SocketAddr) {
-    tokio::task::spawn(async move {
-        tracing::info!("starting metrics server");
-
-        let svc = hyper::service::make_service_fn(|_conn| async {
-            Ok::<_, std::convert::Infallible>(hyper::service::service_fn(metrics_handler))
-        });
-
-        let server = hyper::server::Server::bind(&host).serve(svc);
-
-        server.await.expect("metrics server error");
-
-        tracing::warn!("metrics server ended");
-    });
-}
-
-async fn metrics_handler(
-    req: hyper::Request<hyper::Body>,
-) -> Result<hyper::Response<hyper::Body>, std::convert::Infallible> {
-    match req.uri().path() {
-        "/health" => health(),
-        "/metrics" => metrics(),
-        _ => {
-            let mut not_found = hyper::Response::new(hyper::Body::default());
-            *not_found.status_mut() = hyper::StatusCode::NOT_FOUND;
-            Ok(not_found)
-        }
-    }
-}
-
-fn health() -> Result<hyper::Response<hyper::Body>, std::convert::Infallible> {
-    Ok(hyper::Response::new(hyper::Body::from("OK")))
-}
-
-fn metrics() -> Result<hyper::Response<hyper::Body>, std::convert::Infallible> {
-    let mut buffer = Vec::new();
-    let encoder = prometheus::TextEncoder::new();
-
-    let metric_families = prometheus::gather();
-    encoder.encode(&metric_families, &mut buffer).unwrap();
-
-    Ok(hyper::Response::new(hyper::Body::from(buffer)))
 }

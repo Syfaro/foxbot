@@ -394,7 +394,7 @@ impl E621 {
     async fn get_pool(&self, url: &str) -> Result<Option<Vec<PostInfo>>, Error> {
         let captures = self.pool.captures(url).unwrap();
         let id = &captures["id"];
-        tracing::Span::current().record("pool_id", &id);
+        tracing::Span::current().record("pool_id", id);
 
         tracing::trace!("Loading e621 pool");
 
@@ -1109,7 +1109,7 @@ impl FurAffinity {
 
         tracing::debug!("found {} images in collection", submissions.len());
 
-        let mut posts: Vec<_> = submissions.into_iter().map(|(_id, sub)| sub).collect();
+        let mut posts: Vec<_> = submissions.into_values().collect();
         // Posts probably belong in ID order
         posts.sort_by(|a, b| a.id.cmp(&b.id));
 

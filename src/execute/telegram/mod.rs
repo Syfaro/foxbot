@@ -317,7 +317,7 @@ impl Context {
         requested: R,
     ) -> Arc<FluentBundle<FluentResource, IntlLangMemoizer>> {
         let locale = requested.locale().unwrap_or(crate::L10N_LANGS[0]);
-        tracing::Span::current().record("requested", &locale);
+        tracing::Span::current().record("requested", locale);
 
         tracing::trace!("looking up language bundle");
 
@@ -536,7 +536,7 @@ async fn process_update(cx: &Context, update: tgbotapi::Update) -> Result<(), Er
     let chat = utils::chat_from_update(&update);
 
     if let Some(user) = user {
-        tracing::Span::current().record("user_id", &user.id);
+        tracing::Span::current().record("user_id", user.id);
 
         sentry::configure_scope(|scope| {
             scope.set_user(Some(sentry::User {
@@ -548,7 +548,7 @@ async fn process_update(cx: &Context, update: tgbotapi::Update) -> Result<(), Er
     }
 
     if let Some(chat) = chat {
-        tracing::Span::current().record("chat_id", &chat.id);
+        tracing::Span::current().record("chat_id", chat.id);
     }
 
     let command = update

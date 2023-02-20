@@ -46,7 +46,7 @@ async fn feedback_redirect(
         .parse()
         .map_err(actix_web::error::ErrorBadRequest)?;
 
-    let auth_date = chrono::Utc.timestamp(auth_date, 0);
+    let auth_date = chrono::Utc.timestamp_opt(auth_date, 0).unwrap();
     if auth_date + chrono::Duration::minutes(15) < chrono::Utc::now() {
         return Err(actix_web::error::ErrorBadRequest("data too old"));
     }
