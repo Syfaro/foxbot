@@ -8,6 +8,8 @@ use std::{
 use fluent_bundle::{bundle::FluentBundle, FluentArgs, FluentResource};
 use futures_retry::{ErrorHandler, FutureRetry, RetryPolicy};
 use intl_memoizer::concurrent::IntlLangMemoizer;
+use lazy_static::lazy_static;
+use prometheus::{register_int_counter_vec, IntCounterVec};
 use redis::AsyncCommands;
 use sha2::{Digest, Sha256};
 use tracing::Instrument;
@@ -19,6 +21,21 @@ use crate::{
     sites::{BoxedSite, PostInfo},
     Error,
 };
+
+lazy_static! {
+    static ref MATCHED_SITE_COUNT: IntCounterVec = register_int_counter_vec!(
+        "foxbot_matched_site_count",
+        "Number of times a site was matched.",
+        &["site"]
+    )
+    .unwrap();
+    static ref MATCHED_SITE_NO_IMAGE_COUNT: IntCounterVec = register_int_counter_vec!(
+        "foxbot_matched_site_no_image_count",
+        "Number of times a site was matched but no images were returned.",
+        &["site"]
+    )
+    .unwrap();
+}
 
 /// A localization bundle.
 type Bundle = FluentBundle<FluentResource, IntlLangMemoizer>;
@@ -410,6 +427,8 @@ where
             if site.url_supported(link).await {
                 tracing::debug!(link, site = site.name(), "found supported link");
 
+                MATCHED_SITE_COUNT.with_label_values(&[site.name()]).inc();
+
                 let images = site.get_images(Some(&user), link).await?;
 
                 match images {
@@ -436,6 +455,10 @@ where
                     _ => {
                         tracing::debug!(site = site.name(), "no images found");
                         missing.push(link);
+
+                        MATCHED_SITE_NO_IMAGE_COUNT
+                            .with_label_values(&[site.name()])
+                            .inc();
                     }
                 }
 
