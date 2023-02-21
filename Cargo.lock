@@ -1136,6 +1136,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "enum-map"
+version = "2.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82605a2a3d13a9661b07ba27f39d00496aa347c9c236b1a3b8201c1b6d761408"
+dependencies = [
+ "enum-map-derive",
+]
+
+[[package]]
+name = "enum-map-derive"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a63b7a0ddec6f38dcec5e36257750b7a8fcaf4227e12ceb306e341d63634da05"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "errno"
 version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1302,6 +1322,7 @@ dependencies = [
  "clap",
  "dotenv",
  "egg-mode",
+ "enum-map",
  "faktory",
  "fluent-bundle",
  "fluent-langneg",
@@ -1362,6 +1383,7 @@ version = "0.1.0"
 source = "git+https://github.com/Syfaro/foxlib.git#7bf8fb2572a0a6ed0542930aafcc1cbb162ecc93"
 dependencies = [
  "chrono",
+ "enum-map",
  "hyper",
  "lazy_static",
  "opentelemetry 0.18.0",
@@ -1370,6 +1392,7 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry-semantic-conventions",
  "prometheus",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror",
@@ -1379,6 +1402,8 @@ dependencies = [
  "tracing-opentelemetry 0.18.0",
  "tracing-serde",
  "tracing-subscriber",
+ "unleash-api-client",
+ "uuid",
 ]
 
 [[package]]
@@ -1499,6 +1524,12 @@ name = "futures-task"
 version = "0.3.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dcf79a1bf610b10f42aea489289c5a2c478a786509693b80cd39c44ccd936366"
+
+[[package]]
+name = "futures-timer"
+version = "3.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e64b03909df88034c26dc1547e8970b91f98bdb65165d6a4e9110d94263dbb2c"
 
 [[package]]
 name = "futures-util"
@@ -2309,6 +2340,12 @@ name = "multimap"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5ce46fe64a9d73be07dcbe690a38ce1b293be448fd8ce1e6c1b8062c9f72c6a"
+
+[[package]]
+name = "murmur3"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9252111cf132ba0929b6f8e030cac2a24b507f3a4d6db6fb2896f27b354c714b"
 
 [[package]]
 name = "native-tls"
@@ -3775,6 +3812,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_plain"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6018081315db179d0ce57b1fe4b62a12a0028c9cf9bbef868c9cf477b3c34ae"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "serde_repr"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4896,6 +4942,31 @@ checksum = "7d3160b73c9a19f7e2939a2fdad446c57c1bbbbf4d919d3213ff1267a580d8b5"
 dependencies = [
  "crypto-common",
  "subtle",
+]
+
+[[package]]
+name = "unleash-api-client"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d8bade51761235a89f9cfbfc64ff83fad99df265dd1d1cc9fabb7d0c2645e9d"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "async-trait",
+ "cfg-if",
+ "chrono",
+ "enum-map",
+ "futures-timer",
+ "hostname",
+ "ipnet",
+ "log",
+ "murmur3",
+ "rand 0.8.5",
+ "reqwest",
+ "rustversion",
+ "serde",
+ "serde_json",
+ "serde_plain",
 ]
 
 [[package]]

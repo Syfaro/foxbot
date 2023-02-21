@@ -1,6 +1,8 @@
 use std::{borrow::Cow, num::NonZeroU64};
 
 use clap::{Parser, Subcommand};
+use enum_map::Enum;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 mod execute;
@@ -20,6 +22,10 @@ pub struct Args {
 
     #[clap(long, env)]
     pub metrics_host: std::net::SocketAddr,
+    #[clap(long, env)]
+    pub unleash_host: String,
+    #[clap(long, env)]
+    pub unleash_secret: String,
 
     #[clap(long, env)]
     pub otlp_agent: String,
@@ -380,6 +386,12 @@ impl ErrorMetadata for Error {
     }
 }
 
+#[derive(Clone, Debug, Enum, Serialize, Deserialize)]
+pub enum Features {
+    #[serde(rename = "foxbot_twitter_api")]
+    TwitterApi,
+}
+
 #[tokio::main]
 async fn main() {
     #[cfg(feature = "dotenv")]
@@ -414,13 +426,13 @@ async fn main() {
     foxlib::MetricsServer::serve(args.metrics_host, true).await;
 
     match args.command.clone() {
-        Command::Web(config) => web::web(*config).await,
+        Command::Web(config) => web::web(args, *config).await,
         Command::Run(run_config) => match run_config.service.clone() {
             RunService::Telegram(telegram_config) => {
                 execute::start_telegram(args, *run_config, telegram_config).await
             }
             RunService::Discord(discord_config) => {
-                execute::start_discord(*run_config, discord_config).await
+                execute::start_discord(args, *run_config, discord_config).await
             }
             RunService::Reddit(reddit_config) => {
                 execute::start_reddit(*run_config, reddit_config).await

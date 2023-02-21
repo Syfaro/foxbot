@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use foxlib::flags::Unleash;
 use fuzzysearch::MatchType;
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, collections::HashMap};
@@ -6,7 +7,7 @@ use tokio::sync::RwLock;
 
 use crate::{
     models::{self, User},
-    utils, Error,
+    utils, Error, Features,
 };
 
 /// User agent used with all HTTP requests to sites.
@@ -77,28 +78,26 @@ pub trait Site {
 pub async fn get_all_sites(
     config: &crate::RunConfig,
     pool: sqlx::Pool<sqlx::Postgres>,
+    unleash: Unleash<Features>,
 ) -> Vec<BoxedSite> {
-    let twitter = match (
-        config.twitter_disable,
-        &config.twitter_access_key,
-        &config.twitter_access_secret,
-    ) {
-        (true, _, _) => Box::new(FxTwitter::new()) as BoxedSite,
-        (false, Some(access_key), Some(access_secret)) => Box::new(
+    let twitter = match (&config.twitter_access_key, &config.twitter_access_secret) {
+        (Some(access_key), Some(access_secret)) => Box::new(
             Twitter::new_access_tokens(
                 config.twitter_consumer_key.clone(),
                 config.twitter_consumer_secret.clone(),
                 access_key.clone(),
                 access_secret.clone(),
                 pool,
+                unleash,
             )
             .await,
         ),
-        (false, _, _) => Box::new(
+        (_, _) => Box::new(
             Twitter::new_app_auth(
                 config.twitter_consumer_key.clone(),
                 config.twitter_consumer_secret.clone(),
                 pool,
+                unleash,
             )
             .await,
         ),
@@ -533,110 +532,6 @@ impl Site for E621 {
     }
 }
 
-/// A loader for Tweets, using FxTwitter instead of real API.
-pub struct FxTwitter {
-    client: reqwest::Client,
-    matcher: regex::Regex,
-}
-
-impl FxTwitter {
-    pub fn new() -> Self {
-        Self {
-            client: Default::default(),
-            matcher: regex::Regex::new(
-                r"(?:https?://)?(?:mobile\.)?twitter.com/(?P<screen_name>\w+)/status/(?P<id>\d+)",
-            )
-            .unwrap(),
-        }
-    }
-}
-
-#[async_trait]
-impl Site for FxTwitter {
-    fn name(&self) -> &'static str {
-        "Twitter"
-    }
-
-    fn url_id(&self, url: &str) -> Option<String> {
-        let captures = match self.matcher.captures(url) {
-            Some(captures) => captures,
-            _ => return None,
-        };
-
-        Some(format!("Twitter-{}", &captures["id"]))
-    }
-
-    async fn url_supported(&self, url: &str) -> bool {
-        self.matcher.is_match(url)
-    }
-
-    async fn get_images(
-        &self,
-        _user: Option<&User>,
-        url: &str,
-    ) -> Result<Option<Vec<PostInfo>>, Error> {
-        let captures = self.matcher.captures(url).unwrap();
-
-        let resp: FxTwitterResponse = self
-            .client
-            .get(format!(
-                "https://api.fxtwitter.com/status/{}",
-                &captures["id"]
-            ))
-            .send()
-            .await?
-            .json()
-            .await?;
-
-        if resp.code != 200 {
-            return Err(Error::user_message(format!(
-                "Got bad status code: {}",
-                resp.code
-            )));
-        }
-
-        let tweet = match resp.tweet {
-            Some(tweet) => tweet,
-            None => return Err(Error::user_message("Missing tweet")),
-        };
-
-        let media = tweet.media.unwrap_or_default();
-
-        let photos = media
-            .photos
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|photo| {
-                Some(PostInfo {
-                    file_type: get_file_ext(&photo.url)?.to_owned(),
-                    url: photo.url,
-                    source_link: Some(tweet.url.clone()),
-                    site_name: self.name().into(),
-                    image_dimensions: Some((photo.width, photo.height)),
-                    ..Default::default()
-                })
-            });
-
-        let videos = media
-            .videos
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|video| {
-                Some(PostInfo {
-                    file_type: get_file_ext(&video.url)?.to_owned(),
-                    url: video.url,
-                    source_link: Some(tweet.url.clone()),
-                    thumb: Some(video.thumbnail_url),
-                    site_name: self.name().into(),
-                    image_dimensions: Some((video.width, video.height)),
-                    ..Default::default()
-                })
-            });
-
-        Ok(Some(photos.chain(videos).collect()))
-    }
-}
-
 #[derive(Debug, Deserialize)]
 struct FxTwitterResponse {
     code: u16,
@@ -678,9 +573,71 @@ pub struct Twitter {
     consumer: egg_mode::KeyPair,
     token: egg_mode::Token,
     conn: sqlx::Pool<sqlx::Postgres>,
+    client: reqwest::Client,
+    unleash: Unleash<Features>,
+}
+
+struct TwitterData {
+    user: Box<egg_mode::user::TwitterUser>,
+    media: Vec<egg_mode::entities::MediaEntity>,
+    hashtags: Option<Vec<String>>,
 }
 
 impl Twitter {
+    async fn new(
+        consumer: egg_mode::KeyPair,
+        token: egg_mode::Token,
+        conn: sqlx::Pool<sqlx::Postgres>,
+        unleash: Unleash<Features>,
+    ) -> Self {
+        Self {
+            matcher: regex::Regex::new(
+                r"(?:https?://)?(?:mobile\.)?twitter.com/(?P<screen_name>\w+)(?:/status/(?P<id>\d+))?",
+            )
+            .unwrap(),
+            consumer,
+            token,
+            conn,
+            client: reqwest::Client::default(),
+            unleash,
+        }
+    }
+
+    pub async fn new_app_auth(
+        consumer_key: String,
+        consumer_secret: String,
+        conn: sqlx::Pool<sqlx::Postgres>,
+        unleash: Unleash<Features>,
+    ) -> Self {
+        tracing::info!("Authenticating Twitter requests with App Auth");
+
+        let consumer = egg_mode::KeyPair::new(consumer_key, consumer_secret);
+        let token = egg_mode::auth::bearer_token(&consumer).await.unwrap();
+
+        Self::new(consumer, token, conn, unleash).await
+    }
+
+    pub async fn new_access_tokens(
+        consumer_key: String,
+        consumer_secret: String,
+        access_key: String,
+        access_secret: String,
+        conn: sqlx::PgPool,
+        unleash: Unleash<Features>,
+    ) -> Self {
+        tracing::info!("Authenticating Twitter requests with access tokens");
+
+        let consumer = egg_mode::KeyPair::new(consumer_key, consumer_secret);
+        let access = egg_mode::KeyPair::new(access_key, access_secret);
+
+        let token = egg_mode::Token::Access {
+            consumer: consumer.clone(),
+            access,
+        };
+
+        Self::new(consumer, token, conn, unleash).await
+    }
+
     fn update_error(err: egg_mode::error::Error) -> Error {
         tracing::trace!("got twitter errors: {:?}", err);
 
@@ -708,63 +665,6 @@ impl Twitter {
         }
 
         Error::user_message_with_error("Twitter returned unknown data", err)
-    }
-}
-
-struct TwitterData {
-    user: Box<egg_mode::user::TwitterUser>,
-    media: Vec<egg_mode::entities::MediaEntity>,
-    hashtags: Option<Vec<String>>,
-}
-
-impl Twitter {
-    async fn new(
-        consumer: egg_mode::KeyPair,
-        token: egg_mode::Token,
-        conn: sqlx::Pool<sqlx::Postgres>,
-    ) -> Self {
-        Self {
-            matcher: regex::Regex::new(
-                r"(?:https?://)?(?:mobile\.)?twitter.com/(?P<screen_name>\w+)(?:/status/(?P<id>\d+))?",
-            )
-            .unwrap(),
-            consumer,
-            token,
-            conn,
-        }
-    }
-
-    pub async fn new_app_auth(
-        consumer_key: String,
-        consumer_secret: String,
-        conn: sqlx::Pool<sqlx::Postgres>,
-    ) -> Self {
-        tracing::info!("Authenticating Twitter requests with App Auth");
-
-        let consumer = egg_mode::KeyPair::new(consumer_key, consumer_secret);
-        let token = egg_mode::auth::bearer_token(&consumer).await.unwrap();
-
-        Self::new(consumer, token, conn).await
-    }
-
-    pub async fn new_access_tokens(
-        consumer_key: String,
-        consumer_secret: String,
-        access_key: String,
-        access_secret: String,
-        conn: sqlx::PgPool,
-    ) -> Self {
-        tracing::info!("Authenticating Twitter requests with access tokens");
-
-        let consumer = egg_mode::KeyPair::new(consumer_key, consumer_secret);
-        let access = egg_mode::KeyPair::new(access_key, access_secret);
-
-        let token = egg_mode::Token::Access {
-            consumer: consumer.clone(),
-            access,
-        };
-
-        Self::new(consumer, token, conn).await
     }
 
     /// Get the media from a captured URL. If it is a direct link to a tweet,
@@ -860,34 +760,70 @@ impl Twitter {
 
         Ok(token)
     }
-}
 
-#[async_trait]
-impl Site for Twitter {
-    fn name(&self) -> &'static str {
-        "Twitter"
-    }
+    async fn fx_twitter(&self, url: &str) -> Result<Option<Vec<PostInfo>>, Error> {
+        let captures = self.matcher.captures(url).unwrap();
 
-    fn url_id(&self, url: &str) -> Option<String> {
-        let captures = match self.matcher.captures(url) {
-            Some(captures) => captures,
-            _ => return None,
+        let resp: FxTwitterResponse = self
+            .client
+            .get(format!(
+                "https://api.fxtwitter.com/status/{}",
+                &captures["id"]
+            ))
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        if resp.code != 200 {
+            return Err(Error::user_message(format!(
+                "Got bad status code: {}",
+                resp.code
+            )));
+        }
+
+        let tweet = match resp.tweet {
+            Some(tweet) => tweet,
+            None => return Err(Error::user_message("Missing tweet")),
         };
 
-        // Get the ID of the Tweet if possible, otherwise use the screen name.
-        let id = captures
-            .name("id")
-            .map(|id| id.as_str())
-            .unwrap_or(&captures["screen_name"]);
+        let media = tweet.media.unwrap_or_default();
 
-        Some(format!("Twitter-{}", id))
+        let photos = media
+            .photos
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|photo| {
+                Some(PostInfo {
+                    file_type: get_file_ext(&photo.url)?.to_owned(),
+                    url: photo.url,
+                    source_link: Some(tweet.url.clone()),
+                    site_name: self.name().into(),
+                    image_dimensions: Some((photo.width, photo.height)),
+                    ..Default::default()
+                })
+            });
+
+        let videos = media
+            .videos
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|video| {
+                Some(PostInfo {
+                    file_type: get_file_ext(&video.url)?.to_owned(),
+                    url: video.url,
+                    source_link: Some(tweet.url.clone()),
+                    thumb: Some(video.thumbnail_url),
+                    site_name: self.name().into(),
+                    image_dimensions: Some((video.width, video.height)),
+                    ..Default::default()
+                })
+            });
+
+        Ok(Some(photos.chain(videos).collect()))
     }
 
-    async fn url_supported(&self, url: &str) -> bool {
-        self.matcher.is_match(url)
-    }
-
-    async fn get_images(
+    async fn real_twitter(
         &self,
         user: Option<&User>,
         url: &str,
@@ -939,6 +875,51 @@ impl Site for Twitter {
                 })
                 .collect(),
         ))
+    }
+}
+
+#[async_trait]
+impl Site for Twitter {
+    fn name(&self) -> &'static str {
+        "Twitter"
+    }
+
+    fn url_id(&self, url: &str) -> Option<String> {
+        let captures = match self.matcher.captures(url) {
+            Some(captures) => captures,
+            _ => return None,
+        };
+
+        // Get the ID of the Tweet if possible, otherwise use the screen name.
+        let id = captures
+            .name("id")
+            .map(|id| id.as_str())
+            .unwrap_or(&captures["screen_name"]);
+
+        Some(format!("Twitter-{}", id))
+    }
+
+    async fn url_supported(&self, url: &str) -> bool {
+        self.matcher.is_match(url)
+    }
+
+    async fn get_images(
+        &self,
+        user: Option<&User>,
+        url: &str,
+    ) -> Result<Option<Vec<PostInfo>>, Error> {
+        let context = user.map(|user| user.unleash_context());
+
+        if self
+            .unleash
+            .is_enabled(Features::TwitterApi, context.as_ref(), true)
+        {
+            tracing::debug!("twitter api is enabled");
+            self.real_twitter(user, url).await
+        } else {
+            tracing::debug!("using fxtwitter fallback");
+            self.fx_twitter(url).await
+        }
     }
 }
 

@@ -3,7 +3,7 @@ use fluent_bundle::FluentArgs;
 
 use crate::{
     execute::{telegram::Context, telegram_jobs::TwitterAccountAddedJob},
-    models, needs_field, utils, Error,
+    models, needs_field, utils, Error, Features,
 };
 
 use super::{
@@ -92,7 +92,10 @@ async fn handle_command(
     message: &tgbotapi::Message,
     user: &tgbotapi::User,
 ) -> Result<(), Error> {
-    if cx.config.twitter_disable {
+    if !cx
+        .unleash
+        .is_enabled(Features::TwitterApi, Some(&cx.unleash_context(user)), true)
+    {
         cx.send_generic_reply(message, "twitter-disabled").await?;
         return Ok(());
     }

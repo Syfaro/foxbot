@@ -24,10 +24,10 @@ use crate::{
     models,
     sites::PostInfo,
     utils::{self, SiteCallback},
-    DiscordConfig, RunConfig,
+    Args, DiscordConfig, Features, RunConfig,
 };
 
-pub async fn discord(config: RunConfig, discord_config: DiscordConfig) {
+pub async fn discord(args: Args, config: RunConfig, discord_config: DiscordConfig) {
     let fuzzysearch = std::sync::Arc::new(fuzzysearch::FuzzySearch::new(
         config.fuzzysearch_api_token.clone(),
     ));
@@ -43,7 +43,15 @@ pub async fn discord(config: RunConfig, discord_config: DiscordConfig) {
         .await
         .expect("could not create redis connection manager");
 
-    let sites = crate::sites::get_all_sites(&config, pool.clone()).await;
+    let unleash = foxlib::flags::client::<Features>(
+        "foxbot-discord",
+        &args.unleash_host,
+        args.unleash_secret,
+    )
+    .await
+    .expect("unable to register unleash");
+
+    let sites = crate::sites::get_all_sites(&config, pool.clone(), unleash.clone()).await;
 
     let sites = Arc::new(Mutex::new(sites));
 

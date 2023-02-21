@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use fluent_bundle::{bundle::FluentBundle, FluentArgs, FluentResource};
+use foxlib::flags::Unleash;
 use fuzzysearch::FuzzySearch;
 use intl_memoizer::concurrent::IntlLangMemoizer;
 use lazy_static::lazy_static;
@@ -23,7 +24,8 @@ use crate::{
         Telegram,
     },
     sites::BoxedSite,
-    utils, Args, Error, ErrorMetadata, RunConfig, TelegramConfig, L10N_LANGS, L10N_RESOURCES,
+    utils, Args, Error, ErrorMetadata, Features, RunConfig, TelegramConfig, L10N_LANGS,
+    L10N_RESOURCES,
 };
 
 use self::jobs::*;
@@ -109,7 +111,15 @@ pub async fn telegram(args: Args, config: RunConfig, telegram_config: TelegramCo
 
     crate::run_migrations(&pool).await;
 
-    let sites = crate::sites::get_all_sites(&config, pool.clone()).await;
+    let unleash = foxlib::flags::client::<Features>(
+        "foxbot-telegram",
+        &args.unleash_host,
+        args.unleash_secret,
+    )
+    .await
+    .expect("unable to register unleash");
+
+    let sites = crate::sites::get_all_sites(&config, pool.clone(), unleash.clone()).await;
 
     let faktory = FaktoryClient::connect(&config.faktory_url)
         .await
@@ -207,6 +217,7 @@ pub async fn telegram(args: Args, config: RunConfig, telegram_config: TelegramCo
         fuzzysearch: Arc::new(fuzzysearch),
         coconut: Arc::new(coconut),
         s3,
+        unleash,
         finder,
 
         bot_user,
@@ -281,6 +292,7 @@ pub struct Context {
     fuzzysearch: Arc<FuzzySearch>,
     coconut: Arc<services::coconut::Coconut>,
     s3: rusoto_s3::S3Client,
+    unleash: Unleash<Features>,
     finder: linkify::LinkFinder,
 
     bot_user: tgbotapi::User,
@@ -522,6 +534,19 @@ impl Context {
                     tracing::error!("unable to send error message: {}", err);
                 }
             }
+        }
+    }
+
+    fn unleash_context(&self, user: &tgbotapi::User) -> foxlib::flags::Context {
+        foxlib::flags::Context {
+            user_id: Some(user.id.to_string()),
+            properties: [(
+                "appVersion".to_string(),
+                env!("CARGO_PKG_VERSION").to_string(),
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
         }
     }
 }

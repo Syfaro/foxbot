@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use actix_web::{web, App, HttpResponse, HttpServer};
 use askama::Template;
 use egg_mode::KeyPair;
+use foxlib::flags::Unleash;
 use serde::Deserialize;
 use sqlx::PgPool;
 
@@ -12,7 +13,7 @@ use crate::{
     },
     models,
     services::faktory::FaktoryClient,
-    utils, Error, WebConfig,
+    utils, Args, Error, Features, WebConfig,
 };
 
 mod feedback;
@@ -36,7 +37,7 @@ struct Config {
     cdn_prefix: String,
 }
 
-pub async fn web(config: WebConfig) {
+pub async fn web(args: Args, config: WebConfig) {
     tracing::info!("starting server to listen for web requests");
 
     let faktory = FaktoryClient::connect(config.faktory_url)
@@ -86,6 +87,11 @@ pub async fn web(config: WebConfig) {
         &hex::decode(config.session_secret).expect("cookie secret was not hex"),
     );
 
+    let unleash =
+        foxlib::flags::client::<Features>("foxbot-web", &args.unleash_host, args.unleash_secret)
+            .await
+            .expect("unable to register unleash");
+
     HttpServer::new(move || {
         let config = Config {
             public_endpoint: config.public_endpoint.clone(),
@@ -126,6 +132,7 @@ pub async fn web(config: WebConfig) {
             .app_data(web::Data::new(faktory.clone()))
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(redis.clone()))
+            .app_data(web::Data::new(unleash.clone()))
             .app_data(web::Data::new(config))
     })
     .bind(config.http_host)
@@ -217,10 +224,26 @@ async fn twitter_callback(
     pool: web::Data<PgPool>,
     web::Query(info): web::Query<TwitterCallbackRequest>,
     faktory: web::Data<FaktoryClient>,
+    unleash: web::Data<Unleash<Features>>,
 ) -> Result<HttpResponse, actix_web::Error> {
     let tokens = (info.oauth_token, info.oauth_verifier);
 
     let (successful, username) = if let (Some(oauth_token), Some(oauth_verifier)) = tokens {
+        let context = models::TwitterAuth::get_request(&**pool, &oauth_token)
+            .await
+            .map_err(actix_web::error::ErrorInternalServerError)?
+            .and_then(|auth| auth.telegram_id)
+            .map(|telegram_id| foxlib::flags::Context {
+                user_id: Some(telegram_id.to_string()),
+                ..Default::default()
+            });
+
+        if !unleash.is_enabled(Features::TwitterApi, context.as_ref(), true) {
+            return Err(actix_web::error::ErrorForbidden(
+                "Twitter login is not currently available.",
+            ));
+        }
+
         if let Some((_account_id, user, username)) =
             verify_twitter_account(&config, &pool, oauth_token, oauth_verifier)
                 .await
