@@ -138,6 +138,9 @@ pub struct RunConfig {
     #[clap(long, env)]
     pub public_endpoint: String,
 
+    /// Endpoint for FuzzySearch.
+    #[clap(long, env)]
+    pub fuzzysearch_endpoint: Option<String>,
     /// API token for FuzzySearch.
     #[clap(long, env)]
     pub fuzzysearch_api_token: String,

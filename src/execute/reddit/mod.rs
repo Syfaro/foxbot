@@ -71,7 +71,11 @@ pub async fn reddit(config: RunConfig, reddit_config: RedditConfig) {
         }
     });
 
-    let fuzzysearch = fuzzysearch::FuzzySearch::new(config.fuzzysearch_api_token);
+    let fuzzysearch = fuzzysearch::FuzzySearch::new_with_opts(fuzzysearch::FuzzySearchOpts {
+        endpoint: config.fuzzysearch_endpoint,
+        api_key: config.fuzzysearch_api_token,
+        client: None,
+    });
     let redlock = redlock::RedLock::new(vec![config.redis_url]);
 
     let pool = sqlx::PgPool::connect(&config.database_url)

@@ -137,7 +137,11 @@ pub async fn telegram(args: Args, config: RunConfig, telegram_config: TelegramCo
         .await
         .expect("could not get bot user");
 
-    let fuzzysearch = fuzzysearch::FuzzySearch::new(config.fuzzysearch_api_token);
+    let fuzzysearch = fuzzysearch::FuzzySearch::new_with_opts(fuzzysearch::FuzzySearchOpts {
+        endpoint: config.fuzzysearch_endpoint,
+        api_key: config.fuzzysearch_api_token,
+        client: None,
+    });
 
     let coconut = crate::services::coconut::Coconut::new(
         config.coconut_api_token,

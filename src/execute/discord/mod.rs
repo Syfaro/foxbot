@@ -28,8 +28,12 @@ use crate::{
 };
 
 pub async fn discord(args: Args, config: RunConfig, discord_config: DiscordConfig) {
-    let fuzzysearch = std::sync::Arc::new(fuzzysearch::FuzzySearch::new(
-        config.fuzzysearch_api_token.clone(),
+    let fuzzysearch = std::sync::Arc::new(fuzzysearch::FuzzySearch::new_with_opts(
+        fuzzysearch::FuzzySearchOpts {
+            endpoint: config.fuzzysearch_endpoint.clone(),
+            api_key: config.fuzzysearch_api_token.clone(),
+            client: None,
+        },
     ));
 
     let pool = sqlx::PgPool::connect(&config.database_url)
