@@ -390,6 +390,8 @@ impl ErrorMetadata for Error {
 pub enum Features {
     #[serde(rename = "foxbot_twitter_api")]
     TwitterApi,
+    #[serde(rename = "foxbot_manage_web")]
+    ManageWeb,
 }
 
 #[tokio::main]

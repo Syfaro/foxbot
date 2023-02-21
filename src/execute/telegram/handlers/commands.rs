@@ -12,7 +12,7 @@ use crate::{
     models, needs_field,
     sites::PostInfo,
     utils::{self, get_message, CheckFileSize},
-    Error,
+    Error, Features,
 };
 
 use super::{
@@ -732,6 +732,15 @@ impl CommandHandler {
             Some(from) => from,
             None => return Ok(()),
         };
+
+        if !cx
+            .unleash
+            .is_enabled(Features::ManageWeb, Some(&cx.unleash_context(from)), false)
+        {
+            cx.send_generic_reply(message, "manage-disabled").await?;
+            return Ok(());
+        }
+
         let get_chat_member = GetChatMember {
             chat_id: message.chat_id(),
             user_id: from.id,
@@ -741,10 +750,22 @@ impl CommandHandler {
         models::ChatAdmin::update_chat(&cx.pool, &message.chat, from, &chat_member.status, None)
             .await?;
 
+        let bundle = cx
+            .get_fluent_bundle(
+                message
+                    .from
+                    .as_ref()
+                    .and_then(|user| user.language_code.as_deref()),
+            )
+            .await;
+
+        let button_text = utils::get_message(&bundle, "manage-button", None);
+        let message_text = utils::get_message(&bundle, "manage-message", None);
+
         let markup =
             tgbotapi::requests::ReplyMarkup::InlineKeyboardMarkup(tgbotapi::InlineKeyboardMarkup {
                 inline_keyboard: vec![vec![tgbotapi::InlineKeyboardButton {
-                    text: "Manage".to_string(),
+                    text: button_text,
                     login_url: Some(tgbotapi::LoginUrl {
                         url: format!("{}/manage/login", cx.config.public_endpoint),
                         ..Default::default()
@@ -755,7 +776,7 @@ impl CommandHandler {
 
         let message = tgbotapi::requests::SendMessage {
             chat_id: message.chat_id(),
-            text: "Visit the website to manage your settings and groups.".to_string(),
+            text: message_text,
             reply_to_message_id: Some(message.message_id),
             reply_markup: Some(markup),
             ..Default::default()

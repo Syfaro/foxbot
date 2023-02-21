@@ -168,3 +168,7 @@ feedback-message =
 
     You can view existing and share new feedback by clicking the button below.
 feedback-button = View and Share Feedback
+
+manage-button = Manage
+manage-message = Visit the website to manage your settings and groups.
+manage-disabled = Web management is currently disabled, please try again later.

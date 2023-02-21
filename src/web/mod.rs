@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use actix_web::{web, App, HttpResponse, HttpServer};
+use actix_web::{dev::Service, web, App, HttpResponse, HttpServer};
 use askama::Template;
 use egg_mode::KeyPair;
 use foxlib::flags::Unleash;
@@ -128,7 +128,29 @@ pub async fn web(args: Args, config: WebConfig) {
             .route("/coconut/{secret}", web::post().to(coconut_webhook))
             .route("/twitter/callback", web::get().to(twitter_callback))
             .service(feedback::scope())
-            .service(manage::scope())
+            .service(manage::scope().wrap_fn(|req, srv| {
+                let unleash = req.app_data::<web::Data<Unleash<Features>>>().cloned();
+                let fut = srv.call(req);
+
+                async move {
+                    let unleash = match unleash {
+                        Some(unleash) => unleash,
+                        None => {
+                            return Err(actix_web::error::ErrorInternalServerError(
+                                "missing feature flag source",
+                            ))
+                        }
+                    };
+
+                    if !unleash.is_enabled(Features::ManageWeb, None, false) {
+                        return Err(actix_web::error::ErrorUnauthorized(
+                            "Web management is not enabled.",
+                        ));
+                    }
+
+                    fut.await
+                }
+            }))
             .app_data(web::Data::new(faktory.clone()))
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(redis.clone()))
