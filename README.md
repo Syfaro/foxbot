@@ -8,7 +8,7 @@ images posted in groups, or editing messages in channels to include the source.
 
 It currently supports a number of sites:
 
-* FurAffinity (including source finding via [FuzzySearch]
+* FurAffinity (including source finding via [FuzzySearch])
 * Mastodon
 * Weasyl
 * Twitter
