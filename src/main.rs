@@ -27,9 +27,6 @@ pub struct Args {
     #[clap(long, env)]
     pub unleash_secret: String,
 
-    #[clap(long, env)]
-    pub otlp_agent: String,
-
     #[clap(subcommand)]
     pub command: Command,
 }
