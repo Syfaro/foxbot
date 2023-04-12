@@ -13,7 +13,7 @@ use crate::{
     utils, Error,
 };
 
-#[tracing::instrument(skip(cx, job), fields(job_id = job.id()))]
+#[tracing::instrument(skip(cx, job, message), fields(job_id = job.id()))]
 pub async fn process_channel_update(
     cx: Arc<Context>,
     job: faktory::Job,
@@ -103,6 +103,8 @@ pub async fn process_channel_update(
             message_id: message.message_id,
             media_group_id: message.media_group_id,
             firsts,
+            previous_text: message.caption,
+            entities: message.caption_entities,
         },
         has_linked_chat,
     };
@@ -112,7 +114,7 @@ pub async fn process_channel_update(
     Ok(())
 }
 
-#[tracing::instrument(skip(cx, job), fields(job_id = job.id()))]
+#[tracing::instrument(skip(cx, job, message_edit), fields(job_id = job.id()))]
 pub async fn process_channel_edit(
     cx: Arc<Context>,
     job: faktory::Job,
@@ -158,17 +160,24 @@ pub async fn process_channel_edit(
     // If this photo was part of a media group, we should set a caption on
     // the image because we can't make an inline keyboard on it.
     let resp = if has_linked_chat || always_use_captions || message_edit.media_group_id.is_some() {
-        let caption = message_edit
+        let sources = message_edit
             .firsts
             .iter()
             .map(|(_site, url)| url.to_owned())
             .collect::<Vec<_>>()
             .join("\n");
 
+        let caption = if let Some(original_caption) = &message_edit.previous_text {
+            format!("{original_caption}\n\n{sources}")
+        } else {
+            sources
+        };
+
         let edit_caption_markup = tgbotapi::requests::EditMessageCaption {
             chat_id: chat_id.into(),
             message_id: Some(message_edit.message_id),
             caption: Some(caption),
+            caption_entities: message_edit.entities.clone(),
             ..Default::default()
         };
 

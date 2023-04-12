@@ -348,6 +348,8 @@ pub struct MessageEdit {
     pub message_id: i32,
     pub media_group_id: Option<String>,
     pub firsts: Vec<(crate::models::Sites, String)>,
+    pub previous_text: Option<String>,
+    pub entities: Option<Vec<tgbotapi::MessageEntity>>,
 }
 
 #[derive(Debug)]
