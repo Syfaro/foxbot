@@ -702,7 +702,7 @@ async fn process_result(
     let thumb_url = result.thumb.clone().unwrap_or_else(|| result.url.clone());
 
     match result.file_type.as_ref() {
-        "png" | "jpeg" | "jpg" => Ok(Some(
+        "png" | "jpeg" | "jpg" | "webp" => Ok(Some(
             build_image_result(cx, result, thumb_url, &keyboard, include_info, include_tags)
                 .await?,
         )),
@@ -853,7 +853,7 @@ async fn build_image_result(
         let result = {
             let result = utils::size_post(&result, &data).await?;
 
-            if result.image_size.unwrap_or_default() > MAX_IMAGE_SIZE {
+            if result.file_type == "webp" || result.image_size.unwrap_or_default() > MAX_IMAGE_SIZE {
                 utils::cache_post(
                     &cx.pool,
                     &cx.s3,
