@@ -764,12 +764,16 @@ impl Twitter {
     async fn fx_twitter(&self, url: &str) -> Result<Option<Vec<PostInfo>>, Error> {
         let captures = self.matcher.captures(url).unwrap();
 
+        let id = match captures.name("id") {
+            Some(m) => m.as_str(),
+            None => {
+                return Ok(None);
+            }
+        };
+
         let resp: FxTwitterResponse = self
             .client
-            .get(format!(
-                "https://api.fxtwitter.com/status/{}",
-                &captures["id"]
-            ))
+            .get(format!("https://api.fxtwitter.com/status/{id}"))
             .send()
             .await?
             .json()
