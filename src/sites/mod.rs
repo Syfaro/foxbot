@@ -127,8 +127,9 @@ pub async fn get_all_sites(
             config.inkbunny_username.clone(),
             config.inkbunny_password.clone(),
         )),
-        Box::new(Mastodon::default()),
-        Box::new(DeviantArt::default()),
+        Box::<Mastodon>::default(),
+        Box::<DeviantArt>::default(),
+        Box::<Bluesky>::default(),
         Box::new(Direct::new(config.fuzzysearch_api_token.clone())),
     ]
 }
@@ -1216,8 +1217,8 @@ struct MastodonMediaAttachments {
     preview_url: String,
 }
 
-impl Mastodon {
-    pub fn default() -> Self {
+impl Default for Mastodon {
+    fn default() -> Self {
         Self {
             instance_cache: RwLock::new(HashMap::new()),
             matcher: regex::Regex::new(
@@ -1731,15 +1732,17 @@ struct DeviantArtOEmbed {
     author_url: String,
 }
 
-impl DeviantArt {
-    pub fn default() -> Self {
+impl Default for DeviantArt {
+    fn default() -> Self {
         Self {
             client: reqwest::Client::builder().user_agent(USER_AGENT).build().unwrap(),
             matcher: regex::Regex::new(r#"(?:(?:deviantart\.com/(?:.+/)?art/.+-|fav\.me/)(?P<id>\d+)|sta\.sh/(?P<code>\w+))"#)
                 .unwrap(),
         }
     }
+}
 
+impl DeviantArt {
     /// Attempt to get an ID from our matcher's captures.
     fn get_id(&self, captures: &regex::Captures) -> Option<String> {
         if let Some(id) = captures.name("id") {
@@ -1812,5 +1815,136 @@ impl Site for DeviantArt {
             }),
             ..Default::default()
         }]))
+    }
+}
+
+pub struct Bluesky {
+    client: reqwest::Client,
+    matcher: regex::Regex,
+}
+
+// impl Bluesky {
+//     async fn resolve_did(&self, did: &str) -> Result<Option<String>, Error> {
+//         let mut resolved: DidResponse = self
+//             .client
+//             .get(format!("https://plc.directory/{did}"))
+//             .send()
+//             .await?
+//             .json()
+//             .await?;
+
+//         Ok(resolved.also_known_as.pop())
+//     }
+// }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DidResponse {
+    #[serde(rename = "alsoKnownAs")]
+    pub also_known_as: Vec<String>,
+}
+
+impl Default for Bluesky {
+    fn default() -> Self {
+        Self {
+            client: reqwest::Client::builder()
+                .user_agent(USER_AGENT)
+                .build()
+                .unwrap(),
+            matcher: regex::Regex::new(
+                r#"(?:https?://)?bsky.app/profile/(?P<repo>\S+)/post/(?P<rkey>\S+)"#,
+            )
+            .unwrap(),
+        }
+    }
+}
+
+#[async_trait]
+impl Site for Bluesky {
+    fn name(&self) -> &'static str {
+        "Bluesky"
+    }
+
+    async fn url_supported(&self, url: &str) -> bool {
+        self.matcher.is_match(url)
+    }
+
+    fn url_id(&self, url: &str) -> Option<String> {
+        self.matcher
+            .captures(url)
+            .map(|captures| format!("Bluesky-{}-{}", &captures["repo"], &captures["rkey"]))
+    }
+
+    #[tracing::instrument(skip(self, _user))]
+    async fn get_images(
+        &self,
+        _user: Option<&User>,
+        url: &str,
+    ) -> Result<Option<Vec<PostInfo>>, Error> {
+        let Some(captures) = self.matcher.captures(url) else {
+            return Ok(None);
+        };
+
+        let record_url = url::Url::parse_with_params(
+            "https://bsky.social/xrpc/com.atproto.repo.getRecord",
+            &[
+                ("repo", &captures["repo"]),
+                ("collection", "app.bsky.feed.post"),
+                ("rkey", &captures["rkey"]),
+            ],
+        )
+        .map_err(|_err| Error::missing("URL for getRecord"))?;
+
+        let record: serde_json::Value = self
+            .client
+            .get(record_url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
+        if record["value"]["$type"].as_str() != Some("app.bsky.feed.post") {
+            tracing::debug!("url was not post");
+            return Ok(None);
+        }
+
+        if record["value"]["embed"]["$type"].as_str() != Some("app.bsky.embed.images") {
+            tracing::debug!("url did not have image embed");
+            return Ok(None);
+        }
+
+        let Some(did) = record["uri"].as_str().unwrap_or_default().split('/').nth(2) else {
+            tracing::warn!("could not get did from uri: {:?}", record["uri"].as_str());
+            return Ok(None);
+        };
+
+        let posts = record["value"]["embed"]["images"]
+            .as_array()
+            .map(|images| {
+                images
+                    .iter()
+                    .filter_map(|image| {
+                        let blob_url = format!(
+                            "https://bsky.social/xrpc/com.atproto.sync.getBlob?did={did}&cid={}",
+                            image["image"]["ref"]["$link"].as_str()?
+                        );
+
+                        tracing::trace!(blob_url, "got blob url");
+
+                        Some(PostInfo {
+                            file_type: "jpg".to_string(),
+                            url: blob_url,
+                            thumb: None,
+                            source_link: Some(url.to_string()),
+                            site_name: self.name().into(),
+                            image_dimensions: None,
+                            ..Default::default()
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(Some(posts))
     }
 }
