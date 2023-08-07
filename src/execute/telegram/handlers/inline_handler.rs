@@ -853,7 +853,8 @@ async fn build_image_result(
         let result = {
             let result = utils::size_post(&result, &data).await?;
 
-            if result.file_type == "webp" || result.image_size.unwrap_or_default() > MAX_IMAGE_SIZE {
+            if result.file_type == "webp" || result.image_size.unwrap_or_default() > MAX_IMAGE_SIZE
+            {
                 utils::cache_post(
                     &cx.pool,
                     &cx.s3,

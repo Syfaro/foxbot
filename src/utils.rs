@@ -736,7 +736,7 @@ pub async fn lookup_single_hash(
         .map(|(matches, _attempts)| matches)
         .map_err(|(err, _attempts)| err)?;
 
-    for mut m in &mut matches {
+    for m in &mut matches {
         m.distance =
             hamming::distance_fast(&m.hash.unwrap().to_be_bytes(), &hash.to_be_bytes()).ok();
     }
