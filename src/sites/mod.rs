@@ -593,7 +593,7 @@ impl Twitter {
     ) -> Self {
         Self {
             matcher: regex::Regex::new(
-                r"(?:https?://)?(?:mobile\.)?twitter.com/(?P<screen_name>\w+)(?:/status/(?P<id>\d+))?",
+                r"(?:https?://)?(?:mobile\.)?(?:twitter|x).com/(?P<screen_name>\w+)(?:/status/(?P<id>\d+))?",
             )
             .unwrap(),
             consumer,
