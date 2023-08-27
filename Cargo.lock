@@ -1307,7 +1307,7 @@ dependencies = [
 
 [[package]]
 name = "foxbot"
-version = "0.10.9"
+version = "0.10.10"
 dependencies = [
  "actix-session",
  "actix-web",
