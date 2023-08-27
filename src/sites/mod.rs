@@ -130,6 +130,7 @@ pub async fn get_all_sites(
         Box::<Mastodon>::default(),
         Box::<DeviantArt>::default(),
         Box::<Bluesky>::default(),
+        Box::new(Tumblr::new(config.tumblr_api_key.clone())),
         Box::new(Direct::new(config.fuzzysearch_api_token.clone())),
     ]
 }
@@ -1823,26 +1824,6 @@ pub struct Bluesky {
     matcher: regex::Regex,
 }
 
-// impl Bluesky {
-//     async fn resolve_did(&self, did: &str) -> Result<Option<String>, Error> {
-//         let mut resolved: DidResponse = self
-//             .client
-//             .get(format!("https://plc.directory/{did}"))
-//             .send()
-//             .await?
-//             .json()
-//             .await?;
-
-//         Ok(resolved.also_known_as.pop())
-//     }
-// }
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DidResponse {
-    #[serde(rename = "alsoKnownAs")]
-    pub also_known_as: Vec<String>,
-}
-
 impl Default for Bluesky {
     fn default() -> Self {
         Self {
@@ -1944,6 +1925,159 @@ impl Site for Bluesky {
                     .collect()
             })
             .unwrap_or_default();
+
+        Ok(Some(posts))
+    }
+}
+
+pub struct Tumblr {
+    client: reqwest::Client,
+    api_key: String,
+    matcher: regex::Regex,
+}
+
+impl Tumblr {
+    pub fn new(api_key: String) -> Self {
+        let matcher = regex::Regex::new(r"(?i)(?:https?://)?(?:(?P<blog>[a-z0-9-]{1,32}\.tumblr\.com)/post|www\.tumblr\.com/(?P<username>[a-z0-9-]{1,32}))/(?P<id>\d+)").unwrap();
+
+        Self {
+            client: Default::default(),
+            api_key,
+            matcher,
+        }
+    }
+
+    fn blog_id<'a>(captures: &'a regex::Captures) -> Cow<'a, str> {
+        if let Some(blog) = captures.name("blog") {
+            blog.as_str().into()
+        } else if let Some(username) = captures.name("username") {
+            format!("{}.tumblr.com", username.as_str()).into()
+        } else {
+            unreachable!("matcher should always have blog or username")
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct TumblrWrapper<R> {
+    response: R,
+}
+
+#[derive(Debug, Deserialize)]
+struct TumblrPostResponse {
+    posts: Vec<TumblrPost>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TumblrPost {
+    blog_name: String,
+    post_url: String,
+    tags: Vec<String>,
+    content: Vec<TumblrContent>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum TumblrContent {
+    Image { media: Vec<TumblrMedia> },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Deserialize)]
+struct TumblrMedia {
+    url: String,
+    #[serde(rename = "type")]
+    mime_type: String,
+    width: u32,
+    height: u32,
+}
+
+#[async_trait]
+impl Site for Tumblr {
+    fn name(&self) -> &'static str {
+        "Tumblr"
+    }
+
+    async fn url_supported(&self, url: &str) -> bool {
+        self.matcher.is_match(url)
+    }
+
+    fn url_id(&self, url: &str) -> Option<String> {
+        self.matcher
+            .captures(url)
+            .map(|captures| format!("Tumblr-{}-{}", Self::blog_id(&captures), &captures["id"]))
+    }
+
+    #[tracing::instrument(skip(self, _user))]
+    async fn get_images(
+        &self,
+        _user: Option<&User>,
+        url: &str,
+    ) -> Result<Option<Vec<PostInfo>>, Error> {
+        let Some(captures) = self.matcher.captures(url) else {
+            return Ok(None);
+        };
+
+        let blog_id = Self::blog_id(&captures);
+        let post_id = captures
+            .name("id")
+            .expect("all matched urls should have id")
+            .as_str();
+
+        let url = url::Url::parse_with_params(
+            &format!("https://api.tumblr.com/v2/blog/{blog_id}/posts"),
+            &[
+                ("api_key", self.api_key.as_str()),
+                ("id", post_id),
+                ("npf", "true"),
+            ],
+        )
+        .map_err(|_err| Error::missing("url generation for tumblr"))?;
+
+        let post: TumblrWrapper<TumblrPostResponse> = self
+            .client
+            .get(url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
+        let posts: Vec<PostInfo> = post
+            .response
+            .posts
+            .iter()
+            .flat_map(|post| {
+                post.content.iter().flat_map(|content| match content {
+                    TumblrContent::Image { media } => {
+                        let full_media = media
+                            .iter()
+                            .max_by(|x, y| (x.width * x.height).cmp(&(y.width * y.height)))?;
+
+                        let (_, ext) = full_media.mime_type.split_once('/')?;
+
+                        Some(PostInfo {
+                            file_type: ext.to_string(),
+                            url: full_media.url.clone(),
+                            personal: false,
+                            thumb: Some(media.last()?.url.clone()),
+                            source_link: Some(post.post_url.clone()),
+                            extra_caption: None,
+                            title: None,
+                            site_name: self.name().into(),
+                            image_dimensions: Some((full_media.height, full_media.width)),
+                            image_size: None,
+                            artist_username: Some(post.blog_name.clone()),
+                            artist_url: Some(format!("https://{}.tumblr.com", post.blog_name)),
+                            submission_title: None,
+                            tags: Some(post.tags.clone()),
+                        })
+                    }
+                    _ => return None,
+                })
+            })
+            .collect();
 
         Ok(Some(posts))
     }

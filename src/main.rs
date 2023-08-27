@@ -223,6 +223,10 @@ pub struct RunConfig {
     #[clap(long, env)]
     pub e621_api_token: String,
 
+    /// Tumblr API key.
+    #[clap(long, env)]
+    pub tumblr_api_key: String,
+
     /// The type of service to run.
     #[clap(subcommand)]
     service: RunService,
