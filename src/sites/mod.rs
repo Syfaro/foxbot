@@ -1956,6 +1956,57 @@ impl Tumblr {
             unreachable!("matcher should always have blog or username")
         }
     }
+
+    fn process_content(
+        &self,
+        content: &TumblrContent,
+        post_url: String,
+        artist_name: String,
+        artist_url: String,
+        summary: Option<String>,
+        tags: Vec<String>,
+    ) -> Option<PostInfo> {
+        match content {
+            TumblrContent::Image { media } => {
+                let full_media = media
+                    .iter()
+                    .max_by(|x, y| (x.width * x.height).cmp(&(y.width * y.height)))?;
+
+                let (_, ext) = full_media.mime_type.split_once('/')?;
+
+                Some(PostInfo {
+                    file_type: ext.to_string(),
+                    url: full_media.url.clone(),
+                    thumb: Some(media.last()?.url.clone()),
+                    source_link: Some(post_url),
+                    site_name: self.name().into(),
+                    image_dimensions: Some((full_media.height, full_media.width)),
+                    artist_username: Some(artist_name),
+                    artist_url: Some(artist_url),
+                    tags: Some(tags),
+                    ..Default::default()
+                })
+            }
+            TumblrContent::Video { media, poster } => {
+                let (_, ext) = media.mime_type.split_once('/')?;
+
+                Some(PostInfo {
+                    file_type: ext.to_string(),
+                    url: media.url.clone(),
+                    thumb: Some(poster.last()?.url.clone()),
+                    source_link: Some(post_url),
+                    title: summary,
+                    site_name: self.name().into(),
+                    image_dimensions: Some((media.height, media.width)),
+                    artist_username: Some(artist_name),
+                    artist_url: Some(artist_url),
+                    tags: Some(tags),
+                    ..Default::default()
+                })
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1970,16 +2021,24 @@ struct TumblrPostResponse {
 
 #[derive(Debug, Deserialize)]
 struct TumblrPost {
-    blog_name: String,
+    blog: TumblrBlog,
     post_url: String,
     tags: Vec<String>,
+    summary: Option<String>,
     content: Vec<TumblrContent>,
+    trail: Vec<TumblrTrailEntry>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum TumblrContent {
-    Image { media: Vec<TumblrMedia> },
+    Image {
+        media: Vec<TumblrMedia>,
+    },
+    Video {
+        media: TumblrMedia,
+        poster: Vec<TumblrMedia>,
+    },
     #[serde(other)]
     Other,
 }
@@ -1991,6 +2050,18 @@ struct TumblrMedia {
     mime_type: String,
     width: u32,
     height: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct TumblrTrailEntry {
+    content: Vec<TumblrContent>,
+    blog: TumblrBlog,
+}
+
+#[derive(Debug, Deserialize)]
+struct TumblrBlog {
+    name: String,
+    url: String,
 }
 
 #[async_trait]
@@ -2049,33 +2120,30 @@ impl Site for Tumblr {
             .posts
             .iter()
             .flat_map(|post| {
-                post.content.iter().flat_map(|content| match content {
-                    TumblrContent::Image { media } => {
-                        let full_media = media
-                            .iter()
-                            .max_by(|x, y| (x.width * x.height).cmp(&(y.width * y.height)))?;
-
-                        let (_, ext) = full_media.mime_type.split_once('/')?;
-
-                        Some(PostInfo {
-                            file_type: ext.to_string(),
-                            url: full_media.url.clone(),
-                            personal: false,
-                            thumb: Some(media.last()?.url.clone()),
-                            source_link: Some(post.post_url.clone()),
-                            extra_caption: None,
-                            title: None,
-                            site_name: self.name().into(),
-                            image_dimensions: Some((full_media.height, full_media.width)),
-                            image_size: None,
-                            artist_username: Some(post.blog_name.clone()),
-                            artist_url: Some(format!("https://{}.tumblr.com", post.blog_name)),
-                            submission_title: None,
-                            tags: Some(post.tags.clone()),
+                post.content
+                    .iter()
+                    .flat_map(|content| {
+                        self.process_content(
+                            content,
+                            post.post_url.clone(),
+                            post.blog.name.clone(),
+                            post.blog.url.clone(),
+                            post.summary.clone(),
+                            post.tags.clone(),
+                        )
+                    })
+                    .chain(post.trail.iter().flat_map(|trail| {
+                        trail.content.iter().flat_map(|content| {
+                            self.process_content(
+                                content,
+                                post.post_url.clone(),
+                                trail.blog.name.clone(),
+                                trail.blog.url.clone(),
+                                post.summary.clone(),
+                                post.tags.clone(),
+                            )
                         })
-                    }
-                    _ => return None,
-                })
+                    }))
             })
             .collect();
 
