@@ -600,7 +600,7 @@ impl Twitter {
             consumer,
             token,
             conn,
-            client: reqwest::Client::default(),
+            client: reqwest::Client::builder().user_agent(USER_AGENT).build().unwrap(),
             unleash,
         }
     }
