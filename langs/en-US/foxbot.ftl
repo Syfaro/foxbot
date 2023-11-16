@@ -7,7 +7,7 @@
 welcome =
     Hi, I'm { -botName }.
     
-    If used as an inline bot, I'll mirror content from many furry sites. When I post the image I'll include a direct link and a source link, if available. You can add your Twitter account with /twitter to get content from locked accounts you follow.
+    If used as an inline bot, I'll mirror content from many furry sites. When I post the image I'll include a direct link and a source link, if available.
     
     When you send me an image, I'll try to find the source on FurAffinity, e621, Weasyl, or Twitter.
     
