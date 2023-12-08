@@ -56,6 +56,7 @@ roux = "1"
 rusoto_core = "0.48"
 rusoto_credential = "0.48"
 rusoto_s3 = "0.48"
+scraper = "0.18.1"
 sentry = "0.29"
 sentry-tracing = "0.29"
 serde = {version = "1", features = ["derive"]}

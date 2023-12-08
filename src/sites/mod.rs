@@ -132,6 +132,7 @@ pub async fn get_all_sites(
         Box::<Bluesky>::default(),
         Box::new(Tumblr::new(config.tumblr_api_key.clone())),
         Box::new(Direct::new(config.fuzzysearch_api_token.clone())),
+        Box::<OpenGraph>::default(),
     ]
 }
 
@@ -2148,5 +2149,141 @@ impl Site for Tumblr {
             .collect();
 
         Ok(Some(posts))
+    }
+}
+
+struct OpenGraph {
+    client: reqwest::Client,
+    meta_image_selector: scraper::Selector,
+    meta_property_selector: scraper::Selector,
+}
+
+impl OpenGraph {
+    fn extract_post(&self, page_url: &str, meta_tags: HashMap<&str, &str>) -> Option<PostInfo> {
+        let image_url = meta_tags
+            .get("og:image")
+            .or(meta_tags.get("og:image:url"))?;
+        let file_type = get_file_ext(image_url)?.to_string();
+
+        let source_link = meta_tags
+            .get("og:url")
+            .cloned()
+            .unwrap_or(page_url)
+            .to_string();
+
+        let site_name = meta_tags
+            .get("og:site_name")
+            .cloned()
+            .map(str::to_string)
+            .map(Cow::from)
+            .unwrap_or_else(|| self.name().into());
+
+        let image_dimensions = match (
+            meta_tags.get("og:image:width").and_then(|w| w.parse().ok()),
+            meta_tags
+                .get("og:image:height")
+                .and_then(|h| h.parse().ok()),
+        ) {
+            (Some(width), Some(height)) => Some((width, height)),
+            _ => None,
+        };
+
+        Some(PostInfo {
+            file_type,
+            url: image_url.to_string(),
+            source_link: Some(source_link),
+            site_name,
+            image_dimensions,
+            ..Default::default()
+        })
+    }
+}
+
+impl Default for OpenGraph {
+    fn default() -> Self {
+        Self {
+            client: Default::default(),
+            meta_image_selector: scraper::Selector::parse("meta[property='og:image']").unwrap(),
+            meta_property_selector: scraper::Selector::parse("meta[property]").unwrap(),
+        }
+    }
+}
+
+#[async_trait]
+impl Site for OpenGraph {
+    fn name(&self) -> &'static str {
+        "Webpage"
+    }
+
+    fn url_id(&self, url: &str) -> Option<String> {
+        Some(url.to_owned())
+    }
+
+    async fn url_supported(&self, url: &str) -> bool {
+        tracing::trace!("checking if url is supported");
+
+        let mut data = match self.client.get(url).send().await {
+            Ok(data) => data,
+            Err(_err) => return false,
+        };
+
+        let mut page = String::new();
+
+        while let Ok(Some(chunk)) = data.chunk().await {
+            if page.len() + chunk.len() > 1_000_000 {
+                tracing::warn!("buf wanted to be larger than max download size");
+                return false;
+            }
+
+            let Ok(text) = String::from_utf8(chunk.to_vec()) else {
+                tracing::warn!("page returned invalid text");
+                return false;
+            };
+
+            page.push_str(&text);
+        }
+
+        let document = scraper::Html::parse_document(&page);
+        document.select(&self.meta_image_selector).next().is_some()
+    }
+
+    async fn get_images(
+        &self,
+        _user: Option<&User>,
+        url: &str,
+    ) -> Result<Option<Vec<PostInfo>>, Error> {
+        let mut data = match self.client.get(url).send().await {
+            Ok(data) => data,
+            Err(_) => return Ok(None),
+        };
+
+        let mut page = String::new();
+
+        while let Ok(Some(chunk)) = data.chunk().await {
+            if page.len() + chunk.len() > 1_000_000 {
+                tracing::warn!("buf wanted to be larger than max download size");
+                return Ok(None);
+            }
+
+            let Ok(text) = String::from_utf8(chunk.to_vec()) else {
+                tracing::warn!("page returned invalid text");
+                return Ok(None);
+            };
+
+            page.push_str(&text);
+        }
+
+        let document = scraper::Html::parse_document(&page);
+
+        let meta_tags: HashMap<_, _> = document
+            .select(&self.meta_property_selector)
+            .into_iter()
+            .filter_map(|elem| match (elem.attr("property"), elem.attr("content")) {
+                (Some(property), Some(content)) => Some((property, content)),
+                _ => None,
+            })
+            .collect();
+
+        Ok(self.extract_post(url, meta_tags).map(|post| vec![post]))
     }
 }
