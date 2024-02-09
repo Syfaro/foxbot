@@ -127,7 +127,7 @@ impl FaktoryClient {
         use tracing_opentelemetry::OpenTelemetrySpanExt;
 
         let mut headers = HashMap::with_capacity(2);
-        let propagator = opentelemetry::sdk::propagation::TraceContextPropagator::new();
+        let propagator = opentelemetry_sdk::propagation::TraceContextPropagator::new();
 
         let cx = tracing::Span::current().context();
         propagator.inject_context(&cx, &mut headers);
@@ -184,7 +184,7 @@ where
                 })
                 .collect();
 
-            let propagator = opentelemetry::sdk::propagation::TraceContextPropagator::new();
+            let propagator = opentelemetry_sdk::propagation::TraceContextPropagator::new();
             let cx = propagator.extract(&custom_strings);
 
             let span =

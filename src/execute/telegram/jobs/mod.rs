@@ -35,7 +35,7 @@ async fn needs_more_time(
         let key = format!("retry-at:{}", chat_id);
 
         if let Err(err) = redis
-            .set_ex::<_, _, ()>(&key, at.timestamp(), seconds as usize)
+            .set_ex::<_, _, ()>(&key, at.timestamp(), seconds as u64)
             .await
         {
             tracing::error!("unable to set retry-at: {:?}", err);

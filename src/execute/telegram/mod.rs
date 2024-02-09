@@ -598,7 +598,7 @@ async fn process_update(cx: &Context, update: tgbotapi::Update) -> Result<(), Er
             ))
             .await
         {
-            Ok(status) if status == handlers::Status::Completed => {
+            Ok(handlers::Status::Completed) => {
                 tracing::debug!(
                     handled_by = handler.name(),
                     "completed update in {} seconds",

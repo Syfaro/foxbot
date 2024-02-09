@@ -585,7 +585,7 @@ pub fn get_lang_bundle(langs: &Langs, requested: &str) -> Bundle {
         fluent_langneg::NegotiationStrategy::Filtering,
     );
 
-    let current_locale = resolved_locales.get(0).expect("no locales were available");
+    let current_locale = resolved_locales.first().expect("no locales were available");
 
     let mut bundle = fluent_bundle::bundle::FluentBundle::new_concurrent(
         resolved_locales

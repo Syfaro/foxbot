@@ -64,10 +64,7 @@ pub async fn process_group_photo(
 
             let date = message.forward_date.unwrap_or(message.date);
             let now = chrono::Utc::now();
-            let message_date = chrono::DateTime::from_utc(
-                chrono::NaiveDateTime::from_timestamp_opt(date, 0).unwrap(),
-                chrono::Utc,
-            );
+            let message_date = chrono::DateTime::<chrono::Utc>::from_timestamp(date, 0).unwrap();
             let hours_ago = (now - message_date).num_hours();
 
             tracing::trace!(hours_ago, "calculated message age");

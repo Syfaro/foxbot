@@ -12,10 +12,10 @@ sign-tag = true
 env = ["dotenv"]
 
 [dependencies]
-actix-session = {version = "0.7", features = ["cookie-session"]}
+actix-session = {version = "0.9", features = ["cookie-session"]}
 actix-web = {version = "4", default-features = false, features = ["macros"]}
 anyhow = "1"
-askama = "0.11"
+askama = "0.12"
 async-recursion = "1"
 async-trait = "0.1"
 base64 = "0.13"
@@ -39,16 +39,17 @@ hex = "0.4"
 hmac = "0.12"
 hyper = {version = "0.14", features = ["server"]}
 image = "0.23"
-infer = "0.12"
+infer = "0.15"
 intl-memoizer = "0.5"
-jsonwebtoken = "8"
+jsonwebtoken = "9"
 lazy_static = "1"
-linkify = "0.9"
-opentelemetry = {version = "0.18", features = ["rt-tokio"]}
-opentelemetry-http = "0.7"
+linkify = "0.10"
+opentelemetry = "0.21"
+opentelemetry_sdk = { version = "0.21", features = ["rt-tokio"] }
+opentelemetry-http = "0.10"
 prometheus = {version = "0.13", features = ["process"]}
 rand = "0.8"
-redis = {version = "0.22", features = ["connection-manager", "tokio-comp"]}
+redis = {version = "0.24", features = ["connection-manager", "tokio-comp"]}
 redlock = {git = "https://github.com/Syfaro/redlock-rs.git"}
 regex = "1"
 reqwest = {version = "0.11", features = ["json"]}
@@ -57,8 +58,8 @@ rusoto_core = "0.48"
 rusoto_credential = "0.48"
 rusoto_s3 = "0.48"
 scraper = "0.18.1"
-sentry = "0.29"
-sentry-tracing = "0.29"
+sentry = "0.32"
+sentry-tracing = "0.32"
 serde = {version = "1", features = ["derive"]}
 serde_json = "1"
 sha2 = "0.10"
@@ -68,8 +69,8 @@ thiserror = "1"
 tokio = {version = "1", features = ["rt"]}
 tokio-stream = "0.1"
 tracing = "0.1"
-tracing-actix-web = {version = "0.7", features = ["opentelemetry_0_18"]}
-tracing-opentelemetry = "0.18"
+tracing-actix-web = {version = "0.7", features = ["opentelemetry_0_21"]}
+tracing-opentelemetry = "0.22"
 tracing-subscriber = {version = "0.3", features = ["env-filter", "json"]}
 twilight-cache-inmemory = "0.11"
 twilight-gateway = "0.11"

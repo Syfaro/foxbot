@@ -180,7 +180,7 @@ impl Direct {
             .await;
 
         match results {
-            Ok(results) => results.matches.into_iter().next(),
+            Ok(results) => results.into_iter().next(),
             Err(_) => None,
         }
     }
@@ -971,33 +971,41 @@ impl FurAffinity {
 
     /// Attempt to resolve a direct image URL into a submission using
     /// FuzzySearch.
-    async fn load_direct_url(&self, filename: &str, url: &str) -> Result<Option<PostInfo>, Error> {
-        let sub: fuzzysearch::File = match self.fapi.lookup_filename(filename).await {
-            Ok(mut results) if !results.is_empty() => results.remove(0),
-            _ => {
-                let ext = match get_file_ext(url) {
-                    Some(ext) => ext,
-                    None => return Ok(None),
-                };
+    async fn load_direct_url(&self, url: &str) -> Result<Option<PostInfo>, Error> {
+        let make_generic_post = || {
+            let ext = match get_file_ext(url) {
+                Some(ext) => ext,
+                None => return Ok(None),
+            };
 
-                return Ok(Some(PostInfo {
-                    file_type: ext.to_string(),
-                    url: url.to_owned(),
-                    site_name: self.name().into(),
-                    ..Default::default()
-                }));
-            }
+            Ok(Some(PostInfo {
+                file_type: ext.to_string(),
+                url: url.to_owned(),
+                site_name: self.name().into(),
+                ..Default::default()
+            }))
         };
 
-        let ext = match get_file_ext(&sub.filename) {
+        let sub = match self.fapi.lookup_furaffinity_file(url).await {
+            Ok(mut results) if !results.is_empty() => results.remove(0),
+            _ => return make_generic_post(),
+        };
+
+        let Some(url) = sub.url else {
+            return make_generic_post();
+        };
+
+        let ext = match get_file_ext(&url) {
             Some(ext) => ext,
             None => return Ok(None),
         };
 
         Ok(Some(PostInfo {
             file_type: ext.to_string(),
-            url: sub.url.clone(),
-            source_link: Some(sub.url()),
+            url,
+            source_link: Some(format!("https://www.furaffiniy.net/view/{}/", sub.id)),
+            tags: Some(sub.tags),
+            artist_username: sub.artist,
             site_name: self.name().into(),
             ..Default::default()
         }))
@@ -1182,8 +1190,8 @@ impl Site for FurAffinity {
             .captures(url)
             .ok_or_else(|| Error::bot("supported url should always match"))?;
 
-        if let Some(filename) = captures.name("file_name") {
-            self.load_direct_url(filename.as_str(), url)
+        if captures.name("file_name").is_some() {
+            self.load_direct_url(url)
                 .await
                 .map(|sub| sub.map(|post| vec![post]))
         } else if let Some(id) = captures.name("id") {
@@ -2277,7 +2285,6 @@ impl Site for OpenGraph {
 
         let meta_tags: HashMap<_, _> = document
             .select(&self.meta_property_selector)
-            .into_iter()
             .filter_map(|elem| match (elem.attr("property"), elem.attr("content")) {
                 (Some(property), Some(content)) => Some((property, content)),
                 _ => None,

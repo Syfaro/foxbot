@@ -177,7 +177,7 @@ impl CommandHandler {
                 ChatAction::UploadPhoto,
             );
 
-            let result = results.get(0).unwrap();
+            let result = results.first().unwrap();
 
             if result.file_type == "mp4" {
                 let video = SendVideo {

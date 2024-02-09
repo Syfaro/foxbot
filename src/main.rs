@@ -392,9 +392,9 @@ impl ErrorMetadata for Error {
 
 #[derive(Clone, Debug, Enum, Serialize, Deserialize)]
 pub enum Features {
-    #[serde(rename = "foxbot_twitter_api")]
+    #[serde(rename = "foxbot.twitter-api")]
     TwitterApi,
-    #[serde(rename = "foxbot_manage_web")]
+    #[serde(rename = "foxbot.manage-web")]
     ManageWeb,
 }
 
