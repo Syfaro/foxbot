@@ -286,7 +286,7 @@ async fn generate_reply(
         }
     };
 
-    let results = crate::utils::lookup_single_hash(fuzzysearch, hash, Some(3)).await?;
+    let results = crate::utils::lookup_single_hash(fuzzysearch, hash, Some(3), true).await?;
     tracing::info!("found {} results for image", results.len());
 
     let reply = if results.is_empty() {

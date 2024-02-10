@@ -266,6 +266,7 @@ pub enum GroupConfigKey {
     CanEditChannel,
     HasLinkedChat,
     ChannelCaption,
+    Nsfw,
 }
 
 impl GroupConfigKey {
@@ -278,6 +279,7 @@ impl GroupConfigKey {
             Self::CanEditChannel => "can_edit_channel",
             Self::HasLinkedChat => "has_linked_chat",
             Self::ChannelCaption => "channel_caption",
+            Self::Nsfw => "nsfw",
         }
     }
 }
@@ -323,7 +325,7 @@ impl GroupConfig {
     {
         let chat = chat.into();
 
-        let oldest_time= (chrono::Utc::now() - max_age).naive_utc();
+        let oldest_time = (chrono::Utc::now() - max_age).naive_utc();
 
         let config = sqlx::query_file_scalar!(
             "queries/group_config/get_max_age.sql",

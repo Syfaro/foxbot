@@ -485,7 +485,7 @@ fn lookup_hash(
     distance: Option<i64>,
 ) -> impl std::future::Future<Output = Result<Vec<fuzzysearch::File>, UserErrorMessage<'static>>> + '_
 {
-    utils::lookup_single_hash(fuzzysearch, hash, distance)
+    utils::lookup_single_hash(fuzzysearch, hash, distance, true)
         .map_err(|err| UserErrorMessage::new(err, "Unable to look up sources"))
 }
 

@@ -728,6 +728,7 @@ pub async fn lookup_single_hash(
     fapi: &fuzzysearch::FuzzySearch,
     hash: i64,
     distance: Option<i64>,
+    allow_nsfw: bool,
 ) -> Result<Vec<fuzzysearch::File>, Error> {
     let hashes = [hash];
 
@@ -759,6 +760,10 @@ pub async fn lookup_single_hash(
         }
     });
 
+    if !allow_nsfw {
+        matches.retain(|m| matches!(m.rating, None | Some(fuzzysearch::Rating::General)))
+    }
+
     Ok(matches)
 }
 
@@ -773,9 +778,10 @@ pub async fn match_image(
     fapi: &fuzzysearch::FuzzySearch,
     file: &tgbotapi::PhotoSize,
     distance: Option<i64>,
+    allow_nsfw: bool,
 ) -> Result<(i64, Vec<fuzzysearch::File>), Error> {
     if let Some(hash) = models::FileCache::get(redis, &file.file_unique_id).await? {
-        return lookup_single_hash(fapi, hash, distance)
+        return lookup_single_hash(fapi, hash, distance, allow_nsfw)
             .await
             .map(|files| (hash, files));
     }
@@ -803,7 +809,7 @@ pub async fn match_image(
 
     models::FileCache::set(redis, &file.file_unique_id, hash).await?;
 
-    lookup_single_hash(fapi, hash, distance)
+    lookup_single_hash(fapi, hash, distance, allow_nsfw)
         .await
         .map(|files| (hash, files))
 }
@@ -954,8 +960,21 @@ pub fn first_of_each_site(
     firsts
 }
 
+/// Convert links to more SFW versions if possible when NSFW is not allowed.
+pub fn sfw_link(file: &fuzzysearch::File, allow_nsfw: bool) -> String {
+    let url = file.url();
+
+    tracing::info!(url, allow_nsfw, "updating url for file");
+
+    if matches!(file.site_info, Some(fuzzysearch::SiteInfo::E621(_)) if !allow_nsfw) {
+        "https://e926.net".to_string() + url.strip_prefix("https://e621.net").unwrap_or(&url)
+    } else {
+        url
+    }
+}
+
 /// Write a reply for matched sources.
-pub fn source_reply(matches: &[fuzzysearch::File], bundle: &Bundle) -> String {
+pub fn source_reply(matches: &[fuzzysearch::File], bundle: &Bundle, allow_nsfw: bool) -> String {
     let first = match matches.first() {
         Some(result) => result,
         None => return get_message(bundle, "reverse-no-results", None),
@@ -973,7 +992,7 @@ pub fn source_reply(matches: &[fuzzysearch::File], bundle: &Bundle) -> String {
 
     if similar.is_empty() {
         let mut args = FluentArgs::new();
-        args.set("link", first.url());
+        args.set("link", sfw_link(first, allow_nsfw));
 
         if let Some(rating) = get_rating_bundle_name(&first.rating) {
             let rating = get_message(bundle, rating, None);
@@ -991,7 +1010,7 @@ pub fn source_reply(matches: &[fuzzysearch::File], bundle: &Bundle) -> String {
 
         for file in vec![first].into_iter().chain(similar) {
             let mut args = FluentArgs::new();
-            args.set("link", file.url());
+            args.set("link", sfw_link(file, allow_nsfw));
 
             let result = if let Some(rating) = get_rating_bundle_name(&file.rating) {
                 let rating = get_message(bundle, rating, None);

@@ -330,7 +330,7 @@ async fn manage_telegram_chat(
 
     let config: HashMap<String, serde_json::Value> = config.into_iter().collect();
 
-    let options = match chat.chat_type {
+    let mut options = match chat.chat_type {
         tgbotapi::ChatType::Group | tgbotapi::ChatType::Supergroup => {
             vec![
                 ConfigOption {
@@ -400,6 +400,20 @@ async fn manage_telegram_chat(
         }
     };
 
+    options.push(ConfigOption {
+        key: "nsfw".to_string(),
+        name: "Enable NSFW Sources".to_string(),
+        help: "If the bot should link NSFW sources.".to_string(),
+        value: config
+            .get("nsfw")
+            .and_then(|value| {
+                Some(ConfigValue::Bool(
+                    serde_json::from_value(value.to_owned()).ok()?,
+                ))
+            })
+            .unwrap_or(ConfigValue::Bool(true)),
+    });
+
     let body = ManageTelegramChatTemplate {
         chat_id,
         chat_name: chat_display_name(&chat).to_owned(),
@@ -457,7 +471,7 @@ async fn manage_telegram_chat_post(
                 "group_no_previews",
                 form.get("group_no_previews")
                     .map(is_checked)
-                    .unwrap_or(true),
+                    .unwrap_or_default(),
             ));
 
             settings.push(models::SettingEntry::new(
@@ -481,6 +495,11 @@ async fn manage_telegram_chat_post(
             ))
         }
     }
+
+    settings.push(models::SettingEntry::new(
+        "nsfw",
+        form.get("nsfw").map(is_checked).unwrap_or_default(),
+    ));
 
     models::Manage::update_settings(&pool, models::Chat::Telegram(chat.id), &settings)
         .await

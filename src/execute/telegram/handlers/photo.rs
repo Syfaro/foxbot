@@ -39,9 +39,24 @@ impl Handler for PhotoHandler {
         let action =
             utils::continuous_action(cx.bot.clone(), 12, message.chat_id(), ChatAction::Typing);
 
+        let allow_nsfw = models::GroupConfig::get(
+            &cx.pool,
+            models::GroupConfigKey::Nsfw,
+            models::Chat::Telegram(message.chat.id),
+        )
+        .await?
+        .unwrap_or(true);
+
         let best_photo = utils::find_best_photo(photos).unwrap();
-        let (hash, mut matches) =
-            utils::match_image(&cx.bot, &cx.redis, &cx.fuzzysearch, best_photo, Some(3)).await?;
+        let (hash, mut matches) = utils::match_image(
+            &cx.bot,
+            &cx.redis,
+            &cx.fuzzysearch,
+            best_photo,
+            Some(3),
+            allow_nsfw,
+        )
+        .await?;
 
         utils::sort_results(&cx.pool, message.from.as_ref().unwrap(), &mut matches).await?;
 
@@ -80,7 +95,7 @@ impl Handler for PhotoHandler {
             return Ok(Completed);
         }
 
-        let text = utils::source_reply(&matches, &bundle);
+        let text = utils::source_reply(&matches, &bundle, allow_nsfw);
 
         drop(action);
 

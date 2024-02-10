@@ -85,9 +85,24 @@ pub async fn process_group_photo(
         ),
     }
 
+    let allow_nsfw = models::GroupConfig::get(
+        &cx.pool,
+        models::GroupConfigKey::Nsfw,
+        models::Chat::Telegram(message.chat.id),
+    )
+    .await?
+    .unwrap_or(true);
+
     let best_photo = utils::find_best_photo(photo_sizes).unwrap();
-    let (searched_hash, mut matches) =
-        utils::match_image(&cx.bot, &cx.redis, &cx.fuzzysearch, best_photo, Some(3)).await?;
+    let (searched_hash, mut matches) = utils::match_image(
+        &cx.bot,
+        &cx.redis,
+        &cx.fuzzysearch,
+        best_photo,
+        Some(3),
+        allow_nsfw,
+    )
+    .await?;
     utils::sort_results(&cx.pool, message.from.as_ref().unwrap(), &mut matches).await?;
 
     let wanted_matches = matches
@@ -160,7 +175,7 @@ pub async fn process_group_photo(
         if wanted_matches.len() == 1 {
             let mut args = FluentArgs::new();
             let m = wanted_matches.first().unwrap();
-            args.set("link", m.url());
+            args.set("link", utils::sfw_link(m, allow_nsfw));
 
             if let Some(rating) = utils::get_rating_bundle_name(&m.rating) {
                 let rating = utils::get_message(&bundle, rating, None);
@@ -177,7 +192,7 @@ pub async fn process_group_photo(
 
             for result in wanted_matches {
                 let mut args = FluentArgs::new();
-                args.set("link", result.url());
+                args.set("link", utils::sfw_link(result, allow_nsfw));
 
                 let message = if let Some(rating) = utils::get_rating_bundle_name(&result.rating) {
                     let rating = utils::get_message(&bundle, rating, None);
@@ -372,7 +387,15 @@ pub async fn process_group_mediagroup_hash(
 
     models::FileCache::set(&cx.redis, &best_photo.file_unique_id, hash).await?;
 
-    let mut sources = utils::lookup_single_hash(&cx.fuzzysearch, hash, Some(3)).await?;
+    let allow_nsfw = models::GroupConfig::get(
+        &cx.pool,
+        models::GroupConfigKey::Nsfw,
+        models::Chat::Telegram(message.message.chat.id),
+    )
+    .await?
+    .unwrap_or(true);
+
+    let mut sources = utils::lookup_single_hash(&cx.fuzzysearch, hash, Some(3), allow_nsfw).await?;
 
     utils::sort_results(
         &cx.pool,
@@ -513,10 +536,24 @@ pub async fn process_group_mediagroup_check(
         let sizes = message.message.photo.as_ref().unwrap();
         let best_photo = utils::find_best_photo(sizes).unwrap();
 
-        let mut sources =
-            utils::match_image(&cx.bot, &cx.redis, &cx.fuzzysearch, best_photo, Some(3))
-                .await?
-                .1;
+        let allow_nsfw = models::GroupConfig::get(
+            &cx.pool,
+            models::GroupConfigKey::Nsfw,
+            models::Chat::Telegram(message.message.chat.id),
+        )
+        .await?
+        .unwrap_or(true);
+
+        let mut sources = utils::match_image(
+            &cx.bot,
+            &cx.redis,
+            &cx.fuzzysearch,
+            best_photo,
+            Some(3),
+            allow_nsfw,
+        )
+        .await?
+        .1;
         utils::sort_results(
             &cx.pool,
             message.message.from.as_ref().unwrap(),

@@ -36,10 +36,25 @@ pub async fn process_channel_update(
         );
     }
 
+    let allow_nsfw = models::GroupConfig::get(
+        &cx.pool,
+        models::GroupConfigKey::Nsfw,
+        models::Chat::Telegram(message.chat.id),
+    )
+    .await?
+    .unwrap_or(true);
+
     let file =
         utils::find_best_photo(sizes).ok_or_else(|| Error::missing("channel update photo"))?;
-    let (searched_hash, mut matches) =
-        utils::match_image(&cx.bot, &cx.redis, &cx.fuzzysearch, file, Some(3)).await?;
+    let (searched_hash, mut matches) = utils::match_image(
+        &cx.bot,
+        &cx.redis,
+        &cx.fuzzysearch,
+        file,
+        Some(3),
+        allow_nsfw,
+    )
+    .await?;
 
     // Only keep matches with a distance of 3 or less
     matches.retain(|m| m.distance.unwrap_or(10) <= 3);
