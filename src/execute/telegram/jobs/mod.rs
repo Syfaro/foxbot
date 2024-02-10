@@ -76,10 +76,11 @@ async fn check_more_time(
 /// Returns if the message was sent to a chat linked to a different chat.
 #[tracing::instrument(skip(cx, message))]
 async fn store_linked_chat(cx: &Context, message: &tgbotapi::Message) -> Result<bool, Error> {
-    if let Some(linked_chat) = models::GroupConfig::get::<_, _, Option<i64>>(
+    if let Some(linked_chat) = models::GroupConfig::get_max_age::<_, _, Option<i64>>(
         &cx.pool,
         models::GroupConfigKey::HasLinkedChat,
         &message.chat,
+        chrono::Duration::days(1),
     )
     .await?
     {

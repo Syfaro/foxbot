@@ -3,10 +3,7 @@ use lazy_static::lazy_static;
 use prometheus::{register_counter_vec, CounterVec};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
-use sqlx::{
-    types::{chrono, Json},
-    PgExecutor, PgPool,
-};
+use sqlx::{types::Json, PgExecutor, PgPool};
 use tgbotapi::Message;
 
 use crate::Error;
@@ -305,6 +302,35 @@ impl GroupConfig {
             chat.telegram_id(),
             chat.discord_id(),
             key.as_str()
+        )
+        .fetch_optional(executor)
+        .await?
+        .and_then(|config| serde_json::from_value(config).ok());
+
+        Ok(config)
+    }
+
+    pub async fn get_max_age<'a, E, C, D>(
+        executor: E,
+        key: GroupConfigKey,
+        chat: C,
+        max_age: chrono::Duration,
+    ) -> Result<Option<D>, Error>
+    where
+        E: PgExecutor<'a>,
+        C: Into<Chat>,
+        D: serde::de::DeserializeOwned,
+    {
+        let chat = chat.into();
+
+        let oldest_time= (chrono::Utc::now() - max_age).naive_utc();
+
+        let config = sqlx::query_file_scalar!(
+            "queries/group_config/get_max_age.sql",
+            chat.telegram_id(),
+            chat.discord_id(),
+            key.as_str(),
+            oldest_time,
         )
         .fetch_optional(executor)
         .await?
