@@ -885,8 +885,15 @@ impl CommandHandler {
             )
             .unwrap();
 
-            let (searched_hash, fuzzysearch_matches) =
-                utils::match_image(&cx.bot, &cx.redis, &cx.fuzzysearch, best_size, Some(3)).await?;
+            let (searched_hash, fuzzysearch_matches) = utils::match_image(
+                &cx.bot,
+                &cx.redis,
+                &cx.fuzzysearch,
+                best_size,
+                Some(3),
+                true,
+            )
+            .await?;
             writeln!(resp, "Photo had hash <pre>{searched_hash}</pre>").unwrap();
             writeln!(resp, "Discovered {} results:", fuzzysearch_matches.len(),).unwrap();
 

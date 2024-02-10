@@ -325,7 +325,7 @@ impl GroupConfig {
     {
         let chat = chat.into();
 
-        let oldest_time= (chrono::Utc::now() - max_age).naive_utc();
+        let oldest_time = (chrono::Utc::now() - max_age).naive_utc();
 
         let config = sqlx::query_file_scalar!(
             "queries/group_config/get_max_age.sql",
