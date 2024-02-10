@@ -4425,7 +4425,7 @@ dependencies = [
 [[package]]
 name = "tgbotapi"
 version = "0.1.0"
-source = "git+https://github.com/Syfaro/tgbotapi-rs#4643e4e50e1107ec8ac773908601644b5b582206"
+source = "git+https://github.com/Syfaro/tgbotapi-rs#e085957b441703f109b5870140977604a9a8ddc7"
 dependencies = [
  "reqwest",
  "serde",
