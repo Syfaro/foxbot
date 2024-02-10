@@ -1049,6 +1049,33 @@
     },
     "query": "SELECT\n    value\nFROM\n    group_config\nWHERE\n    chat_id = lookup_chat($1, $2)\n    AND name = $3\nORDER BY\n    updated_at DESC\nLIMIT\n    1;\n"
   },
+  "c9c5083c9bfbd7bbf1dbce884ff539f809a9a5961767f870e3d5a7493484f730": {
+    "describe": {
+      "columns": [
+        {
+          "name": "name",
+          "ordinal": 0,
+          "type_info": "Text"
+        },
+        {
+          "name": "value",
+          "ordinal": 1,
+          "type_info": "Jsonb"
+        }
+      ],
+      "nullable": [
+        false,
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Numeric"
+        ]
+      }
+    },
+    "query": "WITH lookup_result AS (\n    SELECT\n        lookup_chat($1, $2) chat_id\n)\nSELECT\n    DISTINCT ON (name) name,\n    value\nFROM\n    lookup_result\n    JOIN group_config ON group_config.chat_id = lookup_result.chat_id\nORDER BY\n    name,\n    updated_at DESC;\n"
+  },
   "c9d213833ea3e3131e4da8fd69ca88fed1acb35bc94ef26029b64a202e25fb88": {
     "describe": {
       "columns": [
@@ -1182,32 +1209,5 @@
       }
     },
     "query": "INSERT INTO\n    cached_post (post_url, thumb, cdn_url, width, height)\nVALUES\n    ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING;\n"
-  },
-  "f67ca9e5b0a3d0fa04ff5849a9dc4cf57bcbae1bf54bf66571ea6f7a67109b67": {
-    "describe": {
-      "columns": [
-        {
-          "name": "name",
-          "ordinal": 0,
-          "type_info": "Text"
-        },
-        {
-          "name": "value",
-          "ordinal": 1,
-          "type_info": "Jsonb"
-        }
-      ],
-      "nullable": [
-        false,
-        false
-      ],
-      "parameters": {
-        "Left": [
-          "Int8",
-          "Numeric"
-        ]
-      }
-    },
-    "query": "SELECT\n    DISTINCT ON (name) name,\n    value\nFROM\n    group_config\nWHERE\n    chat_id = lookup_chat($1, $2)\nORDER BY\n    name,\n    updated_at DESC;\n"
   }
 }
