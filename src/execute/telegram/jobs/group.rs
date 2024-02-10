@@ -175,7 +175,7 @@ pub async fn process_group_photo(
         if wanted_matches.len() == 1 {
             let mut args = FluentArgs::new();
             let m = wanted_matches.first().unwrap();
-            args.set("link", m.url());
+            args.set("link", utils::sfw_link(m, allow_nsfw));
 
             if let Some(rating) = utils::get_rating_bundle_name(&m.rating) {
                 let rating = utils::get_message(&bundle, rating, None);
@@ -192,7 +192,7 @@ pub async fn process_group_photo(
 
             for result in wanted_matches {
                 let mut args = FluentArgs::new();
-                args.set("link", result.url());
+                args.set("link", utils::sfw_link(result, allow_nsfw));
 
                 let message = if let Some(rating) = utils::get_rating_bundle_name(&result.rating) {
                     let rating = utils::get_message(&bundle, rating, None);

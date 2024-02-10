@@ -363,7 +363,7 @@ impl CommandHandler {
             .get_fluent_bundle(message.from.as_ref().unwrap().language_code.as_deref())
             .await;
 
-        let text = utils::source_reply(&matches, &bundle);
+        let text = utils::source_reply(&matches, &bundle, allow_nsfw);
 
         let disable_preview = models::GroupConfig::get::<_, _, bool>(
             &cx.pool,

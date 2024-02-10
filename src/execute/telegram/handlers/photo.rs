@@ -95,7 +95,7 @@ impl Handler for PhotoHandler {
             return Ok(Completed);
         }
 
-        let text = utils::source_reply(&matches, &bundle);
+        let text = utils::source_reply(&matches, &bundle, allow_nsfw);
 
         drop(action);
 
