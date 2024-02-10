@@ -1153,6 +1153,29 @@
     },
     "query": "SELECT\n    max(inserted_at)\nFROM\n    media_group\nWHERE\n    media_group_id = $1;\n"
   },
+  "e17e66b3a358b424d73a2b0a0a64809c906483ae3ded9013676d7c6250e7ca29": {
+    "describe": {
+      "columns": [
+        {
+          "name": "value",
+          "ordinal": 0,
+          "type_info": "Jsonb"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Numeric",
+          "Text",
+          "Timestamp"
+        ]
+      }
+    },
+    "query": "SELECT\n    value\nFROM\n    group_config\nWHERE\n    chat_id = lookup_chat($1, $2)\n    AND name = $3\n    AND updated_at >= $4\nORDER BY\n    updated_at DESC\nLIMIT\n    1;\n"
+  },
   "e86dfc0d56977713d6c2ff7f4fcb404fdb0b442b7f68694f39ae86d451a3d4a7": {
     "describe": {
       "columns": [],
