@@ -161,10 +161,9 @@ pub async fn process_channel_edit(
             models::Chat::Telegram(chat_id),
         )
         .await?
-        .unwrap_or(false)
     } else {
         tracing::error!("chat_id was not i64: {chat_id}");
-        false
+        None
     };
 
     tracing::trace!(
@@ -172,9 +171,12 @@ pub async fn process_channel_edit(
         "determined if channel always wants captions"
     );
 
-    // If this photo was part of a media group, we should set a caption on
-    // the image because we can't make an inline keyboard on it.
-    let resp = if has_linked_chat || always_use_captions || message_edit.media_group_id.is_some() {
+    // If this channel has a linked chat or the photo was part of a media group
+    // and the user has not explicitly changed the always use captions setting,
+    // set a caption with the sources.
+    let resp = if (has_linked_chat || message_edit.media_group_id.is_some())
+        && always_use_captions != Some(false)
+    {
         let sources = message_edit
             .firsts
             .iter()
