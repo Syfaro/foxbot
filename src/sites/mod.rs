@@ -1003,7 +1003,7 @@ impl FurAffinity {
         Ok(Some(PostInfo {
             file_type: ext.to_string(),
             url,
-            source_link: Some(format!("https://www.furaffiniy.net/view/{}/", sub.id)),
+            source_link: Some(format!("https://www.furaffinity.net/view/{}/", sub.id)),
             tags: Some(sub.tags),
             artist_username: sub.artist,
             site_name: self.name().into(),
