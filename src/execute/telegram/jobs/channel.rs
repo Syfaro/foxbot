@@ -171,12 +171,17 @@ pub async fn process_channel_edit(
         "determined if channel always wants captions"
     );
 
-    // If this channel has a linked chat or the photo was part of a media group
-    // and the user has not explicitly changed the always use captions setting,
-    // set a caption with the sources.
-    let resp = if (has_linked_chat || message_edit.media_group_id.is_some())
-        && always_use_captions != Some(false)
-    {
+    // If the message was part of a media group, we can only set a caption.
+    let needs_caption = message_edit.media_group_id.is_some();
+
+    // If the message has a linked chat we prefer captions, but allow users to
+    // override that decision.
+    let linked_chat = has_linked_chat && always_use_captions != Some(false);
+
+    // And finally, a user can always say that they want captions.
+    let user_override = always_use_captions == Some(true);
+
+    let resp = if needs_caption || linked_chat || user_override {
         let sources = message_edit
             .firsts
             .iter()
