@@ -15,7 +15,8 @@ use crate::{
     },
     models,
     sites::PostInfo,
-    utils, Error,
+    utils::{self, ExtractUnleashContext},
+    Error,
 };
 
 #[tracing::instrument(skip(cx, job), fields(job_id = job.id(), chat_id = message.chat.id))]
@@ -94,15 +95,8 @@ pub async fn process_group_photo(
     .unwrap_or(true);
 
     let best_photo = utils::find_best_photo(photo_sizes).unwrap();
-    let (searched_hash, mut matches) = utils::match_image(
-        &cx.bot,
-        &cx.redis,
-        &cx.fuzzysearch,
-        best_photo,
-        Some(3),
-        allow_nsfw,
-    )
-    .await?;
+    let (searched_hash, mut matches) =
+        utils::match_image(&cx, message.from.as_ref(), best_photo, Some(3), allow_nsfw).await?;
     utils::sort_results(&cx.pool, message.from.as_ref().unwrap(), &mut matches).await?;
 
     let wanted_matches = matches
@@ -395,7 +389,18 @@ pub async fn process_group_mediagroup_hash(
     .await?
     .unwrap_or(true);
 
-    let mut sources = utils::lookup_single_hash(&cx.fuzzysearch, hash, Some(3), allow_nsfw).await?;
+    let context = message.message.unleash_context();
+
+    let mut sources = utils::lookup_single_hash_and_filter(
+        &cx.fuzzysearch,
+        &cx.nats,
+        &cx.unleash,
+        context.as_ref(),
+        hash,
+        Some(3),
+        allow_nsfw,
+    )
+    .await?;
 
     utils::sort_results(
         &cx.pool,
@@ -545,9 +550,8 @@ pub async fn process_group_mediagroup_check(
         .unwrap_or(true);
 
         let mut sources = utils::match_image(
-            &cx.bot,
-            &cx.redis,
-            &cx.fuzzysearch,
+            &cx,
+            message.message.from.as_ref(),
             best_photo,
             Some(3),
             allow_nsfw,

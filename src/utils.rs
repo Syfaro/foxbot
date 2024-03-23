@@ -6,6 +6,7 @@ use std::{
 };
 
 use fluent_bundle::{bundle::FluentBundle, FluentArgs, FluentResource};
+use foxlib::flags::{Context as UnleashContext, Unleash};
 use futures_retry::{ErrorHandler, FutureRetry, RetryPolicy};
 use intl_memoizer::concurrent::IntlLangMemoizer;
 use lazy_static::lazy_static;
@@ -16,10 +17,11 @@ use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::{
+    execute::TelegramContext,
     models::{self, Chat, User},
     services::Telegram,
     sites::{BoxedSite, PostInfo},
-    Error,
+    Error, Features,
 };
 
 lazy_static! {
@@ -767,21 +769,96 @@ pub async fn lookup_single_hash(
     Ok(matches)
 }
 
+pub async fn lookup_single_hash_and_filter(
+    fapi: &fuzzysearch::FuzzySearch,
+    nats: &async_nats::Client,
+    unleash: &Unleash<Features>,
+    context: Option<&UnleashContext>,
+    hash: i64,
+    distance: Option<i64>,
+    allow_nsfw: bool,
+) -> Result<Vec<fuzzysearch::File>, Error> {
+    let mut matches = lookup_single_hash(fapi, hash, distance, allow_nsfw).await?;
+
+    if unleash.is_enabled(Features::FuzzySearchLoader, context, false) {
+        if let Err(err) = filter_fuzzysearch_results(nats, &mut matches).await {
+            tracing::error!("could not filter results: {err}");
+        }
+    }
+
+    Ok(matches)
+}
+
+#[tracing::instrument(skip_all, fields(starting_count = results.len()))]
+async fn filter_fuzzysearch_results(
+    nats: &async_nats::Client,
+    results: &mut Vec<fuzzysearch::File>,
+) -> Result<(), Error> {
+    use fuzzysearch::SiteInfo::*;
+
+    tracing::debug!("got starting result count");
+
+    let ids: Vec<_> = results
+        .iter()
+        .filter_map(|result| {
+            let site = match result.site_info.as_ref()? {
+                FurAffinity(_) => fuzzysearch_common::Site::FurAffinity,
+                Twitter => fuzzysearch_common::Site::Twitter,
+                E621(_) => fuzzysearch_common::Site::E621,
+                Weasyl => fuzzysearch_common::Site::Weasyl,
+            };
+
+            Some((site, result.site_id.to_string()))
+        })
+        .collect();
+
+    // All we're checking for now is that the submission hasn't been deleted.
+    // Any errors when fetching should still allow the submission through.
+
+    let loaded_results = load_images(nats, ids, Some(30), Some(30)).await?;
+    let submission_deleted: std::collections::HashMap<_, _> = loaded_results
+        .submissions
+        .into_iter()
+        .map(|result| {
+            let id = (result.site.to_string(), result.submission_id);
+
+            let include = match result.submission {
+                fuzzysearch_common::FetchedSubmissionData::Success { submission, .. }
+                    if submission.deleted =>
+                {
+                    true
+                }
+                _ => false,
+            };
+
+            (id, include)
+        })
+        .collect();
+
+    results.retain(|result| {
+        let id = (result.site_name().to_string(), result.site_id.to_string());
+        submission_deleted.get(&id).copied() != Some(true)
+    });
+
+    tracing::debug!(filtered_count = results.len(), "filtered results");
+
+    Ok(())
+}
+
 /// Attempt to match an image against FuzzySearch by:
 /// * Checking if the file ID already exists in the cache
 /// * If not, downloading the image and hashing it
 /// * Looking up the hash with [`lookup_single_hash`]
-#[tracing::instrument(err, skip(bot, redis, fapi))]
+#[tracing::instrument(err, skip(cx))]
 pub async fn match_image(
-    bot: &Telegram,
-    redis: &redis::aio::ConnectionManager,
-    fapi: &fuzzysearch::FuzzySearch,
+    cx: &TelegramContext,
+    user: Option<&tgbotapi::User>,
     file: &tgbotapi::PhotoSize,
     distance: Option<i64>,
     allow_nsfw: bool,
 ) -> Result<(i64, Vec<fuzzysearch::File>), Error> {
-    if let Some(hash) = models::FileCache::get(redis, &file.file_unique_id).await? {
-        return lookup_single_hash(fapi, hash, distance, allow_nsfw)
+    if let Some(hash) = models::FileCache::get(&cx.redis, &file.file_unique_id).await? {
+        return lookup_single_hash(&cx.fuzzysearch, hash, distance, allow_nsfw)
             .await
             .map(|files| (hash, files));
     }
@@ -790,7 +867,7 @@ pub async fn match_image(
         file_id: file.file_id.clone(),
     };
 
-    let file_info = FutureRetry::new(|| bot.make_request(&get_file), Retry::new(3))
+    let file_info = FutureRetry::new(|| cx.bot.make_request(&get_file), Retry::new(3))
         .await
         .map(|(file, attempts)| {
             if attempts > 1 {
@@ -801,17 +878,26 @@ pub async fn match_image(
         })
         .map_err(|(err, _attempts)| err)?;
 
-    let data = bot.download_file(&file_info.file_path.unwrap()).await?;
+    let data = cx.bot.download_file(&file_info.file_path.unwrap()).await?;
 
     let hash = tokio::task::spawn_blocking(move || fuzzysearch::hash_bytes(&data))
         .instrument(tracing::debug_span!("hash_bytes"))
         .await??;
 
-    models::FileCache::set(redis, &file.file_unique_id, hash).await?;
+    models::FileCache::set(&cx.redis, &file.file_unique_id, hash).await?;
 
-    lookup_single_hash(fapi, hash, distance, allow_nsfw)
-        .await
-        .map(|files| (hash, files))
+    lookup_single_hash_and_filter(
+        &cx.fuzzysearch,
+        &cx.nats,
+        &cx.unleash,
+        user.and_then(ExtractUnleashContext::unleash_context)
+            .as_ref(),
+        hash,
+        distance,
+        allow_nsfw,
+    )
+    .await
+    .map(|files| (hash, files))
 }
 
 /// Sort match results based on a user's preferences.
@@ -1374,5 +1460,141 @@ impl<T> ErrorHandler<T> for Retry {
         }
 
         RetryPolicy::WaitRetry(self.duration)
+    }
+}
+
+/// A basic attempt to get the extension from a given URL. It assumes the URL
+/// ends in a filename with an extension.
+pub fn get_file_ext(name: &str) -> Option<&str> {
+    name.split('.').last().and_then(|ext| ext.split('?').next())
+}
+
+pub async fn load_images(
+    nats: &async_nats::Client,
+    ids: Vec<(fuzzysearch_common::Site, String)>,
+    max_age: Option<i64>,
+    timeout: Option<u64>,
+) -> Result<fuzzysearch_common::FetchResponse, Error> {
+    use fuzzysearch_common::{FetchPolicy, FetchRequest, FetchResponse, SubmissionQuery};
+
+    let policy = max_age
+        .map(|days| FetchPolicy::Maybe {
+            older_than: chrono::Utc::now() - chrono::Duration::try_days(days).unwrap(),
+            return_stale: true,
+        })
+        .unwrap_or_default();
+
+    let timeout = timeout.map(std::time::Duration::from_secs);
+
+    let payload = serde_json::to_vec(&FetchRequest {
+        query: SubmissionQuery::SubmissionId {
+            submission_ids: ids,
+        },
+        policy,
+        timeout,
+    })?;
+    let req = async_nats::Request::new()
+        .payload(payload.into())
+        .timeout(timeout);
+
+    let resp = nats
+        .send_request("fuzzysearch.loader.fetch", req)
+        .await
+        .map_err(|err| Error::user_message_with_error("Internal error", err))?;
+    let results: FetchResponse = serde_json::from_slice(&resp.payload)?;
+
+    Ok(results)
+}
+
+pub fn convert_loader_results(results: fuzzysearch_common::FetchResponse) -> Option<Vec<PostInfo>> {
+    use fuzzysearch_common::{FetchedSubmission, FetchedSubmissionData};
+
+    let submissions: Vec<_> = results
+        .submissions
+        .into_iter()
+        .filter_map(|sub| match sub {
+            FetchedSubmission {
+                submission: FetchedSubmissionData::Success { submission, .. },
+                ..
+            } => Some(submission),
+            _ => None,
+        })
+        .filter_map(|mut sub| {
+            let url = sub.media.pop()?.url?;
+            let artist = sub.artists.pop();
+            let (artist_username, artist_url) = match artist {
+                Some(artist) => (Some(artist.name), artist.link),
+                None => (None, None),
+            };
+
+            Some(PostInfo {
+                file_type: get_file_ext(&url)?.to_owned(),
+                url,
+                personal: false,
+                thumb: None,
+                source_link: Some(sub.link),
+                extra_caption: None,
+                site_name: sub.site.to_string().into(),
+                tags: Some(sub.tags),
+                submission_title: sub.title,
+                artist_username,
+                artist_url,
+                ..Default::default()
+            })
+        })
+        .collect();
+
+    if submissions.is_empty() {
+        None
+    } else {
+        Some(submissions)
+    }
+}
+
+pub trait ExtractUnleashContext {
+    fn unleash_context(&self) -> Option<foxlib::flags::Context>;
+}
+
+impl ExtractUnleashContext for models::User {
+    fn unleash_context(&self) -> Option<foxlib::flags::Context> {
+        let user_id = match self {
+            Self::Telegram(id) => id.to_string(),
+            Self::Discord(id) => id.to_string(),
+        };
+
+        Some(foxlib::flags::Context {
+            user_id: Some(user_id),
+            app_name: env!("CARGO_PKG_NAME").to_string(),
+            properties: [(
+                "appVersion".to_string(),
+                env!("CARGO_PKG_VERSION").to_string(),
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        })
+    }
+}
+
+impl ExtractUnleashContext for tgbotapi::User {
+    fn unleash_context(&self) -> Option<foxlib::flags::Context> {
+        models::User::from(self).unleash_context()
+    }
+}
+
+impl ExtractUnleashContext for tgbotapi::Message {
+    fn unleash_context(&self) -> Option<foxlib::flags::Context> {
+        let mut context = self
+            .from
+            .as_ref()
+            .and_then(ExtractUnleashContext::unleash_context);
+
+        if let Some(context) = context.as_mut() {
+            context
+                .properties
+                .insert("groupId".to_string(), self.chat.id.to_string());
+        }
+
+        context
     }
 }

@@ -347,16 +347,10 @@ impl CommandHandler {
         .unwrap_or(true);
 
         let best_photo = utils::find_best_photo(photo).unwrap();
-        let mut matches = utils::match_image(
-            &cx.bot,
-            &cx.redis,
-            &cx.fuzzysearch,
-            best_photo,
-            Some(3),
-            allow_nsfw,
-        )
-        .await?
-        .1;
+        let mut matches =
+            utils::match_image(cx, message.from.as_ref(), best_photo, Some(3), allow_nsfw)
+                .await?
+                .1;
         utils::sort_results(&cx.pool, message.from.as_ref().unwrap(), &mut matches).await?;
 
         let bundle = cx
@@ -412,15 +406,7 @@ impl CommandHandler {
         let (searched_hash, matches) = if let Some(sizes) = &message.photo {
             let best_photo = utils::find_best_photo(sizes).unwrap();
 
-            utils::match_image(
-                &cx.bot,
-                &cx.redis,
-                &cx.fuzzysearch,
-                best_photo,
-                Some(10),
-                allow_nsfw,
-            )
-            .await?
+            utils::match_image(cx, message.from.as_ref(), best_photo, Some(10), allow_nsfw).await?
         } else {
             let from = message
                 .from
@@ -885,15 +871,8 @@ impl CommandHandler {
             )
             .unwrap();
 
-            let (searched_hash, fuzzysearch_matches) = utils::match_image(
-                &cx.bot,
-                &cx.redis,
-                &cx.fuzzysearch,
-                best_size,
-                Some(3),
-                true,
-            )
-            .await?;
+            let (searched_hash, fuzzysearch_matches) =
+                utils::match_image(cx, message.from.as_ref(), best_size, Some(3), true).await?;
             writeln!(resp, "Photo had hash <pre>{searched_hash}</pre>").unwrap();
             writeln!(resp, "Discovered {} results:", fuzzysearch_matches.len(),).unwrap();
 

@@ -7,7 +7,8 @@ use tokio::sync::RwLock;
 
 use crate::{
     models::{self, User},
-    utils, Error, Features,
+    utils::{self, get_file_ext, ExtractUnleashContext},
+    Error, Features,
 };
 
 /// User agent used with all HTTP requests to sites.
@@ -50,12 +51,6 @@ pub struct PostInfo {
     pub tags: Option<Vec<String>>,
 }
 
-/// A basic attempt to get the extension from a given URL. It assumes the URL
-/// ends in a filename with an extension.
-fn get_file_ext(name: &str) -> Option<&str> {
-    name.split('.').last().and_then(|ext| ext.split('?').next())
-}
-
 /// A site that we can potentially load image data from.
 #[async_trait]
 pub trait Site {
@@ -78,6 +73,7 @@ pub trait Site {
 pub async fn get_all_sites(
     config: &crate::RunConfig,
     pool: sqlx::Pool<sqlx::Postgres>,
+    nats: async_nats::Client,
     unleash: Unleash<Features>,
 ) -> Vec<BoxedSite> {
     let twitter = match (&config.twitter_access_key, &config.twitter_access_secret) {
@@ -88,7 +84,7 @@ pub async fn get_all_sites(
                 access_key.clone(),
                 access_secret.clone(),
                 pool,
-                unleash,
+                unleash.clone(),
             )
             .await,
         ),
@@ -97,7 +93,7 @@ pub async fn get_all_sites(
                 config.twitter_consumer_key.clone(),
                 config.twitter_consumer_secret.clone(),
                 pool,
-                unleash,
+                unleash.clone(),
             )
             .await,
         ),
@@ -121,7 +117,7 @@ pub async fn get_all_sites(
             ),
             config.fuzzysearch_api_token.clone(),
         )),
-        Box::new(Weasyl::new(config.weasyl_api_token.clone())),
+        Box::new(Weasyl::new(config.weasyl_api_token.clone(), nats, unleash)),
         twitter,
         Box::new(Inkbunny::new(
             config.inkbunny_username.clone(),
@@ -915,7 +911,7 @@ impl Site for Twitter {
         user: Option<&User>,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, Error> {
-        let context = user.map(|user| user.unleash_context());
+        let context = user.and_then(ExtractUnleashContext::unleash_context);
 
         if self
             .unleash
@@ -1371,15 +1367,30 @@ pub struct Weasyl {
     api_key: String,
     matcher: regex::Regex,
     client: reqwest::Client,
+    nats: async_nats::Client,
+    unleash: Unleash<Features>,
 }
 
 impl Weasyl {
-    pub fn new(api_key: String) -> Self {
+    pub fn new(api_key: String, nats: async_nats::Client, unleash: Unleash<Features>) -> Self {
         Self {
             api_key,
             matcher: regex::Regex::new(r#"https?://www\.weasyl\.com/(?:(?:(?:~|%7)(?:\w+)/submissions|submission)|view)/(?P<id>\d+)(?:/\S+)?"#).unwrap(),
             client: reqwest::Client::builder().user_agent(USER_AGENT).build().unwrap(),
+            nats,
+            unleash,
         }
+    }
+
+    async fn get_nats(&self, id: String) -> Result<Option<Vec<PostInfo>>, Error> {
+        utils::load_images(
+            &self.nats,
+            vec![(fuzzysearch_common::Site::Weasyl, id)],
+            Some(30),
+            Some(7),
+        )
+        .await
+        .map(utils::convert_loader_results)
     }
 }
 
@@ -1409,11 +1420,22 @@ impl Site for Weasyl {
 
     async fn get_images(
         &self,
-        _user: Option<&User>,
+        user: Option<&User>,
         url: &str,
     ) -> Result<Option<Vec<PostInfo>>, Error> {
         let captures = self.matcher.captures(url).unwrap();
         let sub_id = captures["id"].to_owned();
+
+        if let Some(user) = user {
+            if self.unleash.is_enabled(
+                Features::FuzzySearchLoader,
+                user.unleash_context().as_ref(),
+                false,
+            ) {
+                tracing::debug!("resolving through fuzzysearch-loader");
+                return self.get_nats(sub_id).await;
+            }
+        }
 
         let resp: WeasylSubmission = self
             .client
