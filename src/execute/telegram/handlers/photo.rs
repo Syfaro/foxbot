@@ -48,8 +48,15 @@ impl Handler for PhotoHandler {
         .unwrap_or(true);
 
         let best_photo = utils::find_best_photo(photos).unwrap();
-        let (hash, mut matches) =
-            utils::match_image(cx, message.from.as_ref(), best_photo, Some(3), allow_nsfw).await?;
+        let (hash, mut matches) = utils::match_image(
+            &cx.bot,
+            &cx.redis,
+            &cx.fuzzysearch,
+            best_photo,
+            Some(3),
+            allow_nsfw,
+        )
+        .await?;
 
         utils::sort_results(&cx.pool, message.from.as_ref().unwrap(), &mut matches).await?;
 

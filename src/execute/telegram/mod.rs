@@ -111,11 +111,6 @@ pub async fn telegram(args: Args, config: RunConfig, telegram_config: TelegramCo
 
     crate::run_migrations(&pool).await;
 
-    let nats = async_nats::ConnectOptions::with_nkey(config.nats_nkey.clone())
-        .connect(&config.nats_host)
-        .await
-        .expect("could not connect to nats");
-
     let unleash = foxlib::flags::client::<Features>(
         "foxbot-telegram",
         &args.unleash_host,
@@ -124,8 +119,7 @@ pub async fn telegram(args: Args, config: RunConfig, telegram_config: TelegramCo
     .await
     .expect("unable to register unleash");
 
-    let sites =
-        crate::sites::get_all_sites(&config, pool.clone(), nats.clone(), unleash.clone()).await;
+    let sites = crate::sites::get_all_sites(&config, pool.clone(), unleash.clone()).await;
 
     let faktory = FaktoryClient::connect(&config.faktory_url)
         .await
@@ -222,7 +216,6 @@ pub async fn telegram(args: Args, config: RunConfig, telegram_config: TelegramCo
         faktory,
         pool,
         redis,
-        nats,
 
         bot: Arc::new(bot),
         fuzzysearch: Arc::new(fuzzysearch),
@@ -295,19 +288,18 @@ pub struct Context {
 
     config: Config,
 
-    pub faktory: FaktoryClient,
-    pub pool: PgPool,
-    pub redis: redis::aio::ConnectionManager,
-    pub nats: async_nats::Client,
+    faktory: FaktoryClient,
+    pool: PgPool,
+    redis: redis::aio::ConnectionManager,
 
-    pub bot: Arc<Telegram>,
-    pub fuzzysearch: Arc<FuzzySearch>,
-    pub coconut: Arc<services::coconut::Coconut>,
-    pub s3: rusoto_s3::S3Client,
-    pub unleash: Unleash<Features>,
-    pub finder: linkify::LinkFinder,
+    bot: Arc<Telegram>,
+    fuzzysearch: Arc<FuzzySearch>,
+    coconut: Arc<services::coconut::Coconut>,
+    s3: rusoto_s3::S3Client,
+    unleash: Unleash<Features>,
+    finder: linkify::LinkFinder,
 
-    pub bot_user: tgbotapi::User,
+    bot_user: tgbotapi::User,
 }
 
 pub trait LocaleSource {

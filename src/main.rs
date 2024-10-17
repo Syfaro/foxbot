@@ -124,11 +124,6 @@ pub struct RunConfig {
     #[clap(long, env)]
     pub redis_url: String,
 
-    #[clap(long, env)]
-    pub nats_host: String,
-    #[clap(long, env)]
-    pub nats_nkey: String,
-
     /// Sentry organization slug, for error feedback.
     #[clap(long, env)]
     pub sentry_organization_slug: Option<String>,
@@ -401,8 +396,6 @@ pub enum Features {
     TwitterApi,
     #[serde(rename = "foxbot.manage-web")]
     ManageWeb,
-    #[serde(rename = "foxbot.fuzzysearch-loader")]
-    FuzzySearchLoader,
 }
 
 #[tokio::main]

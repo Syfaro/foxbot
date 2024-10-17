@@ -42,11 +42,6 @@ pub async fn discord(args: Args, config: RunConfig, discord_config: DiscordConfi
 
     crate::run_migrations(&pool).await;
 
-    let nats = async_nats::ConnectOptions::with_nkey(config.nats_nkey.clone())
-        .connect(&config.nats_host)
-        .await
-        .expect("could not connect to nats");
-
     let redis = redis::Client::open(config.redis_url.clone()).expect("could not connect to redis");
     let redis = redis::aio::ConnectionManager::new(redis)
         .await
@@ -60,7 +55,7 @@ pub async fn discord(args: Args, config: RunConfig, discord_config: DiscordConfi
     .await
     .expect("unable to register unleash");
 
-    let sites = crate::sites::get_all_sites(&config, pool.clone(), nats, unleash.clone()).await;
+    let sites = crate::sites::get_all_sites(&config, pool.clone(), unleash.clone()).await;
 
     let sites = Arc::new(Mutex::new(sites));
 

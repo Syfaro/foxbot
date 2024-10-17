@@ -16,7 +16,6 @@ actix-session = {version = "0.9", features = ["cookie-session"]}
 actix-web = {version = "4", default-features = false, features = ["macros"]}
 anyhow = "1"
 askama = "0.12"
-async-nats = "0.34.0"
 async-recursion = "1"
 async-trait = "0.1"
 base64 = "0.13"
@@ -35,7 +34,6 @@ furaffinity-rs = {git = "https://github.com/Syfaro/furaffinity-rs"}
 futures = "0.3"
 futures-retry = "0.6"
 fuzzysearch = {git = "https://github.com/Syfaro/fuzzysearch-rs", features = ["trace", "local_hash"]}
-fuzzysearch-common = {git = "https://github.com/Syfaro/fuzzysearch-next", branch = "loader"}
 hamming = "0.1"
 hex = "0.4"
 hmac = "0.12"

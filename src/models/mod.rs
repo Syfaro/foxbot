@@ -48,6 +48,24 @@ impl User {
             Self::Telegram(_) => None,
         }
     }
+
+    pub fn unleash_context(&self) -> foxlib::flags::Context {
+        let user_id = match self {
+            Self::Telegram(id) => id.to_string(),
+            Self::Discord(id) => id.to_string(),
+        };
+
+        foxlib::flags::Context {
+            user_id: Some(user_id),
+            properties: [(
+                "appVersion".to_string(),
+                env!("CARGO_PKG_VERSION").to_string(),
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        }
+    }
 }
 
 impl std::fmt::Display for User {
