@@ -1833,6 +1833,76 @@ pub struct Bluesky {
     matcher: regex::Regex,
 }
 
+impl Bluesky {
+    fn handle_images(
+        &self,
+        url: &str,
+        did: &str,
+        record: &serde_json::Value,
+    ) -> Result<Option<Vec<PostInfo>>, Error> {
+        let posts = record["value"]["embed"]["images"]
+            .as_array()
+            .map(|images| {
+                images
+                    .iter()
+                    .filter_map(|image| {
+                        let blob_url = format!(
+                            "https://bsky.social/xrpc/com.atproto.sync.getBlob?did={did}&cid={}",
+                            image["image"]["ref"]["$link"].as_str()?
+                        );
+
+                        tracing::trace!(blob_url, "got blob url");
+
+                        Some(PostInfo {
+                            file_type: "jpg".to_string(),
+                            url: blob_url,
+                            thumb: None,
+                            source_link: Some(url.to_string()),
+                            site_name: self.name().into(),
+                            image_dimensions: None,
+                            ..Default::default()
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(Some(posts))
+    }
+
+    fn handle_video(
+        &self,
+        url: &str,
+        did: &str,
+        record: &serde_json::Value,
+    ) -> Result<Option<Vec<PostInfo>>, Error> {
+        let video = record["value"]["embed"]["video"]
+            .as_object()
+            .and_then(|media| {
+                let cid = media["ref"]["$link"].as_str()?;
+
+                let blob_url = format!(
+                    "https://bsky.social/xrpc/com.atproto.sync.getBlob?did={did}&cid={cid}"
+                );
+                let thumb_url = format!("https://video.bsky.app/watch/{did}/{cid}/thumbnail.jpg");
+
+                tracing::trace!(blob_url, "got blob url");
+
+                Some(vec![PostInfo {
+                    file_type: "mp4".to_string(),
+                    url: blob_url,
+                    thumb: Some(thumb_url),
+                    source_link: Some(url.to_string()),
+                    site_name: self.name().into(),
+                    image_dimensions: None,
+                    ..Default::default()
+                }])
+            });
+
+        Ok(video)
+    }
+}
+
 impl Default for Bluesky {
     fn default() -> Self {
         Self {
@@ -1898,44 +1968,16 @@ impl Site for Bluesky {
             return Ok(None);
         }
 
-        if record["value"]["embed"]["$type"].as_str() != Some("app.bsky.embed.images") {
-            tracing::debug!("url did not have image embed");
-            return Ok(None);
-        }
-
         let Some(did) = record["uri"].as_str().unwrap_or_default().split('/').nth(2) else {
             tracing::warn!("could not get did from uri: {:?}", record["uri"].as_str());
             return Ok(None);
         };
 
-        let posts = record["value"]["embed"]["images"]
-            .as_array()
-            .map(|images| {
-                images
-                    .iter()
-                    .filter_map(|image| {
-                        let blob_url = format!(
-                            "https://bsky.social/xrpc/com.atproto.sync.getBlob?did={did}&cid={}",
-                            image["image"]["ref"]["$link"].as_str()?
-                        );
-
-                        tracing::trace!(blob_url, "got blob url");
-
-                        Some(PostInfo {
-                            file_type: "jpg".to_string(),
-                            url: blob_url,
-                            thumb: None,
-                            source_link: Some(url.to_string()),
-                            site_name: self.name().into(),
-                            image_dimensions: None,
-                            ..Default::default()
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        Ok(Some(posts))
+        match record["value"]["embed"]["$type"].as_str() {
+            Some("app.bsky.embed.images") => self.handle_images(url, did, &record),
+            Some("app.bsky.embed.video") => self.handle_video(url, did, &record),
+            _ => Ok(None),
+        }
     }
 }
 
