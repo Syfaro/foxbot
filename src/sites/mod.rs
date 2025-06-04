@@ -457,12 +457,18 @@ impl E621 {
             .basic_auth(&self.auth.0, Some(&self.auth.1))
             .send()
             .await
-            .map_err(|err| Error::user_message_with_error("Could not connect to e621", err))?
-            .json()
-            .await
-            .map_err(|err| Error::user_message_with_error("e621 returned unknown data", err))?;
+            .map_err(|err| Error::user_message_with_error("Could not connect to e621", err))?;
 
-        Ok(resp)
+        let text = resp.text().await.map_err(|err| {
+            Error::user_message_with_error("e621 response could not be loaded", err)
+        })?;
+
+        let data = serde_json::from_str(&text).map_err(|err| {
+            tracing::error!("e621 returned unknown data: {text}");
+            Error::user_message_with_error("e621 returned unknown data", err)
+        })?;
+
+        Ok(data)
     }
 }
 

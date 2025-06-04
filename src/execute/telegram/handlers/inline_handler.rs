@@ -295,10 +295,9 @@ impl Handler for InlineHandler {
         };
 
         if let Some(err) = images_err {
-            let article = if let Error::UserMessage { message, .. } = &err {
+            let article = if let Error::UserMessage { message, source } = &err {
                 tracing::warn!(
-                    "got displayable error message, sending to user: {:?}",
-                    message
+                    "got displayable error message, sending to user: {message}, source: {source:?}",
                 );
 
                 InlineQueryResult::article(
