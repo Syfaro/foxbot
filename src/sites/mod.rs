@@ -457,19 +457,21 @@ impl E621 {
             .basic_auth(&self.auth.0, Some(&self.auth.1))
             .send()
             .await
-            .map_err(|err| Error::user_message_with_error("Could not connect to e621", err))?
-            .error_for_status()
-            .map_err(|err| match err.status() {
-                Some(status) => Error::user_message(format!(
-                    "e621 returned unexpected status code: {}",
-                    status.as_u16()
-                )),
-                None => Error::Network(err),
-            })?;
+            .map_err(|err| Error::user_message_with_error("Could not connect to e621", err))?;
+
+        let status = resp.status();
 
         let text = resp.text().await.map_err(|err| {
             Error::user_message_with_error("e621 response could not be loaded", err)
         })?;
+
+        if status.is_client_error() || status.is_server_error() {
+            tracing::error!("e621 returned status code {status}: {text}");
+            return Err(Error::user_message(format!(
+                "e621 returned unexpected status code: {}",
+                status.as_u16()
+            )));
+        }
 
         let data = serde_json::from_str(&text).map_err(|err| {
             tracing::error!("e621 returned unknown data: {text}");
