@@ -62,7 +62,8 @@ impl Telegram {
                     ..
                 }) => {
                     tracing::warn!(retry_after, "request was rate limited, retrying");
-                    retry_after
+                    // Set a max for the retry_after time to avoid hanging.
+                    std::cmp::min(retry_after, 15)
                 }
                 tgbotapi::Error::Telegram(tgbotapi::TelegramError {
                     error_code: Some(400),

@@ -1944,7 +1944,7 @@ dependencies = [
  "httpdate",
  "itoa 1.0.10",
  "pin-project-lite",
- "socket2 0.4.10",
+ "socket2 0.5.5",
  "tokio",
  "tower-service",
  "tracing",
@@ -4425,7 +4425,7 @@ dependencies = [
 [[package]]
 name = "tgbotapi"
 version = "0.1.0"
-source = "git+https://github.com/Syfaro/tgbotapi-rs#e085957b441703f109b5870140977604a9a8ddc7"
+source = "git+https://github.com/Syfaro/tgbotapi-rs#bd553c1da140fdd5ae270d9b34c80c85cf21bae3"
 dependencies = [
  "reqwest",
  "serde",
