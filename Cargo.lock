@@ -1490,7 +1490,7 @@ dependencies = [
 [[package]]
 name = "furaffinity-rs"
 version = "0.1.0"
-source = "git+https://github.com/Syfaro/furaffinity-rs#0ab12c649395209f5df1d0d042fc7df6b28d1a80"
+source = "git+https://github.com/Syfaro/furaffinity-rs#3cdf83ad2b86e764f5634212c4bca12203eb6bee"
 dependencies = [
  "chrono",
  "image",
@@ -1944,7 +1944,7 @@ dependencies = [
  "httpdate",
  "itoa 1.0.10",
  "pin-project-lite",
- "socket2 0.5.5",
+ "socket2 0.4.10",
  "tokio",
  "tower-service",
  "tracing",
