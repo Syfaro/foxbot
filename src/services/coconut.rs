@@ -20,7 +20,10 @@ impl Coconut {
         b2_app_key: String,
         b2_bucket_id: String,
     ) -> Self {
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+            .expect("Unable to create client");
 
         Self {
             api_token,

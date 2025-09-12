@@ -13,9 +13,12 @@ pub struct ErrorReplyHandler {
 
 impl ErrorReplyHandler {
     pub fn new() -> Self {
-        Self {
-            client: reqwest::Client::new(),
-        }
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+            .expect("Unable to create client");
+
+        Self { client }
     }
 }
 

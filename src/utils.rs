@@ -170,10 +170,16 @@ impl<'a> CheckFileSize<'a> {
     /// Create a new file size checker for a given URL, with a maximum file
     /// download size.
     pub fn new(url: &'a str, max_download: usize) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(2))
+            .user_agent(crate::sites::USER_AGENT)
+            .build()
+            .expect("Unable to create client");
+
         Self {
             url,
             max_download,
-            client: reqwest::Client::new(),
+            client,
             size: None,
             bytes: None,
         }

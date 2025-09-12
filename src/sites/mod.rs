@@ -11,7 +11,7 @@ use crate::{
 };
 
 /// User agent used with all HTTP requests to sites.
-const USER_AGENT: &str = concat!(
+pub const USER_AGENT: &str = concat!(
     "t.me/FoxBot Site Loader Version ",
     env!("CARGO_PKG_VERSION"),
     " developed by @Syfaro"
@@ -54,6 +54,14 @@ pub struct PostInfo {
 /// ends in a filename with an extension.
 fn get_file_ext(name: &str) -> Option<&str> {
     name.split('.').last().and_then(|ext| ext.split('?').next())
+}
+
+fn get_default_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .user_agent(USER_AGENT)
+        .build()
+        .expect("Unable to create HTTP client")
 }
 
 /// A site that we can potentially load image data from.
@@ -152,13 +160,10 @@ impl Direct {
     pub fn new(fuzzysearch_apitoken: String) -> Self {
         let fautil = std::sync::Arc::new(fuzzysearch::FuzzySearch::new(fuzzysearch_apitoken));
 
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(2))
-            .user_agent(USER_AGENT)
-            .build()
-            .expect("Unable to create client");
-
-        Self { client, fautil }
+        Self {
+            client: get_default_client(),
+            fautil,
+        }
     }
 
     /// Attempt to download the image from the given URL and search the contents
@@ -349,7 +354,7 @@ impl E621 {
             data: regex::Regex::new(&format!(r"(?:https?://)?(?:static\d+\.{})/data/(?:(?P<modifier>sample|preview)/)?[0-9a-f]{{2}}/[0-9a-f]{{2}}/(?P<md5>[0-9a-f]{{32}})\.(?P<ext>.+)", host.host())).unwrap(),
             pool: regex::Regex::new(&format!(r"(?:https?://)?{}/pools/(?P<id>\d+)(?:/(?P<tags>.+))?", host.host())).unwrap(),
 
-            client: reqwest::Client::builder().user_agent(USER_AGENT).build().unwrap(),
+            client: get_default_client(),
 
             site: host,
             auth: (login, api_key),
@@ -617,7 +622,7 @@ impl Twitter {
             consumer,
             token,
             conn,
-            client: reqwest::Client::builder().user_agent(USER_AGENT).build().unwrap(),
+            client: get_default_client(),
             unleash,
         }
     }
@@ -1251,10 +1256,7 @@ impl Default for Mastodon {
                 r#"(?P<host>https?://(?:\S+))/(?:notice|users/\w+/statuses|@\w+)/(?P<id>\d+)"#,
             )
             .unwrap(),
-            client: reqwest::Client::builder()
-                .user_agent(USER_AGENT)
-                .build()
-                .unwrap(),
+            client: get_default_client(),
         }
     }
 }
@@ -1393,8 +1395,8 @@ impl Weasyl {
     pub fn new(api_key: String) -> Self {
         Self {
             api_key,
+            client: get_default_client(),
             matcher: regex::Regex::new(r#"https?://www\.weasyl\.com/(?:(?:(?:~|%7)(?:\w+)/submissions|submission)|view)/(?P<id>\d+)(?:/\S+)?"#).unwrap(),
-            client: reqwest::Client::builder().user_agent(USER_AGENT).build().unwrap(),
         }
     }
 }
@@ -1613,13 +1615,8 @@ impl Inkbunny {
     }
 
     pub fn new(username: String, password: String) -> Self {
-        let client = reqwest::Client::builder()
-            .user_agent(USER_AGENT)
-            .build()
-            .unwrap();
-
         Self {
-            client,
+            client: get_default_client(),
             matcher: regex::Regex::new(r#"https?://inkbunny.net/s/(?P<id>\d+)"#).unwrap(),
 
             username,
@@ -1761,7 +1758,7 @@ struct DeviantArtOEmbed {
 impl Default for DeviantArt {
     fn default() -> Self {
         Self {
-            client: reqwest::Client::builder().user_agent(USER_AGENT).build().unwrap(),
+            client: get_default_client(),
             matcher: regex::Regex::new(r#"(?:(?:deviantart\.com/(?:.+/)?art/.+-|fav\.me/)(?P<id>\d+)|sta\.sh/(?P<code>\w+))"#)
                 .unwrap(),
         }
@@ -1922,10 +1919,7 @@ impl Bluesky {
 impl Default for Bluesky {
     fn default() -> Self {
         Self {
-            client: reqwest::Client::builder()
-                .user_agent(USER_AGENT)
-                .build()
-                .unwrap(),
+            client: get_default_client(),
             matcher: regex::Regex::new(
                 r#"(?:https?://)?bsky.app/profile/(?P<repo>\S+)/post/(?P<rkey>\S+)"#,
             )
@@ -2008,7 +2002,7 @@ impl Tumblr {
         let matcher = regex::Regex::new(r"(?i)(?:https?://)?(?:(?P<blog>[a-z0-9-]{1,32}\.tumblr\.com)/post|www\.tumblr\.com/(?P<username>[a-z0-9-]{1,32}))/(?P<id>\d+)").unwrap();
 
         Self {
-            client: Default::default(),
+            client: get_default_client(),
             api_key,
             matcher,
         }
@@ -2268,7 +2262,7 @@ impl OpenGraph {
 impl Default for OpenGraph {
     fn default() -> Self {
         Self {
-            client: Default::default(),
+            client: get_default_client(),
             meta_image_selector: scraper::Selector::parse("meta[property='og:image']").unwrap(),
             meta_property_selector: scraper::Selector::parse("meta[property]").unwrap(),
         }
