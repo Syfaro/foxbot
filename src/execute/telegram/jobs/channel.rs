@@ -337,7 +337,7 @@ async fn already_had_source(
 
     let mut redis = redis.clone();
     let added_links: usize = redis.sadd(&key, urls).await?;
-    redis.expire(&key, 300).await?;
+    redis.expire::<_, ()>(&key, 300).await?;
 
     tracing::debug!(
         source_count,

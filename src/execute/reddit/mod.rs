@@ -53,10 +53,10 @@ pub async fn reddit(config: RunConfig, reddit_config: RedditConfig) {
     );
 
     let reddit_client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(2))
-            .default_headers(headers)
-            .build()
-            .expect("Unable to create client");
+        .timeout(std::time::Duration::from_secs(2))
+        .default_headers(headers)
+        .build()
+        .expect("Unable to create client");
 
     let faktory_clone = faktory.clone();
     tokio::task::spawn(async move {

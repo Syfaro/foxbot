@@ -1010,7 +1010,9 @@ impl FileCache {
     ) -> Result<(), Error> {
         let mut redis = redis.clone();
 
-        redis.set_ex(file_id, hash, 60 * 60 * 24 * 7).await?;
+        redis
+            .set_ex::<_, _, ()>(file_id, hash, 60 * 60 * 24 * 7)
+            .await?;
 
         Ok(())
     }

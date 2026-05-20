@@ -247,7 +247,7 @@ async fn inline_history(
         if !enabled {
             let mut redis = cx.redis.clone();
             redis
-                .del(format!("inline-history:{}", callback_query.from.id))
+                .del::<_, ()>(format!("inline-history:{}", callback_query.from.id))
                 .await?;
         }
 

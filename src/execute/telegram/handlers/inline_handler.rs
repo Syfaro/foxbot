@@ -173,8 +173,8 @@ async fn get_inline_history(
     let links: Vec<String> = redis
         .zrevrangebyscore_limit(&key, "+inf", now, 0, 50)
         .await?;
-    redis.zrembyscore(&key, "-inf", now).await?;
-    redis.expire(key, 60 * 60 * 24).await?;
+    redis.zrembyscore::<_, _, _, ()>(&key, "-inf", now).await?;
+    redis.expire::<_, ()>(key, 60 * 60 * 24).await?;
 
     Ok(links)
 }
@@ -202,7 +202,7 @@ async fn add_inline_history(
     redis
         .zadd_multiple::<_, i64, &str, ()>(&key, &items)
         .await?;
-    redis.expire(key, 60 * 60 * 24).await?;
+    redis.expire::<_, ()>(key, 60 * 60 * 24).await?;
 
     Ok(())
 }
@@ -810,7 +810,7 @@ async fn set_url_cache_data(
     let result = base64::encode(hasher.finalize());
 
     let key = format!("url:{}", result);
-    redis.set_ex(key, data, 60 * 60 * 24).await?;
+    redis.set_ex::<_, _, ()>(key, data, 60 * 60 * 24).await?;
 
     Ok(())
 }
@@ -1205,7 +1205,7 @@ async fn cache_video(
 
     let data = serde_json::to_vec(sent_as)?;
     redis
-        .set_ex(format!("video:{}", display_name), data, 60 * 60 * 24)
+        .set_ex::<_, _, ()>(format!("video:{}", display_name), data, 60 * 60 * 24)
         .await?;
 
     Ok(())

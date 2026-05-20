@@ -53,7 +53,7 @@ async fn get_chat(
 
     let data = serde_json::to_vec(&chat).map_err(actix_web::error::ErrorInternalServerError)?;
     redis
-        .set_ex(cache_key, data, 60 * 60 * 24)
+        .set_ex::<_, _, ()>(cache_key, data, 60 * 60 * 24)
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?;
 

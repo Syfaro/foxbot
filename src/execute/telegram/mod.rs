@@ -620,7 +620,9 @@ async fn process_update(cx: &Context, update: tgbotapi::Update) -> Result<(), Er
                         handled_by = handler.name(),
                         "user error: {message}, source: {source:?}"
                     ),
-                    other => tracing::error!(handled_by = handler.name(), "handler error: {other:?}"),
+                    other => {
+                        tracing::error!(handled_by = handler.name(), "handler error: {other:?}")
+                    }
                 }
 
                 let mut tags = vec![("handler", handler.name().to_string())];

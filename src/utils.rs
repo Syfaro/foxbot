@@ -146,7 +146,7 @@ async fn set_cached_images(
     };
 
     let data = serde_json::to_vec(&cache_data)?;
-    redis.set_ex(key, data, 60 * 60).await?;
+    redis.set_ex::<_, _, ()>(key, data, 60 * 60).await?;
 
     Ok(())
 }
